@@ -93,6 +93,8 @@ main > section[hidden] { display: none; }
 .auth-logo { font-size: 22px; text-align: center; }
 .auth-sub { text-align: center; color: var(--dim); font-size: 14px; letter-spacing: 0.12em; margin-top: 4px; }
 .auth-tag { text-align: center; color: var(--dim); font-size: 13px; margin: 8px 0 18px; }
+.auth-guest { display: block; text-align: center; margin-top: 16px; color: var(--accent); font-size: 13px; text-decoration: none; }
+.auth-guest:hover { text-decoration: underline; }
 .auth-tabs { display: flex; gap: 6px; margin-bottom: 18px; }
 .auth-tabs button {
   flex: 1;

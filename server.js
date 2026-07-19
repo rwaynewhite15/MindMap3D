@@ -696,8 +696,54 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // --- everything below requires sign-in ---
+  // Resolve the signed-in user if there is one. A handful of read-only routes
+  // below work for anonymous visitors too (user === null); everything else
+  // requires sign-in, enforced right after the public routes.
   const user = await authUser(req);
+
+  // --- public, read-only browsing (no sign-in required) ---
+  // Browse/search users. Anonymous visitors see only users with public maps.
+  if (req.method === 'GET' && pathname === '/api/users') {
+    const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim();
+    const needle = q.toLowerCase();
+    const users = await store.searchUsers(q);
+    const filtered = users.filter(u =>
+      !needle || u.username.includes(needle) || nameFor(u, user));
+    // hide accounts a visitor has nothing to see from (no maps they may view)
+    const shown = user ? filtered : filtered.filter(u => visibleMapsOf(u, null).length);
+    return sendJSON(res, 200, { users: shown.map(u => publicUser(u, user)) });
+  }
+
+  // View a profile. Anonymous visitors see only that user's public maps.
+  const pubProfileMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})$/);
+  if (req.method === 'GET' && pubProfileMatch) {
+    const target = await store.getUserByUsername(pubProfileMatch[1]);
+    if (!target) return sendJSON(res, 404, { error: 'No such user.' });
+    return sendJSON(res, 200, {
+      user: publicUser(target, user),
+      maps: visibleMapsOf(target, user).map(m => mapMeta(m)),
+    });
+  }
+
+  // View a single map by id (read-only). canViewMapObj already limits an
+  // anonymous viewer to public maps; the sub-routes below (chat, live, PUT…)
+  // still require sign-in.
+  const pubMapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})$/);
+  if (req.method === 'GET' && pubMapMatch) {
+    const mapId = pubMapMatch[1];
+    const owner = user && user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    const isOwner = !!user && owner.id === user.id;
+    const canEdit = isOwner || (!!user && (m.editors || []).includes(user.id));
+    return sendJSON(res, 200, {
+      map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges },
+      owner: ownerRef(owner, user), isOwner, canEdit,
+      present: presenceList(m.id),
+    });
+  }
+
+  // --- everything below requires sign-in ---
   if (!user) return sendJSON(res, 401, { error: 'Not signed in.' });
 
   if (route === 'GET /api/me') return sendJSON(res, 200, { user: meUser(user) });
@@ -751,13 +797,7 @@ async function handleApi(req, res, pathname) {
     const isOwner = owner.id === user.id;
     const canEdit = isOwner || (m.editors || []).includes(user.id);
 
-    if (!sub && req.method === 'GET') {
-      return sendJSON(res, 200, {
-        map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges },
-        owner: ownerRef(owner, user), isOwner, canEdit,
-        present: presenceList(m.id),
-      });
-    }
+    // GET of a bare map is handled by the public route above (anonymous-friendly)
     if (!sub && req.method === 'PUT') {
       if (!canEdit) return sendJSON(res, 403, { error: 'You do not have edit permission for this map.' });
       const body = await readBody(req);
@@ -836,28 +876,8 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 404, { error: 'Not found.' });
   }
 
-  if (req.method === 'GET' && pathname === '/api/users') {
-    const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim();
-    const needle = q.toLowerCase();
-    const users = await store.searchUsers(q);
-    // A display name is only visible to friends, so don't let a search term reveal
-    // a non-friend by matching their hidden name: keep a hit only if the username
-    // matches, or the searcher may actually see that name (self/friend).
-    const filtered = users.filter(u =>
-      !needle || u.username.includes(needle) || nameFor(u, user));
-    return sendJSON(res, 200, { users: filtered.map(u => publicUser(u, user)) });
-  }
-
-  const profileMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})$/);
-  if (req.method === 'GET' && profileMatch) {
-    const target = await store.getUserByUsername(profileMatch[1]);
-    if (!target) return sendJSON(res, 404, { error: 'No such user.' });
-    // only maps the viewer is allowed to see are listed at all
-    return sendJSON(res, 200, {
-      user: publicUser(target, user),
-      maps: visibleMapsOf(target, user).map(m => mapMeta(m)),
-    });
-  }
+  // (GET /api/users and GET /api/users/:username are served by the public
+  //  read-only routes above, which also handle the signed-in case.)
 
   // --- friends ---
   if (route === 'GET /api/friends') {

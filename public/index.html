@@ -13,10 +13,11 @@
 <header id="topbar" hidden>
   <div id="logo">MindMap<span>Share</span> <em>3D Mind Maps</em></div>
   <nav id="mainNav">
-    <a href="#/map" data-nav="map">My Map</a>
+    <a href="#/map" data-nav="map" data-auth>My Map</a>
     <a href="#/browse" data-nav="browse">Browse</a>
-    <a href="#/friends" data-nav="friends">Friends<span id="friendBadge" class="badge" hidden></span></a>
-    <a href="#/settings" data-nav="settings">Settings</a>
+    <a href="#/friends" data-nav="friends" data-auth>Friends<span id="friendBadge" class="badge" hidden></span></a>
+    <a href="#/settings" data-nav="settings" data-auth>Settings</a>
+    <a href="#/signin" data-nav="signin" id="navSignIn" hidden>Sign in</a>
   </nav>
 </header>
 
@@ -49,6 +50,8 @@
         <div class="form-error" id="registerError"></div>
         <button type="submit" class="primary">Create account</button>
       </form>
+
+      <a href="#/browse" id="browseGuest" class="auth-guest">or browse public maps without an account →</a>
     </div>
   </section>
 

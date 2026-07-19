@@ -758,7 +758,11 @@ const sections = ['auth', 'map', 'browse', 'friends', 'profile', 'settings'];
 
 function show(name) {
   for (const s of sections) $('#view-' + s).hidden = s !== name;
+  // hide the top bar only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
+  // auth-only nav links are hidden for anonymous visitors; show a Sign in link instead
+  for (const a of document.querySelectorAll('#mainNav a[data-auth]')) a.hidden = !me;
+  $('#navSignIn').hidden = !!me;
   for (const a of document.querySelectorAll('#mainNav a')) {
     a.classList.toggle('active', a.dataset.nav === name);
   }
@@ -769,8 +773,17 @@ function show(name) {
 function route() {
   closeSheets();
   hidePickMenu();
-  if (!me) { show('auth'); return; }
-  const h = location.hash.replace(/^#\/?/, '') || 'map';
+  const h = location.hash.replace(/^#\/?/, '') || (me ? 'map' : 'browse');
+
+  if (!me) {
+    // anonymous visitors may browse public maps and view public profiles;
+    // everything else prompts them to sign in
+    if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
+    if (h === 'browse') { show('browse'); loadBrowse(); return; }
+    show('auth'); // #/signin, #/map, #/friends, #/settings all land here
+    return;
+  }
+
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
@@ -1879,10 +1892,12 @@ async function openProfile(username) {
     } else {
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
+      const who = u.name || '@' + u.username;
       // could be friends-only maps (become a friend to see them) or all-private maps
-      $('#lockedText').textContent = u.relation === 'friends'
-        ? (u.name || '@' + u.username) + " hasn't shared any maps with friends."
-        : (u.name || '@' + u.username) + "'s maps aren't public. Add them as a friend to see friends-only maps.";
+      $('#lockedText').textContent =
+        !me ? who + " has no public maps. Sign in and add them as a friend to see friends-only maps."
+        : u.relation === 'friends' ? who + " hasn't shared any maps with friends."
+        : who + "'s maps aren't public. Add them as a friend to see friends-only maps.";
       profileMap.setMap({ nodes: {}, edges: [] });
     }
   } catch (err) {
@@ -1935,7 +1950,8 @@ $('#btnPEdit').addEventListener('click', () => editProfileMap().catch(err => ale
 
 function renderFriendButton() {
   const btn = $('#btnFriendAction');
-  if (!currentProfile) { btn.hidden = true; return; }
+  // anonymous visitors can view but not friend anyone
+  if (!currentProfile || !me) { btn.hidden = true; return; }
   const rel = currentProfile.user.relation;
   btn.hidden = false;
   btn.className = 'tb';
