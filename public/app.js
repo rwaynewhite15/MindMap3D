@@ -57,6 +57,7 @@ function createMapView(host, opts = {}) {
   let yaw = 0.4, pitch = -0.25, camDist = 950;
   let pivot = [0, 0, 0];    // world point the scene rotates around (screen center)
   let spinning = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let showWeights = true;   // show the numbered weight badges on connections
   let selectedId = null;
   let connectFrom = null;
   let highlightedEdge = null;
@@ -257,7 +258,7 @@ function createMapView(host, opts = {}) {
       els.line.setAttribute('stroke-opacity', op);
       els.line.setAttribute('stroke-width', Math.max(1.2, (0.5 + e.w) * depth) + (hi ? 1.5 : hov ? 1 : 0));
       if (els.handle) {
-        els.handle.style.display = '';
+        els.handle.style.display = showWeights ? '' : 'none';
         els.handle.setAttribute('transform', `translate(${(a.x + b.x) / 2}, ${(a.y + b.y) / 2}) scale(${Math.max(0.7, Math.min(1.2, depth))})`);
       }
     }
@@ -731,6 +732,8 @@ function createMapView(host, opts = {}) {
     },
     setSpin(b) { spinning = b; },
     getSpin: () => spinning,
+    setShowWeights(b) { showWeights = b; },
+    getShowWeights: () => showWeights,
   };
 }
 
@@ -1101,6 +1104,21 @@ function initEditor() {
     btnSpin.classList.toggle('active', myMap.getSpin());
   });
   btnSpin.classList.toggle('active', myMap.getSpin());
+
+  // connection weight numbers: on by default, choice remembered
+  const btnWeights = $('#btnWeights');
+  const savedWeights = localStorage.getItem('mms:showWeights');
+  const showW = savedWeights === null ? true : savedWeights === '1';
+  myMap.setShowWeights(showW);
+  btnWeights.classList.toggle('active', showW);
+  btnWeights.addEventListener('click', () => {
+    const on = !myMap.getShowWeights();
+    myMap.setShowWeights(on);
+    btnWeights.classList.toggle('active', on);
+    try { localStorage.setItem('mms:showWeights', on ? '1' : '0'); } catch { /* private mode */ }
+    setHint(on ? 'Connection weights shown' : 'Connection weights hidden', false);
+  });
+
   $('#btnCenter').addEventListener('click', () => myMap.resetCamera());
   $('#btnZoomIn').addEventListener('click', () => myMap.zoom(0.85));
   $('#btnZoomOut').addEventListener('click', () => myMap.zoom(1.18));
