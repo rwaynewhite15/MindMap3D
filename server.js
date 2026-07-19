@@ -309,11 +309,14 @@ function areFriends(a, b) {
   return !!a && !!b && (a.id === b.id || (a.friends || []).includes(b.id));
 }
 
-// A user's display name is shown to friends (and themselves) only, and only if
-// they've opted in with showDisplayName. Everyone else sees just the username.
+// A user's display name visibility follows their "share my display name" opt-in:
+//  - opted in  (showDisplayName true): the display name is shown to anyone.
+//  - opted out (default): it is shown only to the user themselves and their friends.
+// Anyone who can't see the display name sees just the username.
 function nameFor(target, viewer) {
-  if (!target.showDisplayName || !target.displayName) return null;
-  return areFriends(target, viewer) ? target.displayName : null;
+  if (!target.displayName) return null;
+  if (target.showDisplayName) return target.displayName;         // shared → everyone
+  return areFriends(target, viewer) ? target.displayName : null; // private → friends + self
 }
 
 // The name a user presents in shared spaces they've joined (chat, presence,
