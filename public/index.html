@@ -66,11 +66,12 @@
       <span id="presencePill" class="presence-pill" hidden></span>
     </div>
     <div id="saveState" class="save-state" hidden>Saved</div>
-    <div id="mapHint" class="hint">Tap to select · Drag background to orbit · Pinch/scroll to zoom · Double-tap overlapping items to pick one</div>
+    <div id="mapHint" class="hint">Tap to select · Drag background to pan (orbits when ◎ centered) · Pinch/scroll to zoom · Double-tap overlaps to pick</div>
 
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
+      <button id="btnArrange" class="tb" title="Automatically spread all bubbles and groups out evenly">✨ Arrange</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
       <button id="btnCenterSel" class="tb" disabled title="Make this the center of rotation">◎ Center</button>
@@ -137,7 +138,7 @@
     </div>
     <div id="profileTabs" class="map-tabs" hidden></div>
     <div id="profileMapHost" class="map-host"></div>
-    <div id="profileHint" class="hint">Tap a bubble to center rotation on it · Drag to orbit · Pinch/scroll to zoom</div>
+    <div id="profileHint" class="hint">Tap a bubble to orbit around it · Drag empty space to pan · Pinch/scroll to zoom</div>
     <div id="profileLocked" class="locked" hidden>
       <div class="locked-card">
         <div class="lock-ico">🔒</div>

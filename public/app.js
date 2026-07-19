@@ -55,7 +55,8 @@ function createMapView(host, opts = {}) {
   let idCounter = 1;
   let hueCounter = 0;
   let yaw = 0.4, pitch = -0.25, camDist = 950;
-  let pivot = [0, 0, 0];    // world point the scene rotates around (screen center)
+  let pivot = [0, 0, 0];    // world point at screen center: rotation pivot AND pan position
+  let centeredId = null;    // node the view is orbiting; null → background drag pans
   let anchorId = null;      // node that "reset view" centers on (persisted with the map)
   let spinning = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let showWeights = true;   // show the numbered weight badges on connections
@@ -71,6 +72,7 @@ function createMapView(host, opts = {}) {
   let lastTap = null;       // for double-tap detection
   let pendingTimer = null;  // deferred single-tap action (waiting out a double-tap)
   let dwellTimer = null;    // hover-for-a-second timer
+  let arranging = null;     // { t0, dur, from, to } while auto-arrange glides bubbles
 
   const nodeEls = new Map();
   const edgeEls = new Map();
@@ -216,6 +218,20 @@ function createMapView(host, opts = {}) {
   /* ---------- render loop ---------- */
   function frame() {
     if (!running) return;
+    // glide bubbles toward their auto-arranged spots
+    if (arranging) {
+      const t = Math.min(1, (performance.now() - arranging.t0) / arranging.dur);
+      const ek = easeInOut(t);
+      for (const [id, dest] of Object.entries(arranging.to)) {
+        const nd = map.nodes[id], fr = arranging.from[id];
+        if (nd && fr) {
+          nd.pos = [fr[0] + (dest[0] - fr[0]) * ek,
+                    fr[1] + (dest[1] - fr[1]) * ek,
+                    fr[2] + (dest[2] - fr[2]) * ek];
+        }
+      }
+      if (t >= 1) finishArrange();
+    }
     const w = host.clientWidth, h = host.clientHeight;
     const proj = {};
     for (const n of Object.values(map.nodes)) {
@@ -344,6 +360,7 @@ function createMapView(host, opts = {}) {
 
   host.addEventListener('pointerdown', e => {
     e.preventDefault();
+    finishArrange(); // a touch mid-glide snaps the layout to its final spots
     clearTimeout(pendingTimer); pendingTimer = null;
     clearTimeout(dwellTimer); dwellTimer = null;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -361,13 +378,21 @@ function createMapView(host, opts = {}) {
     const hits = (editable || opts.tapToCenter) ? hitTest(pt.x, pt.y) : [];
     const top = hits[0] || null;
 
+    // background drag: orbit when the view is centered on a bubble, else pan
+    const bgDrag = () => {
+      const orbiting = centeredId && map.nodes[centeredId];
+      drag = orbiting
+        ? { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false }
+        : { type: 'pan', startX: e.clientX, startY: e.clientY, startPivot: [...pivot], moved: false };
+      host.classList.add('dragging');
+    };
+
     // read-only "tap a bubble to center on it" mode
     if (!editable && opts.tapToCenter) {
       if (top && top.type === 'node') {
         drag = { type: 'centerTap', id: top.id, startX: e.clientX, startY: e.clientY, moved: false };
       } else {
-        drag = { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false };
-        host.classList.add('dragging');
+        bgDrag();
       }
       return;
     }
@@ -398,8 +423,7 @@ function createMapView(host, opts = {}) {
     } else if (top && top.type === 'edge') {
       drag = { type: 'edgeTap', edgeId: top.id, startX: e.clientX, startY: e.clientY, moved: false };
     } else {
-      drag = { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false };
-      host.classList.add('dragging');
+      bgDrag();
     }
   });
 
@@ -491,7 +515,7 @@ function createMapView(host, opts = {}) {
     }
     const centerNow = () => {
       const n = map.nodes[tappedId];
-      if (n) { pivot = [...n.pos]; if (opts.onCenter) opts.onCenter(tappedId); }
+      if (n) { pivot = [...n.pos]; centeredId = tappedId; if (opts.onCenter) opts.onCenter(tappedId); }
     };
     // overlap: wait out a possible double-tap before committing the single-tap center
     if (hits.length >= 2) pendingTimer = setTimeout(centerNow, 370);
@@ -512,6 +536,13 @@ function createMapView(host, opts = {}) {
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
       yaw = drag.startYaw + dx * 0.006;
       pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + dy * 0.006));
+    } else if (drag.type === 'pan') {
+      const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      // move the view-center point along the camera plane; the scene follows the finger
+      const { right, up } = cameraBasis();
+      const wpp = camDist / FOCAL; // world units per screen pixel at the view plane
+      pivot = sub(drag.startPivot, add3(mul(right, dx * wpp), mul(up, dy * wpp)));
     } else if (drag.type === 'node' && editable) {
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
@@ -524,17 +555,27 @@ function createMapView(host, opts = {}) {
       const n = map.nodes[drag.id];
       if (n) clampInside(n);
     } else if (drag.type === 'centerTap') {
-      // dragging from a bubble in read-only view orbits, like dragging the background
+      // dragging from a bubble in read-only view behaves like a background drag:
+      // orbit if the view is centered on a bubble, otherwise pan
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (Math.abs(dx) + Math.abs(dy) > 4) {
         if (!drag.moved) {
           drag.moved = true;
+          drag.orbiting = !!(centeredId && map.nodes[centeredId]);
           drag.startYaw = yaw; drag.startPitch = pitch;
-          drag.orbitX = e.clientX; drag.orbitY = e.clientY;
+          drag.startPivot = [...pivot];
+          drag.grabX = e.clientX; drag.grabY = e.clientY;
           host.classList.add('dragging');
         }
-        yaw = drag.startYaw + (e.clientX - drag.orbitX) * 0.006;
-        pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + (e.clientY - drag.orbitY) * 0.006));
+        if (drag.orbiting) {
+          yaw = drag.startYaw + (e.clientX - drag.grabX) * 0.006;
+          pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + (e.clientY - drag.grabY) * 0.006));
+        } else {
+          const { right, up } = cameraBasis();
+          const wpp = camDist / FOCAL;
+          pivot = sub(drag.startPivot,
+            add3(mul(right, (e.clientX - drag.grabX) * wpp), mul(up, (e.clientY - drag.grabY) * wpp)));
+        }
       }
     } else if (drag.type === 'edgeTap') {
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
@@ -555,8 +596,13 @@ function createMapView(host, opts = {}) {
         handleTap(e, 'edge', drag);
       } else if (drag.type === 'centerTap' && !drag.moved) {
         handleCenterTap(e, drag.id);
-      } else if (drag.type === 'orbit' && !drag.moved) {
-        handleTap(e, 'bg', drag);
+      } else if ((drag.type === 'orbit' || drag.type === 'pan') && !drag.moved) {
+        // a click on empty space stops orbiting a bubble (drags pan again)
+        if (centeredId) {
+          centeredId = null;
+          if (opts.onCenter) opts.onCenter(null);
+        }
+        if (editable) handleTap(e, 'bg', drag);
       }
     }
     if (pointers.size === 0) { drag = null; host.classList.remove('dragging'); }
@@ -692,6 +738,189 @@ function createMapView(host, opts = {}) {
     changed();
   }
 
+  /* ---------- auto-arrange layout helpers ---------- */
+  // Evenly place `count` points on a sphere of `radius` (golden-spiral with a
+  // half-step offset so no point sits exactly on a pole crowding its neighbor).
+  function fibSphere(count, radius) {
+    const pts = [];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < count; i++) {
+      const y = 1 - ((i + 0.5) / count) * 2;
+      const rr = Math.sqrt(Math.max(0, 1 - y * y));
+      const th = golden * i;
+      pts.push([Math.cos(th) * rr * radius, y * radius, Math.sin(th) * rr * radius]);
+    }
+    return pts;
+  }
+
+  // Force-directed 3D layout: repulsion spreads items evenly, weighted-edge
+  // springs keep connected items adjacent, gravity keeps the cloud compact.
+  // items: [{ id, r, p:[x,y,z] }] — p is mutated. edges: [{ a, b, w }].
+  function forceLayout(items, edges, gap) {
+    const n = items.length;
+    if (n < 2) { if (n === 1) items[0].p = [0, 0, 0]; return; }
+    const idx = new Map(items.map((it, i) => [it.id, i]));
+    const avgR = items.reduce((s, i) => s + i.r, 0) / n;
+    const k = avgR * 2 + gap; // ideal neighbor spacing
+
+    // scatter exactly-coincident starts so forces have a direction to act on
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      if (len(sub(items[i].p, items[j].p)) < 1) {
+        items[j].p = add3(items[j].p, mul(randUnit(), 5 + Math.random() * 10));
+      }
+    }
+
+    const iters = n > 200 ? 70 : n > 80 ? 140 : 280; // fewer passes on huge maps
+
+    // connected pairs get almost no long-range repulsion — their spring alone
+    // sets the distance, so edge weight maps directly onto visible closeness
+    const linked = new Map(); // "i|j" (i<j) → strongest weight between the pair
+    for (const e of edges) {
+      const i = idx.get(e.a), j = idx.get(e.b);
+      if (i === undefined || j === undefined || i === j) continue;
+      const key = i < j ? i + '|' + j : j + '|' + i;
+      linked.set(key, Math.max(linked.get(key) || 0, e.w || 1));
+    }
+
+    let temp = k * Math.cbrt(n);
+    const cool = Math.pow(0.02, 1 / iters);
+    for (let it = 0; it < iters; it++) {
+      const disp = items.map(() => [0, 0, 0]);
+      const cutoff = k * 2.5; // repulsion is local-only, so gravity can pack the cloud densely
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        let d = sub(items[i].p, items[j].p);
+        let dist = len(d);
+        if (dist < 1) { d = randUnit(); dist = 1; }
+        const minD = items[i].r + items[j].r + gap;
+        if (dist > cutoff && dist > minD) continue; // far apart and not touching: no push
+        // full repulsion between unrelated items; barely any between linked ones
+        // (the overlap shove still applies to both so bodies never interpenetrate)
+        const scale = dist < minD ? 4 : linked.has(i + '|' + j) ? 0.1 : 1;
+        const f = (k * k) / dist * scale;
+        const push = mul(d, f / dist);
+        disp[i] = add3(disp[i], push);
+        disp[j] = sub(disp[j], push);
+      }
+      for (const e of edges) {
+        const i = idx.get(e.a), j = idx.get(e.b);
+        if (i === undefined || j === undefined) continue;
+        let d = sub(items[j].p, items[i].p);
+        const dist = len(d) || 1;
+        // weight 10 → practically touching; weight 1 → a loose (but short) leash
+        const ideal = items[i].r + items[j].r + 16 + Math.max(0, 10 - e.w) * 22;
+        const f = (dist - ideal) * (0.06 + e.w * 0.02); // heavier = stiffer spring
+        const pull = mul(d, f / dist);
+        disp[i] = add3(disp[i], pull);
+        disp[j] = sub(disp[j], pull);
+      }
+      for (let i = 0; i < n; i++) {
+        disp[i] = add3(disp[i], mul(items[i].p, -0.055)); // gravity toward the origin
+        const dl = len(disp[i]);
+        if (dl > temp) disp[i] = mul(disp[i], temp / dl);
+        items[i].p = add3(items[i].p, disp[i]);
+      }
+      temp *= cool;
+    }
+
+    // hard de-overlap: nudge apart any pair still closer than their bodies allow
+    for (let pass = 0; pass < 40; pass++) {
+      let moved = false;
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        let d = sub(items[j].p, items[i].p);
+        let dist = len(d);
+        if (dist < 1) { d = randUnit(); dist = 1; }
+        const minD = items[i].r + items[j].r + Math.min(gap, 30);
+        if (dist < minD) {
+          const shift = mul(d, (minD - dist) / dist / 2);
+          items[i].p = sub(items[i].p, shift);
+          items[j].p = add3(items[j].p, shift);
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+
+    // recenter the cloud on the origin (where the default camera looks)
+    const c = mul(items.reduce((s, i) => add3(s, i.p), [0, 0, 0]), 1 / n);
+    for (const it of items) it.p = sub(it.p, c);
+  }
+  /* ---------- end auto-arrange layout helpers ---------- */
+
+  function easeInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+
+  function finishArrange() {
+    if (!arranging) return;
+    for (const [id, to] of Object.entries(arranging.to)) {
+      const nd = map.nodes[id];
+      if (nd) nd.pos = [...to];
+    }
+    arranging = null;
+    if (opts.onChange) opts.onChange(); // persist the arranged layout
+  }
+
+  function autoArrange() {
+    const all = Object.values(map.nodes);
+    if (all.length < 2 || arranging) return false;
+
+    // 1) inside each group: spread children evenly on a sphere sized to fit them
+    const containerKids = new Map();
+    for (const nd of all) if (nd.kind === 'container') containerKids.set(nd.id, []);
+    for (const nd of all) {
+      if (nd.parentId && containerKids.has(nd.parentId)) containerKids.get(nd.parentId).push(nd);
+    }
+    const newSize = new Map();    // containerId → radius that snugly fits its children
+    const childOffset = new Map(); // childId → offset from its container's center
+    for (const [cid, kids] of containerKids) {
+      if (!kids.length) { newSize.set(cid, 150); continue; }
+      const mr = Math.max(...kids.map(kd => kd.r));
+      // shell radius so neighboring children don't touch (surface area per point)
+      const shellR = kids.length === 1 ? 0
+        : Math.max(mr + 30, (2 * mr + 24) * Math.sqrt(kids.length) / 3.5);
+      const pts = fibSphere(kids.length, shellR);
+      kids.forEach((kd, i) => childOffset.set(kd.id, pts[i]));
+      newSize.set(cid, Math.max(130, shellR + mr + 20));
+    }
+
+    // 2) top level (loose bubbles + groups): force-directed spread.
+    // Edges that reach inside a group count as edges to the group itself.
+    const isTop = nd => !(nd.parentId && map.nodes[nd.parentId]);
+    const items = all.filter(isTop).map(nd => ({
+      id: nd.id,
+      r: nd.kind === 'container' ? (newSize.get(nd.id) || nd.r) : nd.r,
+      p: [...nd.pos],
+    }));
+    const rep = id => {
+      const nd = map.nodes[id];
+      return nd && nd.parentId && map.nodes[nd.parentId] ? nd.parentId : id;
+    };
+    const topEdges = new Map();
+    for (const e of map.edges) {
+      const a = rep(e.a), b = rep(e.b);
+      if (a === b) continue;
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      const prev = topEdges.get(key);
+      if (!prev || e.w > prev.w) topEdges.set(key, { a, b, w: e.w });
+    }
+    forceLayout(items, [...topEdges.values()], 40);
+
+    // 3) collect targets; children ride along with their group
+    const to = {};
+    for (const it of items) {
+      to[it.id] = it.p;
+      const kids = containerKids.get(it.id);
+      if (kids) for (const kd of kids) to[kd.id] = add3(it.p, childOffset.get(kd.id));
+    }
+    // container sizes apply immediately (radius isn't tweened; positions are)
+    for (const [cid, r] of newSize) { const c = map.nodes[cid]; if (c) c.r = r; }
+    buildDOM();
+
+    // 4) glide everything to its new spot, then save
+    const from = {};
+    for (const id of Object.keys(to)) from[id] = [...map.nodes[id].pos];
+    arranging = { t0: performance.now(), dur: 750, from, to };
+    return true;
+  }
+
   /* ---------- public API ---------- */
   return {
     setMap(m) {
@@ -718,9 +947,11 @@ function createMapView(host, opts = {}) {
       hoverEdgeId = null;
       hoverLock = false;
       lastTap = null;
+      arranging = null; // never carry an in-flight arrange into another map
       // load the persisted anchor and start the view centered on it (else origin)
       anchorId = m && m.anchorId && map.nodes[m.anchorId] ? m.anchorId : null;
       pivot = anchorId ? [...map.nodes[anchorId].pos] : [0, 0, 0];
+      centeredId = anchorId; // anchored maps open in orbit mode, others in pan mode
       clearTimeout(pendingTimer); pendingTimer = null;
       clearTimeout(dwellTimer); dwellTimer = null;
       buildDOM();
@@ -752,6 +983,7 @@ function createMapView(host, opts = {}) {
       if (highlightedEdge && !map.edges.some(e => e.id === highlightedEdge)) highlightedEdge = null;
       // pick up an anchor change from a collaborator without yanking the camera
       anchorId = m && m.anchorId && map.nodes[m.anchorId] ? m.anchorId : null;
+      if (centeredId && !map.nodes[centeredId]) centeredId = null; // centered node was deleted
       buildDOM();
       return true;
     },
@@ -764,7 +996,7 @@ function createMapView(host, opts = {}) {
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode,
-    setWeight, deleteEdge, moveIntoContainer,
+    setWeight, deleteEdge, moveIntoContainer, autoArrange,
     startConnect() {
       const n = selectedId && map.nodes[selectedId];
       if (!n) return false;
@@ -786,6 +1018,7 @@ function createMapView(host, opts = {}) {
       const n = map.nodes[id];
       if (!n) return false;
       pivot = [...n.pos];
+      centeredId = id;
       return true;
     },
     setPickHover(hit) { applyHover(hit); },
@@ -800,12 +1033,14 @@ function createMapView(host, opts = {}) {
       // reset returns to the anchored node if one is set, else the origin
       const a = anchorId && map.nodes[anchorId];
       pivot = a ? [...a.pos] : [0, 0, 0];
+      centeredId = a ? anchorId : null; // anchored maps reset into orbit mode
     },
     // make the selected node the center of rotation (and recenter it on screen)
     centerOnSelected() {
       const n = selectedId && map.nodes[selectedId];
       if (!n) return false;
       pivot = [...n.pos];
+      centeredId = n.id;
       return true;
     },
     isCentered() {
@@ -1090,7 +1325,7 @@ window.addEventListener('keydown', e => {
    My map (editor) wiring
 ================================================================ */
 const hintEl = $('#mapHint');
-const DEFAULT_HINT = 'Tap to select · Drag background to orbit · Pinch/scroll to zoom · Double-tap overlapping items to pick one';
+const DEFAULT_HINT = 'Tap to select · Drag background to pan (orbits when ◎ centered) · Pinch/scroll to zoom · Double-tap overlaps to pick';
 
 function setHint(text, accent) {
   hintEl.textContent = text;
@@ -1180,6 +1415,7 @@ function initEditor() {
     },
     // editor pick menu: selects nodes / opens the edge sheet (myMap is set by now)
     onPick: (hits, cx, cy, mode) => showPickMenu(myMap, false, hits, cx, cy, mode),
+    onCenter: id => { if (id === null) setHint(DEFAULT_HINT, false); }, // left orbit mode
     isSheetOpen: anySheetOpen,
   });
 
@@ -1192,6 +1428,10 @@ function initEditor() {
     const id = myMap.addContainer();
     refreshToolbar();
     openRename(id);
+  });
+  $('#btnArrange').addEventListener('click', () => {
+    if (myMap.autoArrange()) setHint('Auto-arranged — bubbles spread out evenly', false);
+    else setHint('Nothing to arrange yet — add a couple of bubbles first', false);
   });
   $('#btnConnect').addEventListener('click', () => {
     if (myMap.isConnecting()) {
@@ -2101,7 +2341,7 @@ $('#btnProfileBack').addEventListener('click', () => {
 });
 
 let profileHintTimer = null;
-const PROFILE_HINT_DEFAULT = 'Tap a bubble to center rotation on it · Drag to orbit · Pinch/scroll to zoom';
+const PROFILE_HINT_DEFAULT = 'Tap a bubble to orbit around it · Drag empty space to pan · Pinch/scroll to zoom';
 function setProfileHint(text) {
   $('#profileHint').textContent = text;
   clearTimeout(profileHintTimer);
@@ -2116,8 +2356,9 @@ function initProfileViewer() {
     tapToCenter: true,
     onPick: (hits, cx, cy, mode) => showPickMenu(profileMap, true, hits, cx, cy, mode),
     onCenter: id => {
+      if (id === null) { setProfileHint('Panning — tap a bubble to orbit around it'); return; }
       const n = profileMap.getNode(id);
-      if (n) setProfileHint(`Rotating around "${n.label || 'Untitled'}"`);
+      if (n) setProfileHint(`Orbiting "${n.label || 'Untitled'}" — click empty space to pan`);
     },
     isSheetOpen: () => !$('#pickMenu').hidden,
   });
