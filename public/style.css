@@ -2,6 +2,11 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Many components set an explicit `display` (flex/block/…) which would otherwise
+   override the browser's built-in [hidden] rule, leaving elements toggled via the
+   `hidden` attribute stuck visible. Make `hidden` authoritative everywhere. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #10141D;
   --panel: #141926;
@@ -339,6 +344,8 @@ button.primary {
 }
 
 /* ---------------- chat + activity panel ---------------- */
+/* Default: docked to the right edge, full height. When the user drags or
+   resizes it, JS adds .floating and sets explicit left/top/width/height. */
 .chat-panel {
   position: absolute;
   top: 0; right: 0; bottom: 0;
@@ -352,7 +359,17 @@ button.primary {
   z-index: 25;
   animation: chat-in 0.18s ease-out;
 }
+.chat-panel.floating {
+  right: auto; bottom: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: none;
+}
+.chat-panel.dragging, .chat-panel.resizing { transition: none; user-select: none; }
 @keyframes chat-in { from { transform: translateX(20px); opacity: 0.3; } to { transform: translateX(0); opacity: 1; } }
+
 .chat-head {
   display: flex;
   align-items: flex-start;
@@ -361,9 +378,43 @@ button.primary {
   padding: 12px 14px;
   padding-top: max(12px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--line);
+  cursor: grab;
+  touch-action: none; /* header owns the drag gesture */
+  flex: none;
 }
+.chat-panel.dragging .chat-head { cursor: grabbing; }
+.chat-head-text { min-width: 0; }
+.chat-head-btns { display: flex; gap: 4px; flex: none; }
+
 .chat-title { font-weight: 700; font-size: 15px; }
-.chat-presence { font-size: 12px; margin-top: 2px; }
+.chat-presence { font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* body wraps log + compose so collapsing hides both at once */
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-panel.collapsed { bottom: auto; height: auto !important; }
+.chat-panel.collapsed .chat-body,
+.chat-panel.collapsed .chat-resize { display: none; }
+.chat-panel.collapsed .chat-head { border-bottom: none; }
+.chat-panel.collapsed:not(.floating) { border-radius: 0 0 0 14px; }
+
+.chat-resize {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 20px; height: 20px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+  background:
+    linear-gradient(135deg, transparent 0 50%, var(--dim) 50% 58%, transparent 58% 70%, var(--dim) 70% 78%, transparent 78%);
+  opacity: 0.7;
+}
+.chat-resize:hover { opacity: 1; }
+
 .chat-log {
   flex: 1;
   overflow-y: auto;

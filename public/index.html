@@ -46,9 +46,6 @@
         <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="6+ characters" required></label>
         <label>Display name <span class="muted">(optional)</span> <input name="displayName" autocomplete="name" placeholder="How others see you"></label>
         <label class="check"><input type="checkbox" name="showDisplayName" checked> Show my display name to others</label>
-        <label class="field-title">Who can see my mind map?</label>
-        <label class="check"><input type="radio" name="visibility" value="public" checked> Everyone on MindMapShare</label>
-        <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
         <div class="form-error" id="registerError"></div>
         <button type="submit" class="primary">Create account</button>
       </form>
@@ -59,43 +56,50 @@
   <section id="view-map" hidden>
     <div id="myMapHost" class="map-host"></div>
     <div id="mapBar">
-      <select id="mapSelect" aria-label="Choose map"></select>
-      <button id="btnNewMap" class="tb">+ New</button>
-      <button id="btnMapSettings" class="tb">Map ▾</button>
-      <button id="btnChat" class="tb" title="Chat & activity">💬<span id="chatBadge" class="badge" hidden></span></button>
+      <select id="mapSelect" aria-label="Choose map" title="Switch between your maps"></select>
+      <button id="btnNewMap" class="tb" title="Create a new map">+ New</button>
+      <button id="btnMapSettings" class="tb" title="Rename, set visibility, manage editors, or delete this map">Map ▾</button>
+      <button id="btnChat" class="tb" title="Open chat &amp; activity log">💬<span id="chatBadge" class="badge" hidden></span></button>
       <span id="presencePill" class="presence-pill" hidden></span>
     </div>
     <div id="saveState" class="save-state" hidden>Saved</div>
     <div id="mapHint" class="hint">Tap to select · Drag background to orbit · Pinch/scroll to zoom · Double-tap overlapping items to pick one</div>
 
     <div id="editToolbar" class="edit-toolbar">
-      <button id="btnAddBubble" class="tb primary-tb">+ Bubble</button>
-      <button id="btnAddGroup" class="tb">+ Group</button>
-      <button id="btnConnect" class="tb" disabled>+ Connection</button>
-      <button id="btnRename" class="tb" disabled>Rename</button>
-      <button id="btnGroupMenu" class="tb" disabled>Group ▾</button>
-      <button id="btnDelete" class="tb danger" disabled>Delete</button>
+      <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
+      <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
+      <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
+      <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
+      <button id="btnCenterSel" class="tb" disabled title="Make this the center of rotation">◎ Center</button>
+      <button id="btnGroupMenu" class="tb" disabled title="Move the selected bubble into or out of a group">Group ▾</button>
+      <button id="btnDelete" class="tb danger" disabled title="Delete the selected item (Delete)">Delete</button>
       <span class="tb-sep"></span>
-      <button id="btnSpin" class="tb icon">↻</button>
-      <button id="btnCenter" class="tb icon">⌖</button>
-      <button id="btnZoomOut" class="tb icon">−</button>
-      <button id="btnZoomIn" class="tb icon">+</button>
+      <button id="btnSpin" class="tb icon" title="Toggle auto-spin">↻</button>
+      <button id="btnCenter" class="tb icon" title="Reset the view (angle, zoom, and center)">⌖</button>
+      <button id="btnZoomOut" class="tb icon" title="Zoom out">−</button>
+      <button id="btnZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
 
     <!-- chat + activity log -->
     <aside id="chatPanel" class="chat-panel" hidden>
-      <div class="chat-head">
-        <div>
+      <div class="chat-head" id="chatHead">
+        <div class="chat-head-text">
           <div class="chat-title">Chat &amp; activity</div>
           <div id="chatPresence" class="chat-presence muted">Only you here</div>
         </div>
-        <button id="btnChatClose" class="tb icon">✕</button>
+        <div class="chat-head-btns">
+          <button id="btnChatCollapse" class="tb icon" title="Collapse" aria-label="Collapse chat">▾</button>
+          <button id="btnChatClose" class="tb icon" title="Close" aria-label="Close chat">✕</button>
+        </div>
       </div>
-      <div id="chatLog" class="chat-log"></div>
-      <form id="chatForm" class="chat-compose">
-        <input id="chatInput" maxlength="500" placeholder="Message collaborators…" autocomplete="off">
-        <button type="submit" class="tb primary-tb">Send</button>
-      </form>
+      <div class="chat-body">
+        <div id="chatLog" class="chat-log"></div>
+        <form id="chatForm" class="chat-compose">
+          <input id="chatInput" maxlength="500" placeholder="Message collaborators…" autocomplete="off">
+          <button type="submit" class="tb primary-tb">Send</button>
+        </form>
+      </div>
+      <div id="chatResize" class="chat-resize" title="Drag to resize" aria-hidden="true"></div>
     </aside>
   </section>
 
@@ -135,10 +139,12 @@
       </div>
     </div>
     <div class="edit-toolbar" id="profileToolbar">
-      <button id="btnPSpin" class="tb icon">↻</button>
-      <button id="btnPCenter" class="tb icon">⌖</button>
-      <button id="btnPZoomOut" class="tb icon">−</button>
-      <button id="btnPZoomIn" class="tb icon">+</button>
+      <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
+      <span class="tb-sep"></span>
+      <button id="btnPSpin" class="tb icon" title="Toggle auto-spin">↻</button>
+      <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
+      <button id="btnPZoomOut" class="tb icon" title="Zoom out">−</button>
+      <button id="btnPZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
   </section>
 
@@ -150,8 +156,9 @@
         <label>Display name <input name="displayName" maxlength="40" placeholder="Optional"></label>
         <label class="check"><input type="checkbox" name="showDisplayName"> Show my display name to others</label>
         <label class="field-title">Default visibility for new maps</label>
-        <label class="check"><input type="radio" name="visibility" value="public"> Everyone on MindMapShare</label>
+        <label class="check"><input type="radio" name="visibility" value="private"> Private — only me</label>
         <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
+        <label class="check"><input type="radio" name="visibility" value="public"> Everyone on MindMapShare</label>
         <div class="muted" style="margin:-2px 0 12px">Each map can override this in Map ▾ on the map screen.</div>
         <label>About me <textarea name="bio" maxlength="300" rows="3" placeholder="A line about you (optional)"></textarea></label>
         <div class="form-error" id="settingsError"></div>
@@ -205,8 +212,9 @@
   <div class="sheet-title">New map</div>
   <input id="newMapName" maxlength="60" placeholder="Name this map…">
   <label class="field-title">Who can see it?</label>
-  <label class="check"><input type="radio" name="newMapVis" value="public"> Everyone on MindMapShare</label>
+  <label class="check"><input type="radio" name="newMapVis" value="private"> Private — only me</label>
   <label class="check"><input type="radio" name="newMapVis" value="friends"> Friends only</label>
+  <label class="check"><input type="radio" name="newMapVis" value="public"> Everyone on MindMapShare</label>
   <div class="form-error" id="newMapError"></div>
   <div class="sheet-row">
     <button id="newMapCancel" class="tb">Cancel</button>
@@ -218,8 +226,9 @@
   <div class="sheet-title">Map settings</div>
   <input id="msName" maxlength="60" placeholder="Map name…">
   <label class="field-title">Who can see this map?</label>
-  <label class="check"><input type="radio" name="msVis" value="public"> Everyone on MindMapShare</label>
+  <label class="check"><input type="radio" name="msVis" value="private"> Private — only me</label>
   <label class="check"><input type="radio" name="msVis" value="friends"> Friends only</label>
+  <label class="check"><input type="radio" name="msVis" value="public"> Everyone on MindMapShare</label>
   <label class="field-title">Who can edit this map?</label>
   <div id="msEditors" class="editor-list"></div>
   <div class="editor-add">
