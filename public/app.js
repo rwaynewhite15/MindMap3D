@@ -54,6 +54,7 @@ function createMapView(host, opts = {}) {
   let map = { nodes: {}, edges: [] };
   let idCounter = 1;
   let hueCounter = 0;
+  let hueOverride = null;   // user-chosen color for new bubbles; null = round-robin
   let yaw = 0.4, pitch = -0.25, camDist = 950;
   let pivot = [0, 0, 0];    // world point at screen center: rotation pivot AND pan position
   let centeredId = null;    // node the view is orbiting; null → background drag pans
@@ -634,11 +635,15 @@ function createMapView(host, opts = {}) {
   function addBubble() {
     const sel = selectedId && map.nodes[selectedId];
     const id = newId();
-    const n = { id, label: '', pos: [0, 0, 0], r: 62, hue: hueCounter++ % HUES.length, parentId: null, kind: 'bubble' };
+    const n = {
+      id, label: '', pos: [0, 0, 0], r: 62,
+      hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
+      parentId: null, kind: 'bubble',
+    };
 
     if (sel && sel.kind === 'container') {
       n.parentId = sel.id;
-      n.hue = sel.hue;
+      if (hueOverride === null) n.hue = sel.hue; // match the group unless a color was chosen
       n.pos = add3(sel.pos, mul(randUnit(), Math.max(20, sel.r * 0.45)));
       map.nodes[id] = n;
       clampInside(n);
@@ -668,7 +673,8 @@ function createMapView(host, opts = {}) {
     const offset = sel ? (sel.r + 150 + 90) : 200 + Math.random() * 120;
     const n = {
       id, label: '', kind: 'container', r: 150,
-      hue: hueCounter++ % HUES.length, parentId: null,
+      hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
+      parentId: null,
       pos: sel ? add3(base, mul(randUnit(), offset)) : mul(randUnit(), offset),
     };
     map.nodes[id] = n;
@@ -948,6 +954,7 @@ function createMapView(host, opts = {}) {
       hoverLock = false;
       lastTap = null;
       arranging = null; // never carry an in-flight arrange into another map
+      hueOverride = null; // color choice is per-map-session; back to auto-cycling
       // load the persisted anchor and start the view centered on it (else origin)
       anchorId = m && m.anchorId && map.nodes[m.anchorId] ? m.anchorId : null;
       pivot = anchorId ? [...map.nodes[anchorId].pos] : [0, 0, 0];
@@ -997,6 +1004,18 @@ function createMapView(host, opts = {}) {
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
+    // colors: recolor an existing node / pick the color for future bubbles
+    setNodeHue(id, hue) {
+      const n = map.nodes[id];
+      if (!n) return;
+      n.hue = Math.max(0, Math.min(HUES.length - 1, Math.floor(hue) || 0));
+      changed();
+    },
+    setHueOverride(h) {
+      hueOverride = (h === null || h === undefined) ? null
+        : Math.max(0, Math.min(HUES.length - 1, Math.floor(h)));
+    },
+    getHueOverride: () => hueOverride,
     startConnect() {
       const n = selectedId && map.nodes[selectedId];
       if (!n) return false;
@@ -1116,7 +1135,7 @@ window.addEventListener('hashchange', route);
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetNewMap', '#sheetMapSettings'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1216,6 +1235,65 @@ function openGroupSheet() {
     box.appendChild(p);
   }
 }
+
+/* ---------- color sheet + copy-color (eyedropper) mode ---------- */
+let colorCopyTarget = null; // node waiting to receive a color copied from another bubble
+
+function swatchButton(i, isSel, onPick) {
+  const h = HUES[i];
+  const b = document.createElement('button');
+  b.className = 'swatch' + (isSel ? ' sel' : '');
+  b.style.background = `radial-gradient(circle at 32% 28%, ${h.lite}, ${h.main} 60%, ${h.dark} 130%)`;
+  b.title = 'Use this color';
+  b.addEventListener('click', () => onPick(i));
+  return b;
+}
+
+function renderSwatches() {
+  const sel = myMap.getSelected();
+  $('#colorSelWrap').hidden = !sel;
+  const rowSel = $('#swatchSel');
+  rowSel.innerHTML = '';
+  if (sel) {
+    for (let i = 0; i < HUES.length; i++) {
+      rowSel.appendChild(swatchButton(i, (sel.hue || 0) % HUES.length === i, pick => {
+        myMap.setNodeHue(sel.id, pick);
+        renderSwatches(); // live: the bubble recolors behind the sheet
+      }));
+    }
+  }
+  const rowNew = $('#swatchNew');
+  rowNew.innerHTML = '';
+  const auto = document.createElement('button');
+  auto.className = 'tb' + (myMap.getHueOverride() === null ? ' active' : '');
+  auto.textContent = 'Auto';
+  auto.title = 'Cycle through the palette automatically';
+  auto.addEventListener('click', () => { myMap.setHueOverride(null); renderSwatches(); });
+  rowNew.appendChild(auto);
+  for (let i = 0; i < HUES.length; i++) {
+    rowNew.appendChild(swatchButton(i, myMap.getHueOverride() === i, pick => {
+      myMap.setHueOverride(pick);
+      renderSwatches();
+    }));
+  }
+  $('#colorModeNote').textContent = myMap.getHueOverride() === null
+    ? 'New bubbles cycle through the palette; bubbles added inside a group match the group.'
+    : 'New bubbles (and bubbles added inside groups) will use the chosen color.';
+}
+
+function openColorSheet() {
+  openSheet('#sheetColor');
+  renderSwatches();
+}
+
+$('#colorDone').addEventListener('click', () => closeSheets());
+$('#btnCopyColor').addEventListener('click', () => {
+  const sel = myMap.getSelected();
+  if (!sel) return;
+  colorCopyTarget = sel.id;
+  closeSheets();
+  setHint('Now tap the bubble whose color you want to copy', true);
+});
 
 /* ================================================================
    Pick menu — choose between overlapping elements
@@ -1397,7 +1475,22 @@ function initEditor() {
   myMap = createMapView($('#myMapHost'), {
     editable: true,
     onChange: saveMap,
-    onSelect: () => {
+    onSelect: id => {
+      // copy-color mode: the next tapped bubble donates its color
+      if (colorCopyTarget) {
+        if (id && id !== colorCopyTarget) {
+          const src = myMap.getNode(id);
+          const target = colorCopyTarget;
+          colorCopyTarget = null;
+          const copied = src && myMap.getNode(target);
+          if (copied) myMap.setNodeHue(target, src.hue || 0);
+          myMap.selectNode(target); // hand the selection back to the recolored bubble
+          refreshToolbar();
+          if (copied) setHint('Color copied ✓', false); // after selectNode so it isn't wiped
+          return;
+        }
+        if (!id) { colorCopyTarget = null; setHint(DEFAULT_HINT, false); } // background cancels
+      }
       refreshToolbar();
       if (!myMap.isConnecting()) setHint(DEFAULT_HINT, false);
       $('#btnConnect').classList.toggle('active', myMap.isConnecting());
@@ -1447,6 +1540,7 @@ function initEditor() {
     const sel = myMap.getSelected();
     if (sel) openRename(sel.id);
   });
+  $('#btnColor').addEventListener('click', openColorSheet);
   $('#btnCenterSel').addEventListener('click', () => {
     const sel = myMap.getSelected();
     if (myMap.centerOnSelected()) {
@@ -1508,6 +1602,9 @@ function initEditor() {
       myMap.cancelConnect();
       $('#btnConnect').classList.remove('active');
       setHint(DEFAULT_HINT, false);
+    } else if (e.key === 'Escape' && colorCopyTarget) {
+      colorCopyTarget = null;
+      setHint(DEFAULT_HINT, false);
     }
   });
 
@@ -1567,6 +1664,7 @@ async function loadMaps(selectId) {
 
 async function openMyMap(id) {
   flushSave();
+  colorCopyTarget = null; // a copy-color pick can't span map switches
   const data = await api('/api/maps/' + id);
   currentMapId = data.map.id;
   currentMapInfo = data;

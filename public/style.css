@@ -757,6 +757,18 @@ button.primary {
   font-size: 11px;
   line-height: 1;
 }
+.swatch-row { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.swatch {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+}
+.swatch.sel { border-color: var(--ink); box-shadow: 0 0 0 2px var(--accent); }
+.swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .editor-add { display: flex; gap: 8px; margin-top: 8px; }
 .editor-add select {
   flex: 1;

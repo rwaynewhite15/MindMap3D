@@ -74,6 +74,7 @@
       <button id="btnArrange" class="tb" title="Automatically spread all bubbles and groups out evenly">✨ Arrange</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
+      <button id="btnColor" class="tb" title="Choose bubble colors">🎨 Color</button>
       <button id="btnCenterSel" class="tb" disabled title="Make this the center of rotation">◎ Center</button>
       <button id="btnAnchor" class="tb" disabled title="Anchor this as the center the view resets to (saved with the map)">⚓ Anchor</button>
       <button id="btnGroupMenu" class="tb" disabled title="Move the selected bubble into or out of a group">Group ▾</button>
@@ -212,6 +213,21 @@
   <div id="groupOptions" class="group-options"></div>
   <div class="sheet-row">
     <button id="groupCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<div id="sheetColor" class="sheet" hidden>
+  <div class="sheet-title">Bubble color</div>
+  <div id="colorSelWrap" hidden>
+    <label class="field-title">Selected bubble</label>
+    <div id="swatchSel" class="swatch-row"></div>
+    <button id="btnCopyColor" class="tb" style="margin-top:10px">◉ Copy color from another bubble…</button>
+  </div>
+  <label class="field-title">New bubbles</label>
+  <div id="swatchNew" class="swatch-row"></div>
+  <div id="colorModeNote" class="muted" style="margin-top:8px"></div>
+  <div class="sheet-row">
+    <button id="colorDone" class="tb primary-tb">Done</button>
   </div>
 </div>
 
