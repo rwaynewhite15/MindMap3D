@@ -1,8 +1,13 @@
 'use strict';
 /*
- * Mind/Map 3D — zero-dependency Node.js server.
+ * Mind/Map 3D server.
  * Accounts, sessions, friends, profile visibility, mind map storage, static files.
- * Run: node server.js   (then open http://localhost:3000)
+ *
+ * Storage backends (picked automatically):
+ *   - DATABASE_URL set   → Postgres (Neon, Render, any pg) — production
+ *   - DATABASE_URL unset → JSON file in data/               — local dev / LAN
+ *
+ * Run: node server.js          (reads .env if present)
  */
 const http = require('http');
 const fs = require('fs');
@@ -10,45 +15,189 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 
+try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env — fine */ }
+
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_BODY = 2 * 1024 * 1024; // 2 MB
+const DATABASE_URL = process.env.DATABASE_URL;
 
-// ---------------- persistence ----------------
-let db = { users: {}, sessions: {} };
+const newId = () => crypto.randomBytes(12).toString('hex');
 
-function load() {
+/* ================================================================
+   Storage — two backends, one async API:
+     init(), getUserById, getUsersByIds, getUserByUsername,
+     searchUsers(q), createUser(u), saveUser(u),
+     createSession(sid, userId), getSessionUser(sid), deleteSession(sid)
+================================================================ */
+
+function pgStore() {
+  const { Pool } = require('pg');
+  const pool = new Pool({ connectionString: DATABASE_URL, max: 5 });
+
+  const rowToUser = r => r && {
+    id: r.id,
+    username: r.username,
+    salt: r.salt,
+    passHash: r.pass_hash,
+    displayName: r.display_name,
+    showDisplayName: r.show_display_name,
+    visibility: r.visibility,
+    bio: r.bio,
+    createdAt: Number(r.created_at),
+    friends: r.friends,
+    requestsIn: r.requests_in,
+    requestsOut: r.requests_out,
+    map: r.map,
+  };
+
+  return {
+    kind: 'postgres',
+    async init() {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          salt TEXT NOT NULL,
+          pass_hash TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          show_display_name BOOLEAN NOT NULL DEFAULT true,
+          visibility TEXT NOT NULL DEFAULT 'public',
+          bio TEXT NOT NULL DEFAULT '',
+          created_at BIGINT NOT NULL,
+          friends JSONB NOT NULL DEFAULT '[]',
+          requests_in JSONB NOT NULL DEFAULT '[]',
+          requests_out JSONB NOT NULL DEFAULT '[]',
+          map JSONB NOT NULL DEFAULT '{}'
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          sid TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at BIGINT NOT NULL
+        )`);
+      await pool.query('DELETE FROM sessions WHERE created_at < $1', [Date.now() - SESSION_TTL]);
+    },
+    async getUserById(id) {
+      const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+      return rowToUser(rows[0]);
+    },
+    async getUsersByIds(ids) {
+      if (!ids || !ids.length) return [];
+      const { rows } = await pool.query('SELECT * FROM users WHERE id = ANY($1)', [ids]);
+      const byId = new Map(rows.map(r => [r.id, rowToUser(r)]));
+      return ids.map(id => byId.get(id)).filter(Boolean);
+    },
+    async getUserByUsername(username) {
+      const { rows } = await pool.query('SELECT * FROM users WHERE username = $1',
+        [String(username || '').toLowerCase()]);
+      return rowToUser(rows[0]);
+    },
+    async searchUsers(q) {
+      const like = '%' + String(q || '').replace(/[%_\\]/g, '\\$&') + '%';
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE $1 = '%%' OR username ILIKE $1 OR (show_display_name AND display_name ILIKE $1)
+         ORDER BY created_at DESC LIMIT 100`, [like]);
+      return rows.map(rowToUser);
+    },
+    async createUser(u) {
+      await pool.query(
+        `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
+                            visibility, bio, created_at, friends, requests_in, requests_out, map)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb)`,
+        [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
+         u.visibility, u.bio, u.createdAt,
+         JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
+         JSON.stringify(u.requestsOut), JSON.stringify(u.map)]);
+    },
+    async saveUser(u) {
+      await pool.query(
+        `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
+                          friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, map=$9::jsonb
+         WHERE id=$1`,
+        [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
+         JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
+         JSON.stringify(u.requestsOut), JSON.stringify(u.map)]);
+    },
+    async createSession(sid, userId) {
+      await pool.query('INSERT INTO sessions (sid, user_id, created_at) VALUES ($1,$2,$3)',
+        [sid, userId, Date.now()]);
+    },
+    async getSessionUser(sid) {
+      const { rows } = await pool.query(
+        `SELECT s.created_at AS s_created, u.* FROM sessions s
+         JOIN users u ON u.id = s.user_id WHERE s.sid = $1`, [sid]);
+      if (!rows[0]) return null;
+      return { user: rowToUser(rows[0]), createdAt: Number(rows[0].s_created) };
+    },
+    async deleteSession(sid) {
+      await pool.query('DELETE FROM sessions WHERE sid = $1', [sid]);
+    },
+  };
+}
+
+function fileStore() {
+  const DATA_DIR = path.join(__dirname, 'data');
+  const DATA_FILE = path.join(DATA_DIR, 'data.json');
+  let db = { users: {}, sessions: {} };
   try {
     db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!db.users) db.users = {};
     if (!db.sessions) db.sessions = {};
   } catch { /* first run */ }
+
+  let saveTimer = null;
+  const persist = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = DATA_FILE + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(db));
+      fs.renameSync(tmp, DATA_FILE);
+    }, 200);
+  };
+
+  return {
+    kind: 'json file (data/data.json)',
+    async init() {},
+    async getUserById(id) { return db.users[id] || null; },
+    async getUsersByIds(ids) { return (ids || []).map(id => db.users[id]).filter(Boolean); },
+    async getUserByUsername(username) {
+      const uname = String(username || '').toLowerCase();
+      return Object.values(db.users).find(u => u.username === uname) || null;
+    },
+    async searchUsers(q) {
+      let users = Object.values(db.users);
+      const needle = String(q || '').toLowerCase();
+      if (needle) {
+        users = users.filter(u =>
+          u.username.includes(needle) ||
+          (u.showDisplayName && u.displayName && u.displayName.toLowerCase().includes(needle)));
+      }
+      return users.sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+    },
+    async createUser(u) { db.users[u.id] = u; persist(); },
+    async saveUser(u) { db.users[u.id] = u; persist(); },
+    async createSession(sid, userId) { db.sessions[sid] = { userId, createdAt: Date.now() }; persist(); },
+    async getSessionUser(sid) {
+      const s = db.sessions[sid];
+      if (!s) return null;
+      const user = db.users[s.userId];
+      return user ? { user, createdAt: s.createdAt } : null;
+    },
+    async deleteSession(sid) { delete db.sessions[sid]; persist(); },
+  };
 }
 
-let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = DATA_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db));
-    fs.renameSync(tmp, DATA_FILE);
-  }, 200);
-}
+const store = DATABASE_URL ? pgStore() : fileStore();
 
-// ---------------- helpers ----------------
-const newId = () => crypto.randomBytes(12).toString('hex');
-
+/* ================================================================
+   Domain helpers
+================================================================ */
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
-}
-
-function findUserByUsername(username) {
-  const uname = String(username || '').toLowerCase();
-  return Object.values(db.users).find(u => u.username === uname) || null;
 }
 
 function defaultMap(label) {
@@ -96,7 +245,9 @@ function meUser(u) {
   };
 }
 
-// ---------------- map validation ----------------
+/* ================================================================
+   Map validation
+================================================================ */
 function sanitizeMap(input) {
   if (!input || typeof input !== 'object') return null;
   const out = { nodes: {}, edges: [] };
@@ -141,7 +292,9 @@ function sanitizeMap(input) {
   return out;
 }
 
-// ---------------- sessions / cookies ----------------
+/* ================================================================
+   Sessions, cookies, rate limiting
+================================================================ */
 function parseCookies(req) {
   const out = {};
   const raw = req.headers.cookie || '';
@@ -152,23 +305,51 @@ function parseCookies(req) {
   return out;
 }
 
-function authUser(req) {
+function isSecure(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  return proto === 'https';
+}
+
+async function authUser(req) {
   const sid = parseCookies(req).sid;
   if (!sid) return null;
-  const sess = db.sessions[sid];
+  const sess = await store.getSessionUser(sid);
   if (!sess) return null;
-  if (Date.now() - sess.createdAt > SESSION_TTL) { delete db.sessions[sid]; save(); return null; }
-  return db.users[sess.userId] || null;
+  if (Date.now() - sess.createdAt > SESSION_TTL) {
+    await store.deleteSession(sid);
+    return null;
+  }
+  return sess.user;
 }
 
-function startSession(res, userId) {
+async function startSession(req, res, userId) {
   const sid = crypto.randomBytes(32).toString('hex');
-  db.sessions[sid] = { userId, createdAt: Date.now() };
-  save();
-  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`);
+  await store.createSession(sid, userId);
+  res.setHeader('Set-Cookie',
+    `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}` +
+    (isSecure(req) ? '; Secure' : ''));
 }
 
-// ---------------- request plumbing ----------------
+function clientIp(req) {
+  const xf = req.headers['x-forwarded-for'];
+  return xf ? String(xf).split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+}
+
+const attempts = new Map(); // key → { n, t }
+function tooMany(key, limit, windowMs) {
+  const now = Date.now();
+  if (attempts.size > 2000) {
+    for (const [k, a] of attempts) if (now - a.t > windowMs) attempts.delete(k);
+  }
+  const a = attempts.get(key);
+  if (!a || now - a.t > windowMs) { attempts.set(key, { n: 1, t: now }); return false; }
+  a.n++;
+  return a.n > limit;
+}
+
+/* ================================================================
+   Request plumbing
+================================================================ */
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -192,19 +373,23 @@ function readBody(req) {
   });
 }
 
-// ---------------- API ----------------
+/* ================================================================
+   API
+================================================================ */
 async function handleApi(req, res, pathname) {
-  const user = authUser(req);
   const route = req.method + ' ' + pathname;
 
   // --- auth ---
   if (route === 'POST /api/register') {
+    if (tooMany('reg:' + clientIp(req), 10, 60 * 60 * 1000)) {
+      return sendJSON(res, 429, { error: 'Too many sign-ups from this address. Try again later.' });
+    }
     const body = await readBody(req);
     const username = String(body.username || '').trim().toLowerCase();
     const password = String(body.password || '');
     if (!/^[a-z0-9_]{3,20}$/.test(username)) return sendJSON(res, 400, { error: 'Username must be 3–20 characters: letters, numbers, underscores.' });
     if (password.length < 6) return sendJSON(res, 400, { error: 'Password must be at least 6 characters.' });
-    if (findUserByUsername(username)) return sendJSON(res, 409, { error: 'That username is taken.' });
+    if (await store.getUserByUsername(username)) return sendJSON(res, 409, { error: 'That username is taken.' });
     const salt = crypto.randomBytes(16).toString('hex');
     const displayName = String(body.displayName || '').trim().slice(0, 40);
     const u = {
@@ -220,30 +405,41 @@ async function handleApi(req, res, pathname) {
       friends: [], requestsIn: [], requestsOut: [],
       map: defaultMap(displayName || username),
     };
-    db.users[u.id] = u;
-    startSession(res, u.id);
+    try {
+      await store.createUser(u);
+    } catch (err) {
+      if (err && err.code === '23505') return sendJSON(res, 409, { error: 'That username is taken.' });
+      throw err;
+    }
+    await startSession(req, res, u.id);
     return sendJSON(res, 200, { user: meUser(u) });
   }
 
   if (route === 'POST /api/login') {
+    const ip = clientIp(req);
+    if (tooMany('login:' + ip, 25, 15 * 60 * 1000)) {
+      return sendJSON(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+    }
     const body = await readBody(req);
-    const u = findUserByUsername(body.username);
+    const u = await store.getUserByUsername(body.username);
     const password = String(body.password || '');
     if (!u || hashPassword(password, u.salt) !== u.passHash) {
       return sendJSON(res, 401, { error: 'Wrong username or password.' });
     }
-    startSession(res, u.id);
+    attempts.delete('login:' + ip);
+    await startSession(req, res, u.id);
     return sendJSON(res, 200, { user: meUser(u) });
   }
 
   if (route === 'POST /api/logout') {
     const sid = parseCookies(req).sid;
-    if (sid) { delete db.sessions[sid]; save(); }
-    res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+    if (sid) await store.deleteSession(sid);
+    res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
     return sendJSON(res, 200, { ok: true });
   }
 
   // --- everything below requires sign-in ---
+  const user = await authUser(req);
   if (!user) return sendJSON(res, 401, { error: 'Not signed in.' });
 
   if (route === 'GET /api/me') return sendJSON(res, 200, { user: meUser(user) });
@@ -254,7 +450,7 @@ async function handleApi(req, res, pathname) {
     if ('showDisplayName' in body) user.showDisplayName = !!body.showDisplayName;
     if ('visibility' in body) user.visibility = body.visibility === 'friends' ? 'friends' : 'public';
     if ('bio' in body) user.bio = String(body.bio || '').slice(0, 300);
-    save();
+    await store.saveUser(user);
     return sendJSON(res, 200, { user: meUser(user) });
   }
 
@@ -265,25 +461,19 @@ async function handleApi(req, res, pathname) {
     const map = sanitizeMap(body.map);
     if (!map) return sendJSON(res, 400, { error: 'Invalid map.' });
     user.map = map;
-    save();
+    await store.saveUser(user);
     return sendJSON(res, 200, { ok: true });
   }
 
   if (req.method === 'GET' && pathname === '/api/users') {
-    const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim().toLowerCase();
-    let users = Object.values(db.users);
-    if (q) {
-      users = users.filter(u =>
-        u.username.includes(q) ||
-        (u.showDisplayName && u.displayName && u.displayName.toLowerCase().includes(q)));
-    }
-    users.sort((a, b) => b.createdAt - a.createdAt);
-    return sendJSON(res, 200, { users: users.slice(0, 100).map(u => publicUser(u, user)) });
+    const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim();
+    const users = await store.searchUsers(q);
+    return sendJSON(res, 200, { users: users.map(u => publicUser(u, user)) });
   }
 
   const profileMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})$/);
   if (req.method === 'GET' && profileMatch) {
-    const target = findUserByUsername(profileMatch[1]);
+    const target = await store.getUserByUsername(profileMatch[1]);
     if (!target) return sendJSON(res, 404, { error: 'No such user.' });
     const allowed = canViewMap(user, target);
     return sendJSON(res, 200, {
@@ -295,18 +485,22 @@ async function handleApi(req, res, pathname) {
 
   // --- friends ---
   if (route === 'GET /api/friends') {
-    const pick = ids => (ids || []).map(id => db.users[id]).filter(Boolean).map(u => publicUser(u, user));
+    const [friends, incoming, outgoing] = await Promise.all([
+      store.getUsersByIds(user.friends),
+      store.getUsersByIds(user.requestsIn),
+      store.getUsersByIds(user.requestsOut),
+    ]);
     return sendJSON(res, 200, {
-      friends: pick(user.friends),
-      incoming: pick(user.requestsIn),
-      outgoing: pick(user.requestsOut),
+      friends: friends.map(u => publicUser(u, user)),
+      incoming: incoming.map(u => publicUser(u, user)),
+      outgoing: outgoing.map(u => publicUser(u, user)),
     });
   }
 
   const friendAction = pathname.match(/^\/api\/friends\/(request|accept|decline|cancel|remove)$/);
   if (req.method === 'POST' && friendAction) {
     const body = await readBody(req);
-    const target = findUserByUsername(body.username);
+    const target = await store.getUserByUsername(body.username);
     if (!target || target.id === user.id) return sendJSON(res, 400, { error: 'Invalid user.' });
     const act = friendAction[1];
     const rm = (arr, id) => { const i = arr.indexOf(id); if (i >= 0) arr.splice(i, 1); };
@@ -332,14 +526,17 @@ async function handleApi(req, res, pathname) {
     } else if (act === 'remove') {
       rm(user.friends, target.id); rm(target.friends, user.id);
     }
-    save();
+    await store.saveUser(user);
+    await store.saveUser(target);
     return sendJSON(res, 200, { ok: true, relation: relationTo(user, target) });
   }
 
   return sendJSON(res, 404, { error: 'Not found.' });
 }
 
-// ---------------- static files ----------------
+/* ================================================================
+   Static files
+================================================================ */
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -360,7 +557,7 @@ function serveStatic(req, res, pathname) {
       if (!path.extname(rel)) {
         fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, html) => {
           if (e2) { res.writeHead(404); res.end('Not found'); return; }
-          res.writeHead(200, { 'Content-Type': MIME['.html'] });
+          res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
           res.end(html);
         });
         return;
@@ -368,20 +565,27 @@ function serveStatic(req, res, pathname) {
       res.writeHead(404); res.end('Not found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'no-cache', // small files; always revalidate so deploys show up
+    });
     res.end(buf);
   });
 }
 
-// ---------------- server ----------------
-load();
+/* ================================================================
+   Server
+================================================================ */
 const server = http.createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   try {
     if (pathname.startsWith('/api/')) await handleApi(req, res, pathname);
     else serveStatic(req, res, pathname);
   } catch (err) {
-    sendJSON(res, err.message === 'too large' ? 413 : 400, { error: err.message === 'bad json' ? 'Bad request.' : 'Server error.' });
+    if (err.message === 'too large') return sendJSON(res, 413, { error: 'Request too large.' });
+    if (err.message === 'bad json') return sendJSON(res, 400, { error: 'Bad request.' });
+    console.error(new Date().toISOString(), req.method, pathname, err);
+    sendJSON(res, 500, { error: 'Server error.' });
   }
 });
 
@@ -394,14 +598,23 @@ server.on('error', err => {
   throw err;
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('Mind/Map 3D is running:');
-  console.log(`  This computer:  http://localhost:${PORT}`);
-  for (const list of Object.values(os.networkInterfaces())) {
-    for (const iface of list || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        console.log(`  Phone (same Wi-Fi): http://${iface.address}:${PORT}`);
+store.init().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Mind/Map 3D is running (storage: ${store.kind}):`);
+    console.log(`  This computer:  http://localhost:${PORT}`);
+    if (!DATABASE_URL) {
+      console.log('  NOTE: no DATABASE_URL set — using local file storage. Fine for');
+      console.log('  home/LAN use; on cloud hosts data would be lost on redeploy.');
+      for (const list of Object.values(os.networkInterfaces())) {
+        for (const iface of list || []) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            console.log(`  Phone (same Wi-Fi): http://${iface.address}:${PORT}`);
+          }
+        }
       }
     }
-  }
+  });
+}).catch(err => {
+  console.error('Failed to initialize storage:', err.message);
+  process.exit(1);
 });

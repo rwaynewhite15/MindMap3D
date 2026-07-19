@@ -3,3 +3,7 @@ data/
 
 # machine-local Claude Code settings
 .claude/settings.local.json
+
+# dependencies & local secrets
+node_modules/
+.env

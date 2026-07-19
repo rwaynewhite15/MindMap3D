@@ -4,12 +4,17 @@ A social 3D mind-mapping app. Every bubble is a shaded 3D sphere floating in spa
 you connect them with weighted links, group them inside larger translucent container
 spheres, and share your map with everyone or just your friends.
 
-## Run it
+## Run it locally
 
-Requires [Node.js](https://nodejs.org) (no npm packages needed).
+Requires [Node.js](https://nodejs.org) 20+.
 
 - **Easiest:** double-click `start.bat` — it starts the server and opens the app.
 - Or from a terminal: `node server.js`, then open <http://localhost:3000>.
+
+With no configuration the server stores everything in `data/data.json` — perfect for
+home/LAN use, zero dependencies required. To run locally against a real Postgres
+database instead, copy `.env.example` to `.env`, paste your connection string, and
+run `npm install` once.
 
 ### Use it on your phone
 
@@ -42,13 +47,31 @@ allow Node.js through Windows Firewall on private networks.)
 
 ## Files
 
+## Deploy to the internet (Render + Neon)
+
+The server automatically uses **Postgres** when a `DATABASE_URL` environment variable
+is present, so production deployment is configuration, not code:
+
+1. **Neon** (<https://neon.tech>): create a project, copy the connection string.
+2. **GitHub**: push this repo.
+3. **Render** (<https://render.com>): New → Web Service → connect the repo.
+   - Build command: `npm install`
+   - Start command: `node server.js`
+   - Environment variable: `DATABASE_URL` = your Neon connection string
+4. **Custom domain**: in the Render service → Settings → Custom Domains, add your
+   domain and set the DNS records Render shows you. HTTPS certificates are automatic.
+
+Tables are created automatically on first boot. Sessions get the `Secure` cookie flag
+behind HTTPS, and login/registration are rate-limited per IP.
+
+## Files
+
 | Path | What it is |
 |---|---|
-| `server.js` | Zero-dependency Node server: accounts, sessions, friends, map storage, static files |
+| `server.js` | Node server: accounts, sessions, friends, map storage, static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
-| `data/data.json` | All user data — created on first run; back this file up to keep accounts/maps |
+| `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
+| `.env.example` | Template for running locally against Postgres |
 | `legacy-index.html` | The original single-user prototype, kept for reference |
 
 Passwords are stored salted and hashed (scrypt). Sessions are HttpOnly cookies.
-This is a small self-hosted app meant for a trusted LAN or a small private deployment —
-put it behind HTTPS if you expose it to the internet.

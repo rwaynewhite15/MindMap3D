@@ -1,0 +1,16 @@
+{
+  "name": "mindmap-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Social 3D mind-mapping app — sphere bubbles, weighted connections, container groups, friends & profiles",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.16.0"
+  }
+}
