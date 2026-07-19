@@ -1,0 +1,5 @@
+# user database — accounts, password hashes, maps; never commit
+data/
+
+# machine-local Claude Code settings
+.claude/settings.local.json

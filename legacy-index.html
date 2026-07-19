@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mind/Map 3D</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  background: #10141D;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  color: #EDEFF4;
+  overscroll-behavior: none;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #141926;
+  border-bottom: 1px solid #232938;
+  flex-wrap: wrap;
+  z-index: 20;
+}
+#logo { font-weight: 700; letter-spacing: 0.06em; font-size: 15px; margin-right: auto; }
+#logo span { color: #4FD1E0; }
+
+button {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 14px;
+  min-height: 40px;
+  background: #232938;
+  color: #EDEFF4;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.3; }
+button:focus-visible { outline: 2px solid #4FD1E0; outline-offset: 2px; }
+button.active { background: #4FD1E0; color: #10141D; }
+#btnAdd { background: #4FD1E0; color: #10141D; font-weight: 700; }
+#btnDel { color: #F07A8F; }
+.zoombtn { min-width: 40px; font-size: 18px; padding: 6px 10px; }
+
+#canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background:
+    radial-gradient(ellipse at 50% 40%, #171d2b 0%, #10141D 65%);
+}
+#canvas.dragging { cursor: grabbing; }
+
+#edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+.node {
+  position: absolute;
+  left: 0; top: 0;
+  white-space: nowrap;
+  padding: 9px 18px;
+  border-radius: 999px;
+  border: 2px solid;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 2px 8px #00000044;
+  user-select: none;
+  -webkit-user-select: none;
+  will-change: transform, opacity;
+}
+.node.root {
+  border-radius: 14px;
+  padding: 13px 24px;
+  font-size: 17px;
+  font-weight: 700;
+  background: #EDEFF4;
+  color: #10141D;
+}
+.node input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  min-width: 100px;
+  max-width: 70vw;
+}
+
+#hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #141926dd;
+  color: #8A93A6;
+  font-size: 11px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  pointer-events: none;
+  text-align: center;
+  max-width: 92%;
+  z-index: 15;
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div id="logo">MIND<span>/</span>MAP <span style="color:#8A93A6;font-weight:400">3D</span></div>
+  <button id="btnAdd">+ Branch</button>
+  <button id="btnRename">Rename</button>
+  <button id="btnDel">Delete</button>
+  <button id="btnSpin">Spin</button>
+  <button class="zoombtn" id="btnZoomOut" aria-label="Zoom out">−</button>
+  <button class="zoombtn" id="btnZoomIn" aria-label="Zoom in">+</button>
+  <button id="btnCenter">Center</button>
+  <button id="btnExport">Export</button>
+</div>
+
+<div id="canvas">
+  <svg id="edges"></svg>
+  <div id="nodesLayer"></div>
+  <div id="hint">Drag background to rotate · Drag node to move · Tap = select · Tap again = rename · Pinch / scroll = zoom</div>
+</div>
+
+<script>
+// ---------------- constants ----------------
+const HUES = [
+  { main: '#4FD1E0', dim: '#123A41' },
+  { main: '#F0B84A', dim: '#3F3012' },
+  { main: '#F07A8F', dim: '#3F1B23' },
+  { main: '#9BD65A', dim: '#273A12' },
+  { main: '#B08CF0', dim: '#2A1F41' },
+  { main: '#F09A5A', dim: '#3F2712' },
+];
+const FOCAL = 700;
+const CHILD_DIST = 165;
+
+// spread directions for root branches (roughly even over a sphere)
+const ROOT_DIRS = [
+  [0, -1, -0.25], [0.9, -0.45, 0.35], [0.95, 0.5, -0.35],
+  [-0.75, 0.6, 0.4], [-0.95, -0.35, -0.35], [0.15, 0.95, 0.3],
+  [-0.2, -0.5, 0.9], [0.4, 0.3, -0.9], [-0.5, 0.1, -0.85],
+  [0.6, -0.2, 0.8], [-0.6, -0.7, 0.4], [0.2, 0.75, 0.65],
+].map(v => norm(v));
+
+function norm(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function add3(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function mul(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+
+// ---------------- state ----------------
+let idCounter = 1;
+const newId = () => 'n' + (idCounter++);
+
+let nodes = {};
+const rootId = newId();
+nodes[rootId] = { id: rootId, text: 'Well Being', pos: [0, 0, 0], parentId: null, hue: -1 };
+
+let selectedId = rootId;
+let editingId = null;
+let yaw = 0.4, pitch = -0.25;
+let camDist = 950;
+let spinning = true;
+
+const canvas = document.getElementById('canvas');
+const edgesSvg = document.getElementById('edges');
+const nodesLayer = document.getElementById('nodesLayer');
+
+const nodeEls = new Map();
+const edgeEls = new Map();
+
+// ---------------- tree helpers ----------------
+const childrenOf = id => Object.values(nodes).filter(n => n.parentId === id);
+function descendantsOf(id) {
+  const out = [], stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const n of Object.values(nodes)) {
+      if (n.parentId === cur) { out.push(n.id); stack.push(n.id); }
+    }
+  }
+  return out;
+}
+const colorOf = n => n.parentId === null ? { main: '#EDEFF4', dim: '#2A2F3C' } : HUES[n.hue % HUES.length];
+
+// ---------------- 3D placement ----------------
+function childPosition(parent) {
+  const siblings = childrenOf(parent.id).length;
+  let dir;
+  if (parent.parentId === null) {
+    dir = ROOT_DIRS[siblings % ROOT_DIRS.length];
+  } else {
+    const gp = nodes[parent.parentId];
+    dir = norm(sub(parent.pos, gp.pos));
+  }
+  // orthonormal basis perpendicular to dir
+  const helper = Math.abs(dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const u = norm(cross(dir, helper));
+  const v = norm(cross(dir, u));
+
+  let theta = 0, phi = 0;
+  if (parent.parentId !== null || siblings > 0) {
+    if (parent.parentId !== null) {
+      theta = siblings === 0 ? 0 : 0.7;
+      phi = siblings * 2.4; // golden-ish angle
+    }
+  }
+  const cd = mul(dir, Math.cos(theta));
+  const perp = add3(mul(u, Math.cos(phi) * Math.sin(theta)), mul(v, Math.sin(phi) * Math.sin(theta)));
+  return add3(parent.pos, mul(add3(cd, perp), CHILD_DIST));
+}
+
+function addChild(parentId, text, hueOverride) {
+  const parent = nodes[parentId];
+  if (!parent) return null;
+  const siblings = childrenOf(parentId).length;
+  const id = newId();
+  const hue = hueOverride !== undefined
+    ? hueOverride
+    : (parent.parentId === null ? siblings % HUES.length : parent.hue);
+  nodes[id] = { id, text: text || '', pos: childPosition(parent), parentId, hue };
+  return id;
+}
+
+// ---------------- seed Bob's well-being map ----------------
+(function seedMap() {
+  const fit = addChild(rootId, 'Fitness', 0);
+  addChild(fit, 'BJJ mat time');
+  addChild(fit, 'Strength');
+  addChild(fit, 'Recovery & mobility');
+
+  const spir = addChild(rootId, 'Spirituality', 1);
+  addChild(spir, 'Mass & confession');
+  addChild(spir, 'Daily prayer');
+  addChild(spir, 'Scripture & Desert Fathers');
+
+  const car = addChild(rootId, 'Career', 2);
+  addChild(car, 'The plant');
+  addChild(car, 'MBT degree');
+  addChild(car, 'Data + mfg vision');
+
+  const home = addChild(rootId, 'Home Life', 3);
+  addChild(home, 'Property, horses, vines');
+  addChild(home, 'Makerspace projects');
+
+  const rel = addChild(rootId, 'Relationships', 4);
+  addChild(rel, 'Marriage');
+  addChild(rel, 'Family');
+  addChild(rel, 'Parish community');
+})();
+
+// ---------------- projection ----------------
+function project(p, w, h) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  // rotate around Y
+  const x1 = p[0] * cy - p[2] * sy;
+  const z1 = p[0] * sy + p[2] * cy;
+  // rotate around X
+  const y2 = p[1] * cp - z1 * sp;
+  const z2 = p[1] * sp + z1 * cp;
+  const zc = z2 + camDist;
+  const s = FOCAL / Math.max(zc, 60);
+  return { x: w / 2 + x1 * s, y: h / 2 + y2 * s, s, zc, behind: zc < 60 };
+}
+
+// camera-plane basis vectors in world space (for dragging nodes)
+function cameraBasis() {
+  const cy = Math.cos(-yaw), sy = Math.sin(-yaw);
+  const cp = Math.cos(-pitch), sp = Math.sin(-pitch);
+  function invRot(v) {
+    // inverse of project rotation: rotX(-pitch) then rotY(-yaw)
+    const y1 = v[1] * cp - v[2] * sp;
+    const z1 = v[1] * sp + v[2] * cp;
+    const x2 = v[0] * cy - z1 * sy;
+    const z2 = v[0] * sy + z1 * cy;
+    return [x2, y1, z2];
+  }
+  return { right: invRot([1, 0, 0]), up: invRot([0, 1, 0]) };
+}
+
+// ---------------- DOM build ----------------
+function buildDOM() {
+  nodesLayer.innerHTML = '';
+  edgesSvg.innerHTML = '';
+  nodeEls.clear();
+  edgeEls.clear();
+
+  for (const n of Object.values(nodes)) {
+    if (n.parentId && nodes[n.parentId]) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('stroke', colorOf(n).main);
+      edgesSvg.appendChild(line);
+      edgeEls.set(n.id, line);
+    }
+  }
+
+  for (const n of Object.values(nodes)) {
+    const col = colorOf(n);
+    const el = document.createElement('div');
+    el.className = 'node' + (n.parentId === null ? ' root' : '');
+    el.style.borderColor = col.main;
+    if (n.parentId !== null) {
+      el.style.background = col.dim;
+      el.style.color = '#EDEFF4';
+    }
+
+    if (editingId === n.id) {
+      const input = document.createElement('input');
+      input.value = n.text;
+      input.placeholder = 'Type an idea…';
+      input.addEventListener('pointerdown', e => e.stopPropagation());
+      input.addEventListener('blur', () => commitEdit(n.id, input.value));
+      input.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Enter' || e.key === 'Escape') commitEdit(n.id, input.value);
+      });
+      el.appendChild(input);
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+    } else {
+      el.textContent = n.text || 'Untitled';
+    }
+
+    el.addEventListener('pointerdown', e => onNodePointerDown(e, n.id));
+    nodesLayer.appendChild(el);
+    nodeEls.set(n.id, el);
+  }
+
+  document.getElementById('btnDel').disabled = !selectedId || selectedId === rootId;
+  document.getElementById('btnAdd').disabled = !selectedId;
+  document.getElementById('btnRename').disabled = !selectedId;
+}
+
+// ---------------- render loop ----------------
+function frame() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const proj = {};
+  for (const n of Object.values(nodes)) proj[n.id] = project(n.pos, w, h);
+
+  for (const [id, el] of nodeEls) {
+    const p = proj[id];
+    const n = nodes[id];
+    if (!p || !n) continue;
+    if (p.behind) { el.style.display = 'none'; continue; }
+    el.style.display = '';
+    const scale = Math.max(0.35, Math.min(1.5, p.s));
+    el.style.transform = `translate(-50%, -50%) translate(${p.x}px, ${p.y}px) scale(${scale})`;
+    const depthFade = Math.max(0.35, Math.min(1, p.s * 1.05));
+    el.style.opacity = depthFade;
+    el.style.zIndex = Math.round(100000 - p.zc);
+    const col = colorOf(n);
+    el.style.boxShadow = id === selectedId
+      ? `0 0 0 3px ${col.main}66, 0 4px 18px #00000066`
+      : '0 2px 8px #00000044';
+  }
+
+  for (const [id, line] of edgeEls) {
+    const n = nodes[id];
+    if (!n || !nodes[n.parentId]) continue;
+    const a = proj[n.parentId], b = proj[id];
+    if (a.behind || b.behind) { line.style.display = 'none'; continue; }
+    line.style.display = '';
+    line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+    line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+    const depth = (a.s + b.s) / 2;
+    line.setAttribute('stroke-opacity', Math.max(0.15, Math.min(0.7, depth * 0.65)));
+    line.setAttribute('stroke-width', Math.max(1, 2.2 * depth));
+  }
+
+  if (spinning && !drag && !editingId) yaw += 0.0035;
+  requestAnimationFrame(frame);
+}
+
+// ---------------- actions ----------------
+function startEdit(id) { editingId = id; buildDOM(); }
+function commitEdit(id, value) {
+  if (nodes[id]) nodes[id].text = value.trim() || 'Untitled';
+  editingId = null;
+  buildDOM();
+}
+function deleteNode(id) {
+  if (id === rootId) return;
+  const parentId = nodes[id]?.parentId;
+  for (const d of [id, ...descendantsOf(id)]) delete nodes[d];
+  selectedId = parentId || rootId;
+  editingId = null;
+  buildDOM();
+}
+function exportJSON() {
+  const blob = new Blob([JSON.stringify({ rootId, nodes }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mindmap-3d.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------------- pointer handling ----------------
+const pointers = new Map();
+let drag = null;
+
+function onNodePointerDown(e, id) {
+  e.stopPropagation();
+  e.preventDefault();
+  if (editingId && editingId !== id) {
+    const input = nodeEls.get(editingId)?.querySelector('input');
+    if (input) commitEdit(editingId, input.value);
+  }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const wasSelected = selectedId === id;
+  selectedId = id;
+
+  const starts = {};
+  for (const sid of [id, ...descendantsOf(id)]) starts[sid] = [...nodes[sid].pos];
+  const p = project(nodes[id].pos, canvas.clientWidth, canvas.clientHeight);
+  drag = { type: 'node', id, startX: e.clientX, startY: e.clientY, starts, scale: p.s, moved: false, wasSelected };
+  buildDOM();
+}
+
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    drag = { type: 'pinch', startDist: Math.hypot(a.x - b.x, a.y - b.y), startCam: camDist };
+  } else if (!drag) {
+    drag = { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false };
+    canvas.classList.add('dragging');
+  }
+});
+
+window.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!drag) return;
+
+  if (drag.type === 'pinch' && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    camDist = Math.min(2600, Math.max(320, drag.startCam * (drag.startDist / dist)));
+  } else if (drag.type === 'orbit') {
+    const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    yaw = drag.startYaw + dx * 0.006;
+    pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + dy * 0.006));
+  } else if (drag.type === 'node') {
+    const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    const { right, up } = cameraBasis();
+    const wx = dx / drag.scale, wy = dy / drag.scale;
+    const delta = add3(mul(right, wx), mul(up, wy));
+    for (const [sid, s] of Object.entries(drag.starts)) {
+      if (nodes[sid]) nodes[sid].pos = add3(s, delta);
+    }
+  }
+});
+
+window.addEventListener('pointerup', e => {
+  pointers.delete(e.pointerId);
+  if (drag) {
+    if (drag.type === 'node' && !drag.moved && drag.wasSelected) {
+      startEdit(drag.id);
+    } else if (drag.type === 'orbit' && !drag.moved) {
+      selectedId = null;
+      if (editingId) {
+        const input = nodeEls.get(editingId)?.querySelector('input');
+        if (input) commitEdit(editingId, input.value);
+      } else {
+        buildDOM();
+      }
+    }
+  }
+  if (pointers.size === 0) { drag = null; canvas.classList.remove('dragging'); }
+  else if (pointers.size === 1 && drag && drag.type === 'pinch') drag = null;
+});
+window.addEventListener('pointercancel', e => {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) { drag = null; canvas.classList.remove('dragging'); }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  camDist = Math.min(2600, Math.max(320, camDist * (e.deltaY < 0 ? 0.92 : 1.08)));
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (editingId || !selectedId) return;
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const id = addChild(selectedId);
+    if (id) { selectedId = id; startEdit(id); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const n = nodes[selectedId];
+    const pid = n.parentId === null ? selectedId : n.parentId;
+    const id = addChild(pid);
+    if (id) { selectedId = id; startEdit(id); }
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault(); deleteNode(selectedId);
+  } else if (e.key === 'F2') {
+    e.preventDefault(); startEdit(selectedId);
+  }
+});
+
+// toolbar
+document.getElementById('btnAdd').addEventListener('click', () => {
+  if (!selectedId) return;
+  const id = addChild(selectedId);
+  if (id) { selectedId = id; startEdit(id); }
+});
+document.getElementById('btnRename').addEventListener('click', () => selectedId && startEdit(selectedId));
+document.getElementById('btnDel').addEventListener('click', () => selectedId && deleteNode(selectedId));
+const btnSpin = document.getElementById('btnSpin');
+function updateSpinBtn() { btnSpin.classList.toggle('active', spinning); }
+btnSpin.addEventListener('click', () => { spinning = !spinning; updateSpinBtn(); });
+document.getElementById('btnZoomIn').addEventListener('click', () => { camDist = Math.max(320, camDist * 0.85); });
+document.getElementById('btnZoomOut').addEventListener('click', () => { camDist = Math.min(2600, camDist * 1.18); });
+document.getElementById('btnCenter').addEventListener('click', () => { yaw = 0.4; pitch = -0.25; camDist = 950; });
+document.getElementById('btnExport').addEventListener('click', exportJSON);
+
+// respect reduced motion: start with spin off
+if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) spinning = false;
+updateSpinBtn();
+
+buildDOM();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#10141D">
+<title>Mind/Map 3D</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%234FD1E0'/><circle cx='38' cy='36' r='12' fill='%23ffffff' opacity='0.55'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="topbar" hidden>
+  <div id="logo">MIND<span>/</span>MAP <em>3D</em></div>
+  <nav id="mainNav">
+    <a href="#/map" data-nav="map">My Map</a>
+    <a href="#/browse" data-nav="browse">Browse</a>
+    <a href="#/friends" data-nav="friends">Friends<span id="friendBadge" class="badge" hidden></span></a>
+    <a href="#/settings" data-nav="settings">Settings</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============ AUTH ============ -->
+  <section id="view-auth" hidden>
+    <div class="auth-card">
+      <div class="auth-logo">MIND<span>/</span>MAP <em>3D</em></div>
+      <p class="auth-tag">Your mind, in bubbles. Share it — or don't.</p>
+
+      <div class="auth-tabs">
+        <button id="tabLogin" class="active">Sign in</button>
+        <button id="tabRegister">Create account</button>
+      </div>
+
+      <form id="formLogin">
+        <label>Username <input name="username" autocomplete="username" required></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+        <div class="form-error" id="loginError"></div>
+        <button type="submit" class="primary">Sign in</button>
+      </form>
+
+      <form id="formRegister" hidden>
+        <label>Username <input name="username" autocomplete="username" placeholder="letters, numbers, _" required></label>
+        <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="6+ characters" required></label>
+        <label>Display name <span class="muted">(optional)</span> <input name="displayName" autocomplete="name" placeholder="How others see you"></label>
+        <label class="check"><input type="checkbox" name="showDisplayName" checked> Show my display name to others</label>
+        <label class="field-title">Who can see my mind map?</label>
+        <label class="check"><input type="radio" name="visibility" value="public" checked> Everyone on Mind/Map</label>
+        <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
+        <div class="form-error" id="registerError"></div>
+        <button type="submit" class="primary">Create account</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ MY MAP (editor) ============ -->
+  <section id="view-map" hidden>
+    <div id="myMapHost" class="map-host"></div>
+    <div id="saveState" class="save-state" hidden>Saved</div>
+    <div id="mapHint" class="hint">Tap to select · Drag background to orbit · Pinch/scroll to zoom · Double-tap overlapping items to pick one</div>
+
+    <div id="editToolbar" class="edit-toolbar">
+      <button id="btnAddBubble" class="tb primary-tb">+ Bubble</button>
+      <button id="btnAddGroup" class="tb">+ Group</button>
+      <button id="btnConnect" class="tb" disabled>+ Connection</button>
+      <button id="btnRename" class="tb" disabled>Rename</button>
+      <button id="btnGroupMenu" class="tb" disabled>Group ▾</button>
+      <button id="btnDelete" class="tb danger" disabled>Delete</button>
+      <span class="tb-sep"></span>
+      <button id="btnSpin" class="tb icon">↻</button>
+      <button id="btnCenter" class="tb icon">⌖</button>
+      <button id="btnZoomOut" class="tb icon">−</button>
+      <button id="btnZoomIn" class="tb icon">+</button>
+    </div>
+  </section>
+
+  <!-- ============ BROWSE ============ -->
+  <section id="view-browse" hidden>
+    <div class="page">
+      <h1>Browse minds</h1>
+      <input id="searchInput" class="search" type="search" placeholder="Search by username or name…" autocomplete="off">
+      <div id="userList" class="user-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ FRIENDS ============ -->
+  <section id="view-friends" hidden>
+    <div class="page">
+      <h1>Friends</h1>
+      <div id="friendsContent"></div>
+    </div>
+  </section>
+
+  <!-- ============ PROFILE (someone else's map) ============ -->
+  <section id="view-profile" hidden>
+    <div id="profileBar">
+      <button id="btnProfileBack" class="tb icon">←</button>
+      <div id="profileWho">
+        <div id="profileName"></div>
+        <div id="profileHandle" class="muted"></div>
+      </div>
+      <button id="btnFriendAction" class="tb" hidden></button>
+    </div>
+    <div id="profileMapHost" class="map-host"></div>
+    <div id="profileLocked" class="locked" hidden>
+      <div class="locked-card">
+        <div class="lock-ico">🔒</div>
+        <p id="lockedText">This mind map is visible to friends only.</p>
+      </div>
+    </div>
+    <div class="edit-toolbar" id="profileToolbar">
+      <button id="btnPSpin" class="tb icon">↻</button>
+      <button id="btnPCenter" class="tb icon">⌖</button>
+      <button id="btnPZoomOut" class="tb icon">−</button>
+      <button id="btnPZoomIn" class="tb icon">+</button>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section id="view-settings" hidden>
+    <div class="page narrow">
+      <h1>Settings</h1>
+      <form id="formSettings">
+        <label>Display name <input name="displayName" maxlength="40" placeholder="Optional"></label>
+        <label class="check"><input type="checkbox" name="showDisplayName"> Show my display name to others</label>
+        <label class="field-title">Who can see my mind map?</label>
+        <label class="check"><input type="radio" name="visibility" value="public"> Everyone on Mind/Map</label>
+        <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
+        <label>About me <textarea name="bio" maxlength="300" rows="3" placeholder="A line about you (optional)"></textarea></label>
+        <div class="form-error" id="settingsError"></div>
+        <button type="submit" class="primary">Save settings</button>
+        <div id="settingsSaved" class="muted" hidden>Saved ✓</div>
+      </form>
+      <hr>
+      <div class="muted" id="settingsWho"></div>
+      <button id="btnLogout" class="danger-outline">Sign out</button>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ BOTTOM SHEETS ============ -->
+<div id="sheetShade" hidden></div>
+
+<div id="sheetRename" class="sheet" hidden>
+  <div class="sheet-title">Rename bubble</div>
+  <input id="renameInput" maxlength="80" placeholder="Type an idea…">
+  <div class="sheet-row">
+    <button id="renameCancel" class="tb">Cancel</button>
+    <button id="renameSave" class="tb primary-tb">Save</button>
+  </div>
+</div>
+
+<div id="sheetEdge" class="sheet" hidden>
+  <div class="sheet-title">Connection strength</div>
+  <div id="edgeEnds" class="muted"></div>
+  <div class="weight-row">
+    <input id="weightSlider" type="range" min="1" max="10" step="1" value="1">
+    <div id="weightValue" class="weight-num">1</div>
+  </div>
+  <div class="sheet-row">
+    <button id="edgeDelete" class="tb danger">Remove connection</button>
+    <button id="edgeDone" class="tb primary-tb">Done</button>
+  </div>
+</div>
+
+<div id="pickMenu" hidden></div>
+
+<div id="sheetGroup" class="sheet" hidden>
+  <div class="sheet-title" id="groupSheetTitle">Move into group</div>
+  <div id="groupOptions" class="group-options"></div>
+  <div class="sheet-row">
+    <button id="groupCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
