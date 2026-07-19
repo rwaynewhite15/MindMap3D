@@ -305,6 +305,28 @@ function relationTo(viewer, owner) {
   return 'none';
 }
 
+function areFriends(a, b) {
+  return !!a && !!b && (a.id === b.id || (a.friends || []).includes(b.id));
+}
+
+// A user's display name is shown to friends (and themselves) only, and only if
+// they've opted in with showDisplayName. Everyone else sees just the username.
+function nameFor(target, viewer) {
+  if (!target.showDisplayName || !target.displayName) return null;
+  return areFriends(target, viewer) ? target.displayName : null;
+}
+
+// The name a user presents in shared spaces they've joined (chat, presence,
+// activity log among co-editors). Honors their own opt-out — if showDisplayName
+// is off, they appear as just their username to everyone — but is not
+// per-viewer friend-gated, since a chat line is stored once for all readers.
+function selfName(u) {
+  return u.showDisplayName && u.displayName ? u.displayName : null;
+}
+function actorRef(u) {
+  return { username: u.username, name: selfName(u) };
+}
+
 function canViewMapObj(m, owner, viewer) {
   const rel = relationTo(viewer, owner);
   if (rel === 'self') return true;
@@ -331,15 +353,15 @@ function mapMeta(m, extra) {
   }, extra || {});
 }
 
-function ownerRef(u) {
-  return { username: u.username, name: u.showDisplayName && u.displayName ? u.displayName : null };
+function ownerRef(u, viewer) {
+  return { username: u.username, name: nameFor(u, viewer) };
 }
 
 function publicUser(u, viewer) {
   const visible = visibleMapsOf(u, viewer);
   return {
     username: u.username,
-    name: u.showDisplayName && u.displayName ? u.displayName : null,
+    name: nameFor(u, viewer),
     bio: u.bio || '',
     mapCount: visible.length,
     nodeCount: visible.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0),
@@ -697,14 +719,14 @@ async function handleApi(req, res, pathname) {
     const editorUsers = await store.getUsersByIds([...editorIds]);
     const byId = new Map(editorUsers.map(x => [x.id, x]));
     const mine = user.maps.map(m => mapMeta(m, {
-      editors: m.editors.map(id => byId.get(id)).filter(Boolean).map(ownerRef),
+      editors: m.editors.map(id => byId.get(id)).filter(Boolean).map(e => ownerRef(e, user)),
     }));
     const owners = await store.getUsersWithEditor(user.id);
     const shared = [];
     for (const owner of owners) {
       if (owner.id === user.id) continue;
       for (const m of owner.maps) {
-        if ((m.editors || []).includes(user.id)) shared.push(mapMeta(m, { owner: ownerRef(owner) }));
+        if ((m.editors || []).includes(user.id)) shared.push(mapMeta(m, { owner: ownerRef(owner, user) }));
       }
     }
     return sendJSON(res, 200, { mine, shared });
@@ -732,7 +754,7 @@ async function handleApi(req, res, pathname) {
     if (!sub && req.method === 'GET') {
       return sendJSON(res, 200, {
         map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges },
-        owner: ownerRef(owner), isOwner, canEdit,
+        owner: ownerRef(owner, user), isOwner, canEdit,
         present: presenceList(m.id),
       });
     }
@@ -742,7 +764,7 @@ async function handleApi(req, res, pathname) {
       const clean = sanitizeMap(body.map);
       if (!clean) return sendJSON(res, 400, { error: 'Invalid map.' });
       const before = { nodes: m.nodes, edges: m.edges };
-      const activity = diffMaps(before, clean, ownerRef(user));
+      const activity = diffMaps(before, clean, actorRef(user));
       m.nodes = clean.nodes;
       m.edges = clean.edges;
       m.updatedAt = Date.now();
@@ -761,14 +783,14 @@ async function handleApi(req, res, pathname) {
       const body = await readBody(req);
       const text = String(body.text || '').trim().slice(0, 500);
       if (!text) return sendJSON(res, 400, { error: 'Empty message.' });
-      const entry = { kind: 'message', actor: ownerRef(user), text, ts: Date.now(), id: newId() };
+      const entry = { kind: 'message', actor: actorRef(user), text, ts: Date.now(), id: newId() };
       pushChat(m, entry);
       await store.saveUser(owner);
       broadcast(m.id, 'chat', entry);
       return sendJSON(res, 200, { entry });
     }
     if (sub === 'live' && req.method === 'GET') {
-      return startLiveStream(req, res, m.id, Object.assign(ownerRef(user), { canEdit }));
+      return startLiveStream(req, res, m.id, Object.assign(actorRef(user), { canEdit }));
     }
     if (!sub && req.method === 'DELETE') {
       if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a map.' });
@@ -809,15 +831,21 @@ async function handleApi(req, res, pathname) {
         broadcast(m.id, 'revoked', { username: target.username });
       }
       const eds = await store.getUsersByIds(m.editors);
-      return sendJSON(res, 200, { editors: eds.map(ownerRef) });
+      return sendJSON(res, 200, { editors: eds.map(e => ownerRef(e, user)) });
     }
     return sendJSON(res, 404, { error: 'Not found.' });
   }
 
   if (req.method === 'GET' && pathname === '/api/users') {
     const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim();
+    const needle = q.toLowerCase();
     const users = await store.searchUsers(q);
-    return sendJSON(res, 200, { users: users.map(u => publicUser(u, user)) });
+    // A display name is only visible to friends, so don't let a search term reveal
+    // a non-friend by matching their hidden name: keep a hit only if the username
+    // matches, or the searcher may actually see that name (self/friend).
+    const filtered = users.filter(u =>
+      !needle || u.username.includes(needle) || nameFor(u, user));
+    return sendJSON(res, 200, { users: filtered.map(u => publicUser(u, user)) });
   }
 
   const profileMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})$/);
