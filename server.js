@@ -546,6 +546,9 @@ function sanitizeMap(input) {
       w: Math.max(1, Math.min(10, Math.round(num(e.w) || 1))),
     });
   }
+  // anchor: the node the view resets to; keep only if it points at a real node
+  const anchor = input.anchorId ? String(input.anchorId).slice(0, 24) : null;
+  out.anchorId = anchor && out.nodes[anchor] ? anchor : null;
   return out;
 }
 
@@ -737,7 +740,7 @@ async function handleApi(req, res, pathname) {
     const isOwner = !!user && owner.id === user.id;
     const canEdit = isOwner || (!!user && (m.editors || []).includes(user.id));
     return sendJSON(res, 200, {
-      map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges },
+      map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges, anchorId: m.anchorId || null },
       owner: ownerRef(owner, user), isOwner, canEdit,
       present: presenceList(m.id),
     });
@@ -807,11 +810,12 @@ async function handleApi(req, res, pathname) {
       const activity = diffMaps(before, clean, actorRef(user));
       m.nodes = clean.nodes;
       m.edges = clean.edges;
+      m.anchorId = clean.anchorId;
       m.updatedAt = Date.now();
       for (const entry of activity) pushChat(m, entry);
       await store.saveUser(owner);
       // live push: others viewing this map get the new state + the activity lines
-      broadcast(m.id, 'map', { nodes: m.nodes, edges: m.edges, by: user.username }, res);
+      broadcast(m.id, 'map', { nodes: m.nodes, edges: m.edges, anchorId: m.anchorId, by: user.username }, res);
       for (const entry of activity) broadcast(m.id, 'chat', entry);
       return sendJSON(res, 200, { ok: true });
     }

@@ -56,6 +56,7 @@ function createMapView(host, opts = {}) {
   let hueCounter = 0;
   let yaw = 0.4, pitch = -0.25, camDist = 950;
   let pivot = [0, 0, 0];    // world point the scene rotates around (screen center)
+  let anchorId = null;      // node that "reset view" centers on (persisted with the map)
   let spinning = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let showWeights = true;   // show the numbered weight badges on connections
   let selectedId = null;
@@ -264,11 +265,17 @@ function createMapView(host, opts = {}) {
     }
 
     // keep the hover highlight honest while the scene moves under a still cursor
-    if (editable && lastMouse && !drag && !hoverLock) {
-      applyHover(hitTest(lastMouse.x, lastMouse.y)[0] || null);
+    let hoveringNode = false;
+    if ((editable || opts.tapToCenter) && lastMouse && !drag && !hoverLock) {
+      let hits = hitTest(lastMouse.x, lastMouse.y);
+      if (!editable) hits = hits.filter(h => h.type === 'node');
+      applyHover(hits[0] || null);
+      hoveringNode = hits.length > 0;
     }
 
-    if (spinning && !drag && !sheetOpen()) yaw += 0.0028;
+    // pause auto-spin while hovering a bubble so it stays put long enough to
+    // click, and so an overlap dwell can complete
+    if (spinning && !drag && !sheetOpen() && !hoveringNode) yaw += 0.0028;
     requestAnimationFrame(frame);
   }
 
@@ -349,8 +356,21 @@ function createMapView(host, opts = {}) {
     if (drag) return;
 
     const pt = tapPoint(e);
-    const hits = editable ? hitTest(pt.x, pt.y) : [];
+    // editable views hit-test for selection/editing; read-only views hit-test
+    // too so a tap can pick the center of rotation
+    const hits = (editable || opts.tapToCenter) ? hitTest(pt.x, pt.y) : [];
     const top = hits[0] || null;
+
+    // read-only "tap a bubble to center on it" mode
+    if (!editable && opts.tapToCenter) {
+      if (top && top.type === 'node') {
+        drag = { type: 'centerTap', id: top.id, startX: e.clientX, startY: e.clientY, moved: false };
+      } else {
+        drag = { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false };
+        host.classList.add('dragging');
+      }
+      return;
+    }
 
     if (top && top.type === 'node') {
       const id = top.id;
@@ -383,21 +403,26 @@ function createMapView(host, opts = {}) {
     }
   });
 
-  // hover tracking + "hovered a stack for a second" dropdown (mouse only)
+  // hover tracking + "hovered a stack for a second" dropdown (mouse only).
+  // Runs for the editor and for read-only tap-to-center views.
   host.addEventListener('pointermove', e => {
-    if (!editable || e.pointerType !== 'mouse') return;
+    if (!(editable || opts.tapToCenter) || e.pointerType !== 'mouse') return;
     lastMouse = tapPoint(e);
     if (drag || hoverLock) return;
     clearTimeout(dwellTimer); dwellTimer = null;
-    const hits = hitTest(lastMouse.x, lastMouse.y);
+    let hits = hitTest(lastMouse.x, lastMouse.y);
+    // when only picking a center, only bubbles/groups matter — ignore edges
+    if (!editable) hits = hits.filter(h => h.type === 'node');
     applyHover(hits[0] || null);
     if (hits.length >= 2 && opts.onPick) {
       const cx = e.clientX, cy = e.clientY;
+      // freeze the overlapping set now; the scene may spin the bubbles apart
+      // before the dwell completes, but the user's intent is captured here
+      const frozen = hits;
       dwellTimer = setTimeout(() => {
-        if (drag || hoverLock || !lastMouse) return;
-        const again = hitTest(lastMouse.x, lastMouse.y);
-        if (again.length >= 2) opts.onPick(again, cx, cy, 'hover');
-      }, 1000);
+        if (drag || hoverLock) return;
+        opts.onPick(frozen, cx, cy, 'hover');
+      }, 600);
     }
   });
 
@@ -448,6 +473,31 @@ function createMapView(host, opts = {}) {
     }
   }
 
+  // read-only center-pick tap: single tap centers on the node; when bubbles
+  // overlap, a double-tap opens the pick dropdown to choose which one.
+  function handleCenterTap(e, tappedId) {
+    const now = Date.now();
+    const pt = tapPoint(e);
+    const hits = hitTest(pt.x, pt.y).filter(h => h.type === 'node');
+    const isDouble = lastTap && (now - lastTap.t) < 350 &&
+      Math.hypot(e.clientX - lastTap.cx, e.clientY - lastTap.cy) < 30;
+    lastTap = { t: now, cx: e.clientX, cy: e.clientY };
+
+    if (isDouble && hits.length >= 2) {
+      clearTimeout(pendingTimer); pendingTimer = null;
+      lastTap = null;
+      if (opts.onPick) opts.onPick(hits, e.clientX, e.clientY, 'tap');
+      return;
+    }
+    const centerNow = () => {
+      const n = map.nodes[tappedId];
+      if (n) { pivot = [...n.pos]; if (opts.onCenter) opts.onCenter(tappedId); }
+    };
+    // overlap: wait out a possible double-tap before committing the single-tap center
+    if (hits.length >= 2) pendingTimer = setTimeout(centerNow, 370);
+    else centerNow();
+  }
+
   window.addEventListener('pointermove', e => {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -473,6 +523,19 @@ function createMapView(host, opts = {}) {
       }
       const n = map.nodes[drag.id];
       if (n) clampInside(n);
+    } else if (drag.type === 'centerTap') {
+      // dragging from a bubble in read-only view orbits, like dragging the background
+      const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        if (!drag.moved) {
+          drag.moved = true;
+          drag.startYaw = yaw; drag.startPitch = pitch;
+          drag.orbitX = e.clientX; drag.orbitY = e.clientY;
+          host.classList.add('dragging');
+        }
+        yaw = drag.startYaw + (e.clientX - drag.orbitX) * 0.006;
+        pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + (e.clientY - drag.orbitY) * 0.006));
+      }
     } else if (drag.type === 'edgeTap') {
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
@@ -490,6 +553,8 @@ function createMapView(host, opts = {}) {
         }
       } else if (drag.type === 'edgeTap' && !drag.moved) {
         handleTap(e, 'edge', drag);
+      } else if (drag.type === 'centerTap' && !drag.moved) {
+        handleCenterTap(e, drag.id);
       } else if (drag.type === 'orbit' && !drag.moved) {
         handleTap(e, 'bg', drag);
       }
@@ -653,7 +718,9 @@ function createMapView(host, opts = {}) {
       hoverEdgeId = null;
       hoverLock = false;
       lastTap = null;
-      pivot = [0, 0, 0]; // fresh map: rotate around the origin until told otherwise
+      // load the persisted anchor and start the view centered on it (else origin)
+      anchorId = m && m.anchorId && map.nodes[m.anchorId] ? m.anchorId : null;
+      pivot = anchorId ? [...map.nodes[anchorId].pos] : [0, 0, 0];
       clearTimeout(pendingTimer); pendingTimer = null;
       clearTimeout(dwellTimer); dwellTimer = null;
       buildDOM();
@@ -683,10 +750,13 @@ function createMapView(host, opts = {}) {
       selectedId = map.nodes[keepSel] ? keepSel : null;
       connectFrom = map.nodes[keepConnect] ? keepConnect : null;
       if (highlightedEdge && !map.edges.some(e => e.id === highlightedEdge)) highlightedEdge = null;
+      // pick up an anchor change from a collaborator without yanking the camera
+      anchorId = m && m.anchorId && map.nodes[m.anchorId] ? m.anchorId : null;
       buildDOM();
       return true;
     },
-    getMap: () => map,
+    // include the anchor so it persists with nodes/edges on save
+    getMap: () => ({ nodes: map.nodes, edges: map.edges, anchorId }),
     getNode: id => map.nodes[id],
     getEdge: id => map.edges.find(e => e.id === id),
     getSelected: () => (selectedId && map.nodes[selectedId]) || null,
@@ -711,6 +781,13 @@ function createMapView(host, opts = {}) {
       updateSelectionClasses();
       if (opts.onSelect) opts.onSelect(id);
     },
+    // center the rotation on a node (used by read-only viewers)
+    centerOnNode(id) {
+      const n = map.nodes[id];
+      if (!n) return false;
+      pivot = [...n.pos];
+      return true;
+    },
     setPickHover(hit) { applyHover(hit); },
     setHoverLock(b) {
       hoverLock = b;
@@ -718,7 +795,12 @@ function createMapView(host, opts = {}) {
       if (!b) applyHover(null); // next frame recomputes from the real cursor
     },
     zoom(f) { camDist = Math.min(3200, Math.max(300, camDist * f)); },
-    resetCamera() { yaw = 0.4; pitch = -0.25; camDist = 950; pivot = [0, 0, 0]; },
+    resetCamera() {
+      yaw = 0.4; pitch = -0.25; camDist = 950;
+      // reset returns to the anchored node if one is set, else the origin
+      const a = anchorId && map.nodes[anchorId];
+      pivot = a ? [...a.pos] : [0, 0, 0];
+    },
     // make the selected node the center of rotation (and recenter it on screen)
     centerOnSelected() {
       const n = selectedId && map.nodes[selectedId];
@@ -730,6 +812,9 @@ function createMapView(host, opts = {}) {
       const n = selectedId && map.nodes[selectedId];
       return !!n && pivot[0] === n.pos[0] && pivot[1] === n.pos[1] && pivot[2] === n.pos[2];
     },
+    // anchor: the node the view resets to. null clears it.
+    setAnchor(id) { anchorId = id && map.nodes[id] ? id : null; },
+    getAnchor: () => anchorId,
     setSpin(b) { spinning = b; },
     getSpin: () => spinning,
     setShowWeights(b) { showWeights = b; },
@@ -902,10 +987,11 @@ function openGroupSheet() {
 ================================================================ */
 const pickMenu = $('#pickMenu');
 let pickAnchor = null;
+let pickView = null; // the map view the currently-open pick menu belongs to
 
-function describeHit(hit) {
+function describeHit(view, hit) {
   if (hit.type === 'node') {
-    const n = myMap.getNode(hit.id);
+    const n = view.getNode(hit.id);
     if (!n) return null;
     return {
       color: hueOf(n).main,
@@ -914,9 +1000,9 @@ function describeHit(hit) {
       isLine: false,
     };
   }
-  const e = myMap.getEdge(hit.id);
+  const e = view.getEdge(hit.id);
   if (!e) return null;
-  const na = myMap.getNode(e.a), nb = myMap.getNode(e.b);
+  const na = view.getNode(e.a), nb = view.getNode(e.b);
   return {
     color: na ? hueOf(na).main : '#8A93A6',
     label: `${na ? na.label || 'Untitled' : '?'} ↔ ${nb ? nb.label || 'Untitled' : '?'}`,
@@ -925,13 +1011,23 @@ function describeHit(hit) {
   };
 }
 
-function showPickMenu(hits, cx, cy, mode) {
+// A view is "center-only" (read-only viewer) if it exposes centerOnNode but
+// isn't the editor; there, the pick menu lists bubbles/groups to revolve around.
+function makePickHandler(view) {
+  const centerOnly = view !== myMap && typeof view.centerOnNode === 'function';
+  return (hits, cx, cy, mode) => showPickMenu(view, centerOnly, hits, cx, cy, mode);
+}
+
+function showPickMenu(view, centerOnly, hits, cx, cy, mode) {
   if (allSheets.some(s => !$(s).hidden)) return; // never open over a bottom sheet
   pickMenu.innerHTML = '';
   pickMenu.dataset.mode = mode;
   pickAnchor = { x: cx, y: cy };
-  for (const hit of hits) {
-    const d = describeHit(hit);
+  pickView = view;
+  // when the menu only picks a center of rotation, edges aren't selectable
+  const items = centerOnly ? hits.filter(h => h.type === 'node') : hits;
+  for (const hit of items) {
+    const d = describeHit(view, hit);
     if (!d) continue;
     const item = document.createElement('button');
     item.className = 'pick-item';
@@ -943,21 +1039,22 @@ function showPickMenu(hits, cx, cy, mode) {
     lb.textContent = d.label;
     const tag = document.createElement('span');
     tag.className = 'pick-tag';
-    tag.textContent = d.tag;
+    tag.textContent = centerOnly ? 'center on' : d.tag;
     item.appendChild(dot);
     item.appendChild(lb);
     item.appendChild(tag);
-    item.addEventListener('pointerenter', () => myMap.setPickHover(hit));
-    item.addEventListener('pointerleave', () => myMap.setPickHover(null));
+    item.addEventListener('pointerenter', () => view.setPickHover(hit));
+    item.addEventListener('pointerleave', () => view.setPickHover(null));
     item.addEventListener('click', () => {
       hidePickMenu();
-      if (hit.type === 'node') myMap.selectNode(hit.id);
+      if (centerOnly) { view.centerOnNode(hit.id); }
+      else if (hit.type === 'node') view.selectNode(hit.id);
       else openEdgeSheet(hit.id);
     });
     pickMenu.appendChild(item);
   }
   if (!pickMenu.children.length) return;
-  myMap.setHoverLock(true);
+  view.setHoverLock(true);
   pickMenu.hidden = false;
   const r = pickMenu.getBoundingClientRect();
   pickMenu.style.left = Math.max(8, Math.min(cx + 6, window.innerWidth - r.width - 8)) + 'px';
@@ -968,7 +1065,9 @@ function hidePickMenu() {
   if (pickMenu.hidden) return;
   pickMenu.hidden = true;
   pickAnchor = null;
-  if (myMap) { myMap.setPickHover(null); myMap.setHoverLock(false); }
+  const v = pickView || myMap;
+  if (v) { v.setPickHover(null); v.setHoverLock(false); }
+  pickView = null;
 }
 
 // tap/click anywhere outside closes it
@@ -1051,6 +1150,12 @@ function refreshToolbar() {
   $('#btnDelete').disabled = !sel;
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
   $('#btnAddBubble').textContent = sel && sel.kind === 'container' ? '+ Bubble in group' : '+ Bubble';
+  // anchor button: enabled with a selection; shows active when that node is the anchor
+  const anchorBtn = $('#btnAnchor');
+  anchorBtn.disabled = !sel;
+  const isAnchor = !!sel && myMap.getAnchor() === sel.id;
+  anchorBtn.classList.toggle('active', isAnchor);
+  anchorBtn.textContent = isAnchor ? '⚓ Anchored' : '⚓ Anchor';
 }
 
 function initEditor() {
@@ -1073,7 +1178,8 @@ function initEditor() {
       $('#btnConnect').classList.remove('active');
       setHint(DEFAULT_HINT, false);
     },
-    onPick: showPickMenu,
+    // editor pick menu: selects nodes / opens the edge sheet (myMap is set by now)
+    onPick: (hits, cx, cy, mode) => showPickMenu(myMap, false, hits, cx, cy, mode),
     isSheetOpen: anySheetOpen,
   });
 
@@ -1106,6 +1212,18 @@ function initEditor() {
     if (myMap.centerOnSelected()) {
       setHint(`Rotating around "${sel.label || 'Untitled'}"`, false);
     }
+  });
+  $('#btnAnchor').addEventListener('click', () => {
+    const sel = myMap.getSelected();
+    if (!sel) return;
+    const already = myMap.getAnchor() === sel.id;
+    myMap.setAnchor(already ? null : sel.id);
+    if (!already) myMap.centerOnSelected(); // snap to it now so the effect is visible
+    refreshToolbar();
+    setHint(already
+      ? 'Anchor removed — view resets to the default center'
+      : `"${sel.label || 'Untitled'}" is now the anchor — the view resets here`, false);
+    saveMap(); // persist the anchor change
   });
   $('#btnDelete').addEventListener('click', () => { myMap.deleteSelected(); refreshToolbar(); });
   $('#btnGroupMenu').addEventListener('click', openGroupSheet);
@@ -1877,21 +1995,19 @@ async function openProfile(username) {
     $('#profileName').textContent = u.name || '@' + u.username;
     const bits = ['@' + u.username];
     if (u.bio) bits.push(u.bio);
-    if (data.maps.length) {
-      bits.push(data.maps.length + ' map' + (data.maps.length === 1 ? '' : 's') +
-        ' · ' + u.nodeCount + ' bubble' + (u.nodeCount === 1 ? '' : 's'));
-    }
     $('#profileHandle').textContent = bits.join(' · ');
     renderFriendButton();
     renderProfileTabs(data.maps);
     if (data.maps.length) {
       $('#profileLocked').hidden = true;
       $('#profileToolbar').hidden = false;
+      $('#profileHint').hidden = false;
       await openProfileMap(data.maps[0].id);
       profileMap.start();
     } else {
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
+      $('#profileHint').hidden = true;
       const who = u.name || '@' + u.username;
       // could be friends-only maps (become a friend to see them) or all-private maps
       $('#lockedText').textContent =
@@ -1905,6 +2021,7 @@ async function openProfile(username) {
     $('#profileHandle').textContent = err.message;
     $('#btnFriendAction').hidden = true;
     $('#profileTabs').hidden = true;
+    $('#profileHint').hidden = true;
     $('#profileLocked').hidden = false;
     $('#lockedText').textContent = err.message;
   }
@@ -1983,8 +2100,27 @@ $('#btnProfileBack').addEventListener('click', () => {
   else location.hash = '#/browse';
 });
 
+let profileHintTimer = null;
+const PROFILE_HINT_DEFAULT = 'Tap a bubble to center rotation on it · Drag to orbit · Pinch/scroll to zoom';
+function setProfileHint(text) {
+  $('#profileHint').textContent = text;
+  clearTimeout(profileHintTimer);
+  profileHintTimer = setTimeout(() => { $('#profileHint').textContent = PROFILE_HINT_DEFAULT; }, 2500);
+}
+
 function initProfileViewer() {
-  profileMap = createMapView($('#profileMapHost'), { editable: false });
+  // read-only, but a tap on any bubble makes it the center of rotation;
+  // overlapping bubbles open a dropdown to choose which one
+  profileMap = createMapView($('#profileMapHost'), {
+    editable: false,
+    tapToCenter: true,
+    onPick: (hits, cx, cy, mode) => showPickMenu(profileMap, true, hits, cx, cy, mode),
+    onCenter: id => {
+      const n = profileMap.getNode(id);
+      if (n) setProfileHint(`Rotating around "${n.label || 'Untitled'}"`);
+    },
+    isSheetOpen: () => !$('#pickMenu').hidden,
+  });
   $('#btnPSpin').classList.add('active');
   $('#btnPSpin').addEventListener('click', () => {
     profileMap.setSpin(!profileMap.getSpin());
