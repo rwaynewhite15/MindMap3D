@@ -25,6 +25,14 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const newId = () => crypto.randomBytes(12).toString('hex');
 
+// Map visibility tiers, most- to least-private. Declared up here because the
+// storage backends normalize users at construction time (before the domain
+// helpers section runs). Unknown/missing input coerces to friends-only.
+const VISIBILITIES = ['private', 'friends', 'public'];
+function normVisibility(v) {
+  return VISIBILITIES.includes(v) ? v : 'friends';
+}
+
 /* ================================================================
    Storage — two backends, one async API:
      init(), getUserById, getUsersByIds, getUserByUsername,
@@ -252,7 +260,7 @@ function makeMap(name, visibility, seedLabel) {
   return {
     id: newId(),
     name: String(name || '').trim().slice(0, 60) || 'Untitled map',
-    visibility: visibility === 'friends' ? 'friends' : 'public',
+    visibility: normVisibility(visibility),
     editors: [],
     nodes: { n1: { id: 'n1', label: seedLabel || 'Me', pos: [0, 0, 0], r: 62, hue: 0, parentId: null, kind: 'bubble' } },
     edges: [],
@@ -279,7 +287,7 @@ function normalizeUser(u) {
   }
   for (const m of u.maps) {
     if (!Array.isArray(m.editors)) m.editors = [];
-    if (m.visibility !== 'friends') m.visibility = 'public';
+    m.visibility = normVisibility(m.visibility); // preserve valid tiers, coerce junk
     if (!m.nodes || typeof m.nodes !== 'object') m.nodes = {};
     if (!Array.isArray(m.edges)) m.edges = [];
     if (!Array.isArray(m.chat)) m.chat = [];
@@ -300,12 +308,15 @@ function relationTo(viewer, owner) {
 function canViewMapObj(m, owner, viewer) {
   const rel = relationTo(viewer, owner);
   if (rel === 'self') return true;
+  // an explicit edit grant always overrides the visibility tier, even 'private'
   if (viewer && (m.editors || []).includes(viewer.id)) return true;
+  if (m.visibility === 'private') return false; // owner (and editors, above) only
   if (m.visibility === 'public') return true;
   return m.visibility === 'friends' && rel === 'friends';
 }
 
-// Friends-only maps are invisible to non-friends: not listed, not counted.
+// Private and friends-only maps are invisible to those who can't view them:
+// not listed on the profile, not counted.
 function visibleMapsOf(owner, viewer) {
   return (owner.maps || []).filter(m => canViewMapObj(m, owner, viewer));
 }
@@ -623,7 +634,8 @@ async function handleApi(req, res, pathname) {
       passHash: hashPassword(password, salt),
       displayName,
       showDisplayName: body.showDisplayName !== false,
-      visibility: body.visibility === 'friends' ? 'friends' : 'public',
+      // signup no longer asks; normVisibility defaults the unset field to friends-only
+      visibility: normVisibility(body.visibility),
       bio: '',
       createdAt: Date.now(),
       friends: [], requestsIn: [], requestsOut: [],
@@ -672,7 +684,7 @@ async function handleApi(req, res, pathname) {
     const body = await readBody(req);
     if ('displayName' in body) user.displayName = String(body.displayName || '').trim().slice(0, 40);
     if ('showDisplayName' in body) user.showDisplayName = !!body.showDisplayName;
-    if ('visibility' in body) user.visibility = body.visibility === 'friends' ? 'friends' : 'public';
+    if ('visibility' in body) user.visibility = normVisibility(body.visibility);
     if ('bio' in body) user.bio = String(body.bio || '').slice(0, 300);
     await store.saveUser(user);
     return sendJSON(res, 200, { user: meUser(user) });
@@ -756,7 +768,7 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, { entry });
     }
     if (sub === 'live' && req.method === 'GET') {
-      return startLiveStream(req, res, m.id, ownerRef(user));
+      return startLiveStream(req, res, m.id, Object.assign(ownerRef(user), { canEdit }));
     }
     if (!sub && req.method === 'DELETE') {
       if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a map.' });
@@ -770,7 +782,7 @@ async function handleApi(req, res, pathname) {
       if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can change map settings.' });
       const body = await readBody(req);
       if ('name' in body) m.name = String(body.name || '').trim().slice(0, 60) || 'Untitled map';
-      if ('visibility' in body) m.visibility = body.visibility === 'friends' ? 'friends' : 'public';
+      if ('visibility' in body) m.visibility = normVisibility(body.visibility);
       m.updatedAt = Date.now();
       await store.saveUser(user);
       broadcast(m.id, 'meta', { name: m.name, visibility: m.visibility });
@@ -791,8 +803,9 @@ async function handleApi(req, res, pathname) {
       }
       m.updatedAt = Date.now();
       await store.saveUser(user);
-      // if the removed editor is watching a friends-only map they can no longer see, cut them off
-      if (removedTarget && m.visibility === 'friends' && !(user.friends || []).includes(target.id)) {
+      // if the removed editor can no longer view the map at all (private map, or a
+      // friends-only map they're not a friend of), cut off their live stream
+      if (removedTarget && !canViewMapObj(m, user, target)) {
         broadcast(m.id, 'revoked', { username: target.username });
       }
       const eds = await store.getUsersByIds(m.editors);

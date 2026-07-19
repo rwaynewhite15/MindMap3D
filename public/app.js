@@ -55,6 +55,7 @@ function createMapView(host, opts = {}) {
   let idCounter = 1;
   let hueCounter = 0;
   let yaw = 0.4, pitch = -0.25, camDist = 950;
+  let pivot = [0, 0, 0];    // world point the scene rotates around (screen center)
   let spinning = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let selectedId = null;
   let connectFrom = null;
@@ -87,10 +88,12 @@ function createMapView(host, opts = {}) {
   function project(p, w, h) {
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const x1 = p[0] * cy - p[2] * sy;
-    const z1 = p[0] * sy + p[2] * cy;
-    const y2 = p[1] * cp - z1 * sp;
-    const z2 = p[1] * sp + z1 * cp;
+    // rotate around the pivot: it stays fixed at screen center as yaw/pitch change
+    const px = p[0] - pivot[0], py = p[1] - pivot[1], pz = p[2] - pivot[2];
+    const x1 = px * cy - pz * sy;
+    const z1 = px * sy + pz * cy;
+    const y2 = py * cp - z1 * sp;
+    const z2 = py * sp + z1 * cp;
     const zc = z2 + camDist;
     const s = FOCAL / Math.max(zc, 60);
     return { x: w / 2 + x1 * s, y: h / 2 + y2 * s, s, zc, behind: zc < 60 };
@@ -649,6 +652,7 @@ function createMapView(host, opts = {}) {
       hoverEdgeId = null;
       hoverLock = false;
       lastTap = null;
+      pivot = [0, 0, 0]; // fresh map: rotate around the origin until told otherwise
       clearTimeout(pendingTimer); pendingTimer = null;
       clearTimeout(dwellTimer); dwellTimer = null;
       buildDOM();
@@ -713,7 +717,18 @@ function createMapView(host, opts = {}) {
       if (!b) applyHover(null); // next frame recomputes from the real cursor
     },
     zoom(f) { camDist = Math.min(3200, Math.max(300, camDist * f)); },
-    resetCamera() { yaw = 0.4; pitch = -0.25; camDist = 950; },
+    resetCamera() { yaw = 0.4; pitch = -0.25; camDist = 950; pivot = [0, 0, 0]; },
+    // make the selected node the center of rotation (and recenter it on screen)
+    centerOnSelected() {
+      const n = selectedId && map.nodes[selectedId];
+      if (!n) return false;
+      pivot = [...n.pos];
+      return true;
+    },
+    isCentered() {
+      const n = selectedId && map.nodes[selectedId];
+      return !!n && pivot[0] === n.pos[0] && pivot[1] === n.pos[1] && pivot[2] === n.pos[2];
+    },
     setSpin(b) { spinning = b; },
     getSpin: () => spinning,
   };
@@ -1016,6 +1031,7 @@ function refreshToolbar() {
   const sel = myMap ? myMap.getSelected() : null;
   $('#btnConnect').disabled = !sel;
   $('#btnRename').disabled = !sel;
+  $('#btnCenterSel').disabled = !sel;
   $('#btnDelete').disabled = !sel;
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
   $('#btnAddBubble').textContent = sel && sel.kind === 'container' ? '+ Bubble in group' : '+ Bubble';
@@ -1069,6 +1085,12 @@ function initEditor() {
     const sel = myMap.getSelected();
     if (sel) openRename(sel.id);
   });
+  $('#btnCenterSel').addEventListener('click', () => {
+    const sel = myMap.getSelected();
+    if (myMap.centerOnSelected()) {
+      setHint(`Rotating around "${sel.label || 'Untitled'}"`, false);
+    }
+  });
   $('#btnDelete').addEventListener('click', () => { myMap.deleteSelected(); refreshToolbar(); });
   $('#btnGroupMenu').addEventListener('click', openGroupSheet);
 
@@ -1108,6 +1130,14 @@ function initEditor() {
 ================================================================ */
 const lastMapKey = () => 'mms:lastMap:' + (me ? me.username : '');
 
+// icon + words for each visibility tier, reused across the UI
+const VIS = {
+  private: { icon: '🔒', label: 'Private', long: 'Only you' },
+  friends: { icon: '👥', label: 'Friends only', long: 'Friends only' },
+  public: { icon: '🌐', label: 'Public', long: 'Everyone on MindMapShare' },
+};
+const visInfo = v => VIS[v] || VIS.friends;
+
 function renderMapSelect() {
   const sel = $('#mapSelect');
   sel.innerHTML = '';
@@ -1116,7 +1146,8 @@ function renderMapSelect() {
   for (const m of mapsMine) {
     const o = document.createElement('option');
     o.value = m.id;
-    o.textContent = m.name + (m.visibility === 'friends' ? ' 🔒' : '');
+    // only non-public maps get an icon, to keep the list uncluttered
+    o.textContent = m.name + (m.visibility === 'public' ? '' : ' ' + visInfo(m.visibility).icon);
     gMine.appendChild(o);
   }
   sel.appendChild(gMine);
@@ -1171,7 +1202,7 @@ $('#btnNewMap').addEventListener('click', () => {
   openSheet('#sheetNewMap');
   $('#newMapName').value = '';
   $('#newMapError').textContent = '';
-  const def = me && me.visibility === 'friends' ? 'friends' : 'public';
+  const def = me && VIS[me.visibility] ? me.visibility : 'friends';
   for (const r of document.querySelectorAll('input[name=newMapVis]')) r.checked = r.value === def;
   requestAnimationFrame(() => $('#newMapName').focus());
 });
@@ -1361,6 +1392,15 @@ async function startLive(mapId, canEdit) {
     const meta = JSON.parse(e.data);
     const info = mapsMine.find(x => x.id === mapId) || mapsShared.find(x => x.id === mapId);
     if (info) { info.name = meta.name; info.visibility = meta.visibility; renderMapSelect(); }
+    // owner may have narrowed visibility (e.g. to private) — if I'm not the owner,
+    // confirm I can still see it; a 404 means I lost access and get bounced out.
+    if (currentMapInfo && !currentMapInfo.isOwner) {
+      api('/api/maps/' + mapId).catch(() => {
+        alert('This map is no longer shared with you.');
+        stopLive();
+        loadMaps().catch(() => {});
+      });
+    }
   });
 
   es.addEventListener('revoked', e => {
@@ -1382,17 +1422,23 @@ async function startLive(mapId, canEdit) {
 }
 
 function updatePresence(users) {
+  // "here" == this friend has the same map open right now (SSE-driven)
   const others = (users || []).filter(u => !me || u.username !== me.username);
   const pill = $('#presencePill');
+  const role = u => (u.canEdit ? 'can edit' : 'view only');
   if (!others.length) {
     pill.hidden = true;
     $('#chatPresence').textContent = 'Only you here';
     return;
   }
-  const names = others.map(u => u.name || '@' + u.username);
+  const label = u => (u.name || '@' + u.username);
   pill.hidden = false;
-  pill.textContent = others.length === 1 ? names[0] : others.length + ' others here';
-  $('#chatPresence').textContent = 'Here now: ' + names.join(', ');
+  pill.textContent = others.length === 1
+    ? `${label(others[0])} · ${role(others[0])}`
+    : others.length + ' others here';
+  // full per-person roster with roles in the chat header
+  $('#chatPresence').textContent = 'Here now: ' +
+    others.map(u => `${label(u)} (${role(u)})`).join(', ');
 }
 
 /* ---------- chat rendering ---------- */
@@ -1477,8 +1523,8 @@ function openChat() {
   updateChatBadge();
   $('#chatPanel').hidden = false;
   $('#btnChat').classList.add('active');
-  const log = $('#chatLog');
-  log.scrollTop = log.scrollHeight;
+  applyChatLayout();
+  if (!chatCollapsed) { const log = $('#chatLog'); log.scrollTop = log.scrollHeight; }
 }
 function closeChat() {
   chatOpen = false;
@@ -1488,6 +1534,144 @@ function closeChat() {
 
 $('#btnChat').addEventListener('click', () => (chatOpen ? closeChat() : openChat()));
 $('#btnChatClose').addEventListener('click', closeChat);
+
+/* ================================================================
+   Chat window: collapse, move, resize — persisted per user
+================================================================ */
+const CHAT_MIN_W = 240, CHAT_MIN_H = 220;
+const chatLayoutKey = () => 'mms:chatLayout:' + (me ? me.username : '');
+let chatCollapsed = false;
+let chatGeom = null; // { left, top, width, height } once the user has moved/resized it
+
+function loadChatLayout() {
+  chatCollapsed = false;
+  chatGeom = null;
+  try {
+    const raw = localStorage.getItem(chatLayoutKey());
+    if (raw) {
+      const s = JSON.parse(raw);
+      chatCollapsed = !!s.collapsed;
+      if (s.geom && typeof s.geom.width === 'number') chatGeom = s.geom;
+    }
+  } catch { /* ignore */ }
+}
+function saveChatLayout() {
+  try { localStorage.setItem(chatLayoutKey(), JSON.stringify({ collapsed: chatCollapsed, geom: chatGeom })); }
+  catch { /* private mode */ }
+}
+
+// The panel lives inside #view-map; clamp geometry to that box.
+function chatBounds() {
+  const host = $('#view-map');
+  return { w: host.clientWidth, h: host.clientHeight };
+}
+
+function applyChatLayout() {
+  const panel = $('#chatPanel');
+  panel.classList.toggle('collapsed', chatCollapsed);
+  $('#btnChatCollapse').textContent = chatCollapsed ? '▸' : '▾';
+  $('#btnChatCollapse').title = chatCollapsed ? 'Expand' : 'Collapse';
+
+  if (chatGeom) {
+    const { w, h } = chatBounds();
+    const width = Math.min(chatGeom.width, w);
+    const height = Math.min(chatGeom.height, h);
+    const left = Math.max(0, Math.min(chatGeom.left, w - width));
+    const top = Math.max(0, Math.min(chatGeom.top, h - Math.min(height, 60)));
+    panel.classList.add('floating');
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+    panel.style.width = width + 'px';
+    panel.style.height = chatCollapsed ? 'auto' : height + 'px';
+  } else {
+    // default docked-right layout: let CSS drive it
+    panel.classList.remove('floating');
+    panel.style.left = panel.style.top = panel.style.width = panel.style.height = '';
+  }
+}
+
+// switch from docked to floating using the panel's current on-screen rect,
+// so it doesn't jump when the user first grabs it
+function ensureFloating() {
+  if (chatGeom) return;
+  const panel = $('#chatPanel');
+  const pr = panel.getBoundingClientRect();
+  const hr = $('#view-map').getBoundingClientRect();
+  chatGeom = {
+    left: pr.left - hr.left,
+    top: pr.top - hr.top,
+    width: pr.width,
+    height: pr.height,
+  };
+}
+
+$('#btnChatCollapse').addEventListener('click', e => {
+  e.stopPropagation();
+  chatCollapsed = !chatCollapsed;
+  applyChatLayout();
+  saveChatLayout();
+  if (!chatCollapsed) { const log = $('#chatLog'); log.scrollTop = log.scrollHeight; }
+});
+
+/* ---- drag the header to move ---- */
+$('#chatHead').addEventListener('pointerdown', e => {
+  // ignore clicks on the header buttons
+  if (e.target.closest('button')) return;
+  e.preventDefault();
+  ensureFloating();
+  const panel = $('#chatPanel');
+  const { w, h } = chatBounds();
+  const start = { x: e.clientX, y: e.clientY, left: chatGeom.left, top: chatGeom.top };
+  panel.classList.add('dragging');
+  $('#chatHead').setPointerCapture(e.pointerId);
+
+  const move = ev => {
+    const width = parseFloat(panel.style.width) || chatGeom.width;
+    chatGeom.left = Math.max(0, Math.min(start.left + (ev.clientX - start.x), w - width));
+    chatGeom.top = Math.max(0, Math.min(start.top + (ev.clientY - start.y), h - 44));
+    panel.style.left = chatGeom.left + 'px';
+    panel.style.top = chatGeom.top + 'px';
+  };
+  const up = () => {
+    panel.classList.remove('dragging');
+    $('#chatHead').removeEventListener('pointermove', move);
+    $('#chatHead').removeEventListener('pointerup', up);
+    saveChatLayout();
+  };
+  $('#chatHead').addEventListener('pointermove', move);
+  $('#chatHead').addEventListener('pointerup', up);
+});
+
+/* ---- drag the corner to resize ---- */
+$('#chatResize').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  ensureFloating();
+  const panel = $('#chatPanel');
+  const { w, h } = chatBounds();
+  const start = { x: e.clientX, y: e.clientY, width: chatGeom.width, height: chatGeom.height };
+  panel.classList.add('resizing');
+  $('#chatResize').setPointerCapture(e.pointerId);
+
+  const move = ev => {
+    const maxW = w - chatGeom.left, maxH = h - chatGeom.top;
+    chatGeom.width = Math.max(CHAT_MIN_W, Math.min(start.width + (ev.clientX - start.x), maxW));
+    chatGeom.height = Math.max(CHAT_MIN_H, Math.min(start.height + (ev.clientY - start.y), maxH));
+    panel.style.width = chatGeom.width + 'px';
+    panel.style.height = chatGeom.height + 'px';
+  };
+  const up = () => {
+    panel.classList.remove('resizing');
+    $('#chatResize').removeEventListener('pointermove', move);
+    $('#chatResize').removeEventListener('pointerup', up);
+    saveChatLayout();
+  };
+  $('#chatResize').addEventListener('pointermove', move);
+  $('#chatResize').addEventListener('pointerup', up);
+});
+
+// keep the panel on-screen if the window resizes
+window.addEventListener('resize', () => { if (chatOpen) applyChatLayout(); });
 
 $('#chatForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -1544,8 +1728,9 @@ function userCard(u, actionsHtmlBuilder) {
     meta.className = 'meta';
     const pill = document.createElement('span');
     pill.className = 'pill' + (u.relation === 'friends' ? ' friends' : '');
+    // to a stranger, private and friends-only maps are both simply invisible
     pill.textContent = u.relation === 'friends' ? '✓ Friends'
-      : u.mapCount ? 'Public' : 'Friends only';
+      : u.mapCount ? 'Public maps' : 'Nothing public';
     meta.appendChild(pill);
     card.appendChild(meta);
   }
@@ -1676,7 +1861,10 @@ async function openProfile(username) {
     } else {
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
-      $('#lockedText').textContent = (u.name || '@' + u.username) + "'s mind maps are visible to friends only.";
+      // could be friends-only maps (become a friend to see them) or all-private maps
+      $('#lockedText').textContent = u.relation === 'friends'
+        ? (u.name || '@' + u.username) + " hasn't shared any maps with friends."
+        : (u.name || '@' + u.username) + "'s maps aren't public. Add them as a friend to see friends-only maps.";
       profileMap.setMap({ nodes: {}, edges: [] });
     }
   } catch (err) {
@@ -1703,11 +1891,29 @@ function renderProfileTabs(maps) {
   }
 }
 
+let profileMapId = null;    // map currently previewed on a profile
+let profileCanEdit = false; // whether that previewed map is editable by me
+
 async function openProfileMap(id) {
   for (const b of $('#profileTabs').children) b.classList.toggle('active', b.dataset.id === id);
   const data = await api('/api/maps/' + id);
+  profileMapId = id;
+  profileCanEdit = !!data.canEdit;
   profileMap.setMap(data.map);
+  // if the owner granted us edit rights, offer to open it in the real editor
+  $('#btnPEdit').hidden = !data.canEdit;
 }
+
+// jump from the read-only profile preview into the full editor
+async function editProfileMap() {
+  const id = profileMapId;
+  if (!id || !profileCanEdit) return;
+  // the grant may be newer than our last maps load — make sure it's listed
+  if (![...mapsMine, ...mapsShared].some(m => m.id === id)) await loadMaps(id);
+  location.hash = '#/map';
+  await openMyMap(id);
+}
+$('#btnPEdit').addEventListener('click', () => editProfileMap().catch(err => alert(err.message)));
 
 function renderFriendButton() {
   const btn = $('#btnFriendAction');
@@ -1819,6 +2025,7 @@ $('#tabRegister').addEventListener('click', () => {
 });
 
 async function afterSignIn() {
+  loadChatLayout();
   await loadMaps();
   refreshBadge();
   location.hash = '#/map';
@@ -1851,7 +2058,8 @@ $('#formRegister').addEventListener('submit', async e => {
       password: f.password.value,
       displayName: f.displayName.value.trim(),
       showDisplayName: f.showDisplayName.checked,
-      visibility: f.visibility.value,
+      // new accounts default to friends-only maps; no visibility question at signup
+      visibility: 'friends',
     });
     me = data.user;
     $('#registerError').textContent = '';
@@ -1871,6 +2079,7 @@ $('#formRegister').addEventListener('submit', async e => {
   try {
     const data = await api('/api/me');
     me = data.user;
+    loadChatLayout();
     await loadMaps();
     refreshBadge();
   } catch { me = null; }
