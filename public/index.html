@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#10141D">
-<title>Mind/Map 3D</title>
+<title>MindMapShare — 3D Mind Maps</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%234FD1E0'/><circle cx='38' cy='36' r='12' fill='%23ffffff' opacity='0.55'/></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header id="topbar" hidden>
-  <div id="logo">MIND<span>/</span>MAP <em>3D</em></div>
+  <div id="logo">MindMap<span>Share</span> <em>3D Mind Maps</em></div>
   <nav id="mainNav">
     <a href="#/map" data-nav="map">My Map</a>
     <a href="#/browse" data-nav="browse">Browse</a>
@@ -25,7 +25,8 @@
   <!-- ============ AUTH ============ -->
   <section id="view-auth" hidden>
     <div class="auth-card">
-      <div class="auth-logo">MIND<span>/</span>MAP <em>3D</em></div>
+      <div class="auth-logo">MindMap<span>Share</span></div>
+      <div class="auth-sub">3D Mind Maps</div>
       <p class="auth-tag">Your mind, in bubbles. Share it — or don't.</p>
 
       <div class="auth-tabs">
@@ -46,7 +47,7 @@
         <label>Display name <span class="muted">(optional)</span> <input name="displayName" autocomplete="name" placeholder="How others see you"></label>
         <label class="check"><input type="checkbox" name="showDisplayName" checked> Show my display name to others</label>
         <label class="field-title">Who can see my mind map?</label>
-        <label class="check"><input type="radio" name="visibility" value="public" checked> Everyone on Mind/Map</label>
+        <label class="check"><input type="radio" name="visibility" value="public" checked> Everyone on MindMapShare</label>
         <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
         <div class="form-error" id="registerError"></div>
         <button type="submit" class="primary">Create account</button>
@@ -57,6 +58,13 @@
   <!-- ============ MY MAP (editor) ============ -->
   <section id="view-map" hidden>
     <div id="myMapHost" class="map-host"></div>
+    <div id="mapBar">
+      <select id="mapSelect" aria-label="Choose map"></select>
+      <button id="btnNewMap" class="tb">+ New</button>
+      <button id="btnMapSettings" class="tb">Map ▾</button>
+      <button id="btnChat" class="tb" title="Chat & activity">💬<span id="chatBadge" class="badge" hidden></span></button>
+      <span id="presencePill" class="presence-pill" hidden></span>
+    </div>
     <div id="saveState" class="save-state" hidden>Saved</div>
     <div id="mapHint" class="hint">Tap to select · Drag background to orbit · Pinch/scroll to zoom · Double-tap overlapping items to pick one</div>
 
@@ -73,6 +81,22 @@
       <button id="btnZoomOut" class="tb icon">−</button>
       <button id="btnZoomIn" class="tb icon">+</button>
     </div>
+
+    <!-- chat + activity log -->
+    <aside id="chatPanel" class="chat-panel" hidden>
+      <div class="chat-head">
+        <div>
+          <div class="chat-title">Chat &amp; activity</div>
+          <div id="chatPresence" class="chat-presence muted">Only you here</div>
+        </div>
+        <button id="btnChatClose" class="tb icon">✕</button>
+      </div>
+      <div id="chatLog" class="chat-log"></div>
+      <form id="chatForm" class="chat-compose">
+        <input id="chatInput" maxlength="500" placeholder="Message collaborators…" autocomplete="off">
+        <button type="submit" class="tb primary-tb">Send</button>
+      </form>
+    </aside>
   </section>
 
   <!-- ============ BROWSE ============ -->
@@ -102,6 +126,7 @@
       </div>
       <button id="btnFriendAction" class="tb" hidden></button>
     </div>
+    <div id="profileTabs" class="map-tabs" hidden></div>
     <div id="profileMapHost" class="map-host"></div>
     <div id="profileLocked" class="locked" hidden>
       <div class="locked-card">
@@ -124,9 +149,10 @@
       <form id="formSettings">
         <label>Display name <input name="displayName" maxlength="40" placeholder="Optional"></label>
         <label class="check"><input type="checkbox" name="showDisplayName"> Show my display name to others</label>
-        <label class="field-title">Who can see my mind map?</label>
-        <label class="check"><input type="radio" name="visibility" value="public"> Everyone on Mind/Map</label>
+        <label class="field-title">Default visibility for new maps</label>
+        <label class="check"><input type="radio" name="visibility" value="public"> Everyone on MindMapShare</label>
         <label class="check"><input type="radio" name="visibility" value="friends"> Friends only</label>
+        <div class="muted" style="margin:-2px 0 12px">Each map can override this in Map ▾ on the map screen.</div>
         <label>About me <textarea name="bio" maxlength="300" rows="3" placeholder="A line about you (optional)"></textarea></label>
         <div class="form-error" id="settingsError"></div>
         <button type="submit" class="primary">Save settings</button>
@@ -172,6 +198,38 @@
   <div id="groupOptions" class="group-options"></div>
   <div class="sheet-row">
     <button id="groupCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<div id="sheetNewMap" class="sheet" hidden>
+  <div class="sheet-title">New map</div>
+  <input id="newMapName" maxlength="60" placeholder="Name this map…">
+  <label class="field-title">Who can see it?</label>
+  <label class="check"><input type="radio" name="newMapVis" value="public"> Everyone on MindMapShare</label>
+  <label class="check"><input type="radio" name="newMapVis" value="friends"> Friends only</label>
+  <div class="form-error" id="newMapError"></div>
+  <div class="sheet-row">
+    <button id="newMapCancel" class="tb">Cancel</button>
+    <button id="newMapCreate" class="tb primary-tb">Create map</button>
+  </div>
+</div>
+
+<div id="sheetMapSettings" class="sheet" hidden>
+  <div class="sheet-title">Map settings</div>
+  <input id="msName" maxlength="60" placeholder="Map name…">
+  <label class="field-title">Who can see this map?</label>
+  <label class="check"><input type="radio" name="msVis" value="public"> Everyone on MindMapShare</label>
+  <label class="check"><input type="radio" name="msVis" value="friends"> Friends only</label>
+  <label class="field-title">Who can edit this map?</label>
+  <div id="msEditors" class="editor-list"></div>
+  <div class="editor-add">
+    <select id="msFriendPick" aria-label="Pick a friend"></select>
+    <button id="msAddEditor" class="tb">Grant edit</button>
+  </div>
+  <div class="form-error" id="msError"></div>
+  <div class="sheet-row">
+    <button id="msDeleteMap" class="tb danger">Delete map</button>
+    <button id="msDone" class="tb primary-tb">Save</button>
   </div>
 </div>
 

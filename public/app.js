@@ -653,6 +653,34 @@ function createMapView(host, opts = {}) {
       clearTimeout(dwellTimer); dwellTimer = null;
       buildDOM();
     },
+    // Apply a map that arrived from another user, preserving this user's
+    // camera, spin, and selection. Skipped mid-drag so we never yank a bubble
+    // out from under the cursor — the next remote update reconciles it.
+    applyRemote(m) {
+      if (drag && (drag.type === 'node' || drag.type === 'edgeTap')) return false;
+      const keepSel = selectedId;
+      const keepConnect = connectFrom;
+      map = { nodes: {}, edges: [] };
+      const nodes = (m && m.nodes) || {};
+      for (const [id, n] of Object.entries(nodes)) {
+        map.nodes[id] = {
+          id,
+          label: n.label || '',
+          pos: Array.isArray(n.pos) ? [...n.pos] : [0, 0, 0],
+          r: n.r || 62,
+          hue: n.hue || 0,
+          parentId: n.parentId || null,
+          kind: n.kind === 'container' ? 'container' : 'bubble',
+        };
+      }
+      map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+      hueCounter = Object.keys(map.nodes).length;
+      selectedId = map.nodes[keepSel] ? keepSel : null;
+      connectFrom = map.nodes[keepConnect] ? keepConnect : null;
+      if (highlightedEdge && !map.edges.some(e => e.id === highlightedEdge)) highlightedEdge = null;
+      buildDOM();
+      return true;
+    },
     getMap: () => map,
     getNode: id => map.nodes[id],
     getEdge: id => map.edges.find(e => e.id === id),
@@ -699,6 +727,14 @@ let myMap = null;        // editable map view
 let profileMap = null;   // read-only map view
 let currentProfile = null;
 let saveTimer = null;
+let mapsMine = [];       // my maps (metas, incl. editors)
+let mapsShared = [];     // maps I can edit, owned by others
+let currentMapId = null;
+let currentMapInfo = null; // { owner, isOwner, canEdit } for the open map
+let liveSource = null;   // EventSource for the currently open map
+let chatItems = [];      // chat + activity entries for the open map
+let chatOpen = false;
+let chatUnread = 0;
 
 const sections = ['auth', 'map', 'browse', 'friends', 'profile', 'settings'];
 
@@ -729,7 +765,7 @@ window.addEventListener('hashchange', route);
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetNewMap', '#sheetMapSettings'];
 
 function openSheet(sel) {
   closeSheets();
@@ -931,21 +967,49 @@ function setHint(text, accent) {
   hintEl.classList.toggle('accent', !!accent);
 }
 
+let mapDirty = false;
+
 function saveMap() {
+  if (!currentMapId) return;
+  mapDirty = true;
   clearTimeout(saveTimer);
   const state = $('#saveState');
   state.hidden = false;
   state.textContent = 'Saving…';
-  saveTimer = setTimeout(async () => {
-    try {
-      await api('/api/map', 'PUT', { map: myMap.getMap() });
-      state.textContent = 'Saved ✓';
-      setTimeout(() => { if (state.textContent === 'Saved ✓') state.hidden = true; }, 1500);
-    } catch {
-      state.textContent = 'Save failed — retrying…';
-      saveTimer = setTimeout(saveMap, 3000);
+  const id = currentMapId;
+  saveTimer = setTimeout(() => doSave(id), 800);
+}
+
+async function doSave(id) {
+  if (id !== currentMapId) return; // switched maps; flushSave already handled it
+  const state = $('#saveState');
+  try {
+    await api('/api/maps/' + id, 'PUT', { map: myMap.getMap() });
+    mapDirty = false;
+    state.textContent = 'Saved ✓';
+    setTimeout(() => { if (state.textContent === 'Saved ✓') state.hidden = true; }, 1500);
+  } catch (err) {
+    if (err.status === 403 || err.status === 404) {
+      // edit permission was revoked (or the map is gone) — stop retrying
+      mapDirty = false;
+      state.textContent = 'No longer editable';
+      alert('You no longer have edit access to this map.');
+      loadMaps().catch(() => {});
+      return;
     }
-  }, 800);
+    state.textContent = 'Save failed — retrying…';
+    saveTimer = setTimeout(() => doSave(id), 3000);
+  }
+}
+
+// push any pending change for the current map before switching away from it
+function flushSave() {
+  clearTimeout(saveTimer);
+  if (mapDirty && currentMapId) {
+    mapDirty = false;
+    api('/api/maps/' + currentMapId, 'PUT', { map: myMap.getMap() }).catch(() => {});
+    $('#saveState').hidden = true;
+  }
 }
 
 function refreshToolbar() {
@@ -1039,11 +1103,407 @@ function initEditor() {
   refreshToolbar();
 }
 
-async function loadMyMap() {
-  const data = await api('/api/map');
+/* ================================================================
+   Multiple maps: switcher, create, settings (visibility + editors)
+================================================================ */
+const lastMapKey = () => 'mms:lastMap:' + (me ? me.username : '');
+
+function renderMapSelect() {
+  const sel = $('#mapSelect');
+  sel.innerHTML = '';
+  const gMine = document.createElement('optgroup');
+  gMine.label = 'My maps';
+  for (const m of mapsMine) {
+    const o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = m.name + (m.visibility === 'friends' ? ' 🔒' : '');
+    gMine.appendChild(o);
+  }
+  sel.appendChild(gMine);
+  if (mapsShared.length) {
+    const g = document.createElement('optgroup');
+    g.label = 'Shared with me';
+    for (const m of mapsShared) {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = `${m.name} — @${m.owner.username}`;
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  }
+  if (currentMapId) sel.value = currentMapId;
+}
+
+async function loadMaps(selectId) {
+  const data = await api('/api/maps');
+  mapsMine = data.mine;
+  mapsShared = data.shared;
+  const all = [...mapsMine, ...mapsShared];
+  let target = selectId || currentMapId || localStorage.getItem(lastMapKey());
+  if (!all.some(m => m.id === target)) target = mapsMine[0] && mapsMine[0].id;
+  renderMapSelect();
+  if (target) await openMyMap(target);
+}
+
+async function openMyMap(id) {
+  flushSave();
+  const data = await api('/api/maps/' + id);
+  currentMapId = data.map.id;
+  currentMapInfo = data;
+  try { localStorage.setItem(lastMapKey(), id); } catch { /* private mode */ }
+  $('#mapSelect').value = id;
+  $('#btnMapSettings').hidden = !data.isOwner;
   myMap.setMap(data.map);
   refreshToolbar();
+  setHint(data.isOwner ? DEFAULT_HINT : `Editing @${data.owner.username}'s map “${data.map.name}”`, false);
+  await startLive(id, data.canEdit);
 }
+
+$('#mapSelect').addEventListener('change', () => {
+  openMyMap($('#mapSelect').value).catch(err => {
+    alert(err.message);
+    loadMaps().catch(() => {});
+  });
+});
+
+/* ---------- new map sheet ---------- */
+$('#btnNewMap').addEventListener('click', () => {
+  openSheet('#sheetNewMap');
+  $('#newMapName').value = '';
+  $('#newMapError').textContent = '';
+  const def = me && me.visibility === 'friends' ? 'friends' : 'public';
+  for (const r of document.querySelectorAll('input[name=newMapVis]')) r.checked = r.value === def;
+  requestAnimationFrame(() => $('#newMapName').focus());
+});
+$('#newMapCancel').addEventListener('click', () => closeSheets());
+$('#newMapCreate').addEventListener('click', async () => {
+  const name = $('#newMapName').value.trim();
+  const visEl = document.querySelector('input[name=newMapVis]:checked');
+  try {
+    const data = await api('/api/maps', 'POST', { name, visibility: visEl ? visEl.value : 'public' });
+    closeSheets();
+    await loadMaps(data.map.id);
+  } catch (err) {
+    $('#newMapError').textContent = err.message;
+  }
+});
+$('#newMapName').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') $('#newMapCreate').click();
+  if (e.key === 'Escape') closeSheets();
+});
+
+/* ---------- map settings sheet (rename, visibility, editors, delete) ---------- */
+let msEditors = []; // [{ username, name }] for the map being configured
+
+function openMapSettings() {
+  const meta = mapsMine.find(m => m.id === currentMapId);
+  if (!meta) return;
+  openSheet('#sheetMapSettings');
+  $('#msName').value = meta.name;
+  for (const r of document.querySelectorAll('input[name=msVis]')) r.checked = r.value === meta.visibility;
+  $('#msError').textContent = '';
+  msEditors = meta.editors || [];
+  renderMsEditors();
+  fillFriendPick();
+}
+$('#btnMapSettings').addEventListener('click', openMapSettings);
+
+function renderMsEditors() {
+  const box = $('#msEditors');
+  box.innerHTML = '';
+  if (!msEditors.length) {
+    const d = document.createElement('div');
+    d.className = 'muted';
+    d.textContent = 'Only you can edit this map.';
+    box.appendChild(d);
+    return;
+  }
+  for (const ed of msEditors) {
+    const chip = document.createElement('span');
+    chip.className = 'editor-chip';
+    chip.appendChild(document.createTextNode(ed.name ? `${ed.name} (@${ed.username})` : '@' + ed.username));
+    const x = document.createElement('button');
+    x.textContent = '✕';
+    x.title = 'Remove edit permission';
+    x.addEventListener('click', () => changeEditor(ed.username, 'remove'));
+    chip.appendChild(x);
+    box.appendChild(chip);
+  }
+}
+
+async function fillFriendPick() {
+  const sel = $('#msFriendPick');
+  sel.innerHTML = '';
+  let friends = [];
+  try { friends = (await api('/api/friends')).friends; } catch { /* offline */ }
+  const already = new Set(msEditors.map(e => e.username));
+  const avail = friends.filter(f => !already.has(f.username));
+  for (const f of avail) {
+    const o = document.createElement('option');
+    o.value = f.username;
+    o.textContent = f.name ? `${f.name} (@${f.username})` : '@' + f.username;
+    sel.appendChild(o);
+  }
+  sel.disabled = !avail.length;
+  $('#msAddEditor').disabled = !avail.length;
+  if (!avail.length) {
+    const o = document.createElement('option');
+    o.textContent = friends.length ? 'All friends can already edit' : 'Add friends first to grant edit';
+    sel.appendChild(o);
+  }
+}
+
+async function changeEditor(username, action) {
+  try {
+    const data = await api(`/api/maps/${currentMapId}/editors`, 'POST', { username, action });
+    msEditors = data.editors;
+    const meta = mapsMine.find(m => m.id === currentMapId);
+    if (meta) meta.editors = msEditors;
+    renderMsEditors();
+    fillFriendPick();
+  } catch (err) {
+    $('#msError').textContent = err.message;
+  }
+}
+
+$('#msAddEditor').addEventListener('click', () => {
+  const uname = $('#msFriendPick').value;
+  if (uname) changeEditor(uname, 'add');
+});
+
+$('#msDone').addEventListener('click', async () => {
+  const visEl = document.querySelector('input[name=msVis]:checked');
+  try {
+    await api(`/api/maps/${currentMapId}/meta`, 'PUT', {
+      name: $('#msName').value.trim(),
+      visibility: visEl ? visEl.value : 'public',
+    });
+    closeSheets();
+    await loadMaps(currentMapId);
+  } catch (err) {
+    $('#msError').textContent = err.message;
+  }
+});
+
+$('#msDeleteMap').addEventListener('click', async () => {
+  const meta = mapsMine.find(m => m.id === currentMapId);
+  if (!meta) return;
+  if (!confirm(`Delete map “${meta.name}” and everything in it?`)) return;
+  try {
+    await api('/api/maps/' + currentMapId, 'DELETE');
+    closeSheets();
+    currentMapId = null;
+    mapDirty = false;
+    await loadMaps();
+  } catch (err) {
+    $('#msError').textContent = err.message;
+  }
+});
+
+$('#msName').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') $('#msDone').click();
+  if (e.key === 'Escape') closeSheets();
+});
+
+/* ================================================================
+   Live collaboration: SSE stream, presence, chat + activity log
+================================================================ */
+function stopLive() {
+  if (liveSource) { liveSource.close(); liveSource = null; }
+}
+
+async function startLive(mapId, canEdit) {
+  stopLive();
+  chatItems = [];
+  chatUnread = 0;
+  updateChatBadge();
+  updatePresence([]);
+  renderChat();
+
+  // load history first so the log has context, then stream new events
+  try {
+    const data = await api('/api/maps/' + mapId + '/chat');
+    if (mapId !== currentMapId) return; // switched maps while loading
+    chatItems = data.chat || [];
+    renderChat();
+  } catch { /* no history is fine */ }
+
+  $('#chatInput').disabled = !canEdit;
+  $('#chatInput').placeholder = canEdit ? 'Message collaborators…' : 'Only editors can chat here';
+  $('#chatForm').querySelector('button').disabled = !canEdit;
+
+  const es = new EventSource('/api/maps/' + mapId + '/live');
+  liveSource = es;
+
+  es.addEventListener('hello', e => updatePresence(JSON.parse(e.data).users));
+  es.addEventListener('presence', e => updatePresence(JSON.parse(e.data).users));
+
+  es.addEventListener('map', e => {
+    if (mapId !== currentMapId) return;
+    const m = JSON.parse(e.data);
+    const applied = myMap.applyRemote(m);
+    if (applied) refreshToolbar();
+    // if we were mid-drag it didn't apply; our next save reconciles anyway
+    const st = $('#saveState');
+    st.hidden = false; st.textContent = 'Updated by @' + m.by;
+    setTimeout(() => { if (st.textContent.startsWith('Updated by')) st.hidden = true; }, 1600);
+  });
+
+  es.addEventListener('chat', e => {
+    if (mapId !== currentMapId) return;
+    addChatItem(JSON.parse(e.data));
+  });
+
+  es.addEventListener('meta', e => {
+    if (mapId !== currentMapId) return;
+    const meta = JSON.parse(e.data);
+    const info = mapsMine.find(x => x.id === mapId) || mapsShared.find(x => x.id === mapId);
+    if (info) { info.name = meta.name; info.visibility = meta.visibility; renderMapSelect(); }
+  });
+
+  es.addEventListener('revoked', e => {
+    if (mapId !== currentMapId) return;
+    if (me && JSON.parse(e.data).username === me.username) {
+      alert('Your access to this map was removed.');
+      stopLive();
+      loadMaps().catch(() => {});
+    }
+  });
+
+  es.addEventListener('gone', () => {
+    if (mapId !== currentMapId) return;
+    alert('This map was deleted by its owner.');
+    stopLive();
+    currentMapId = null;
+    loadMaps().catch(() => {});
+  });
+}
+
+function updatePresence(users) {
+  const others = (users || []).filter(u => !me || u.username !== me.username);
+  const pill = $('#presencePill');
+  if (!others.length) {
+    pill.hidden = true;
+    $('#chatPresence').textContent = 'Only you here';
+    return;
+  }
+  const names = others.map(u => u.name || '@' + u.username);
+  pill.hidden = false;
+  pill.textContent = others.length === 1 ? names[0] : others.length + ' others here';
+  $('#chatPresence').textContent = 'Here now: ' + names.join(', ');
+}
+
+/* ---------- chat rendering ---------- */
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (sameDay) return time;
+  const date = d.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric', year: '2-digit' });
+  return `${date} @ ${time}`;
+}
+
+function chatItemEl(item) {
+  const who = item.actor ? (item.actor.name || '@' + item.actor.username) : 'Someone';
+  const mine = me && item.actor && item.actor.username === me.username;
+  const wrap = document.createElement('div');
+
+  if (item.kind === 'message') {
+    wrap.className = 'chat-item chat-msg' + (mine ? ' mine' : '');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<span class="who">${escapeHtml(mine ? 'You' : who)}</span> · ${fmtTime(item.ts)}`;
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = item.text;
+    wrap.appendChild(meta);
+    wrap.appendChild(body);
+  } else {
+    // activity: "Bob added bubble "Sun" · Sun 7/19/26 @ 6:00am"
+    wrap.className = 'chat-item chat-activity';
+    wrap.innerHTML =
+      `<span class="dot">•</span>` +
+      `<span><span class="who">${escapeHtml(mine ? 'You' : who)}</span> ${escapeHtml(item.text)} ` +
+      `<time>${fmtTime(item.ts)}</time></span>`;
+  }
+  return wrap;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderChat() {
+  const log = $('#chatLog');
+  log.innerHTML = '';
+  if (!chatItems.length) {
+    const d = document.createElement('div');
+    d.className = 'chat-empty';
+    d.textContent = 'No messages yet. Say hello, or start editing — changes show up here.';
+    log.appendChild(d);
+    return;
+  }
+  for (const item of chatItems) log.appendChild(chatItemEl(item));
+  log.scrollTop = log.scrollHeight;
+}
+
+function addChatItem(item) {
+  if (chatItems.some(x => x.id === item.id)) return; // ignore echo of our own post
+  chatItems.push(item);
+  if (chatItems.length > 400) chatItems.shift();
+  const log = $('#chatLog');
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  if (chatItems.length === 1) renderChat();
+  else log.appendChild(chatItemEl(item));
+  if (nearBottom || (me && item.actor && item.actor.username === me.username)) {
+    log.scrollTop = log.scrollHeight;
+  }
+  if (!chatOpen) { chatUnread++; updateChatBadge(); }
+}
+
+function updateChatBadge() {
+  const b = $('#chatBadge');
+  b.hidden = !chatUnread;
+  b.textContent = chatUnread > 99 ? '99+' : chatUnread;
+}
+
+function openChat() {
+  chatOpen = true;
+  chatUnread = 0;
+  updateChatBadge();
+  $('#chatPanel').hidden = false;
+  $('#btnChat').classList.add('active');
+  const log = $('#chatLog');
+  log.scrollTop = log.scrollHeight;
+}
+function closeChat() {
+  chatOpen = false;
+  $('#chatPanel').hidden = true;
+  $('#btnChat').classList.remove('active');
+}
+
+$('#btnChat').addEventListener('click', () => (chatOpen ? closeChat() : openChat()));
+$('#btnChatClose').addEventListener('click', closeChat);
+
+$('#chatForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = $('#chatInput');
+  const text = input.value.trim();
+  if (!text || !currentMapId) return;
+  input.value = '';
+  try {
+    const data = await api('/api/maps/' + currentMapId + '/chat', 'POST', { text });
+    addChatItem(data.entry); // show immediately; the SSE echo is de-duped by id
+  } catch (err) {
+    input.value = text;
+    alert(err.message);
+  }
+});
+$('#chatInput').addEventListener('keydown', e => e.stopPropagation());
 
 /* ================================================================
    Browse
@@ -1069,7 +1529,10 @@ function userCard(u, actionsHtmlBuilder) {
   nm.textContent = shownName + (me && u.username === me.username ? ' (you)' : '');
   const hd = document.createElement('div');
   hd.className = 'hd';
-  hd.textContent = '@' + u.username + ' · ' + u.nodeCount + ' bubble' + (u.nodeCount === 1 ? '' : 's');
+  hd.textContent = '@' + u.username + (u.mapCount
+    ? ' · ' + u.mapCount + ' map' + (u.mapCount === 1 ? '' : 's') +
+      ' · ' + u.nodeCount + ' bubble' + (u.nodeCount === 1 ? '' : 's')
+    : '');
   who.appendChild(nm);
   who.appendChild(hd);
   card.appendChild(av);
@@ -1082,7 +1545,7 @@ function userCard(u, actionsHtmlBuilder) {
     const pill = document.createElement('span');
     pill.className = 'pill' + (u.relation === 'friends' ? ' friends' : '');
     pill.textContent = u.relation === 'friends' ? '✓ Friends'
-      : u.visibility === 'public' ? 'Public' : 'Friends only';
+      : u.mapCount ? 'Public' : 'Friends only';
     meta.appendChild(pill);
     card.appendChild(meta);
   }
@@ -1196,28 +1659,54 @@ async function openProfile(username) {
     currentProfile = data;
     const u = data.user;
     $('#profileName').textContent = u.name || '@' + u.username;
-    $('#profileHandle').textContent = '@' + u.username +
-      (u.bio ? ' · ' + u.bio : '') +
-      (data.canView ? ' · ' + u.nodeCount + ' bubbles' : '');
+    const bits = ['@' + u.username];
+    if (u.bio) bits.push(u.bio);
+    if (data.maps.length) {
+      bits.push(data.maps.length + ' map' + (data.maps.length === 1 ? '' : 's') +
+        ' · ' + u.nodeCount + ' bubble' + (u.nodeCount === 1 ? '' : 's'));
+    }
+    $('#profileHandle').textContent = bits.join(' · ');
     renderFriendButton();
-    if (data.canView) {
+    renderProfileTabs(data.maps);
+    if (data.maps.length) {
       $('#profileLocked').hidden = true;
       $('#profileToolbar').hidden = false;
-      profileMap.setMap(data.map);
+      await openProfileMap(data.maps[0].id);
       profileMap.start();
     } else {
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
-      $('#lockedText').textContent = (u.name || '@' + u.username) + "'s mind map is visible to friends only.";
+      $('#lockedText').textContent = (u.name || '@' + u.username) + "'s mind maps are visible to friends only.";
       profileMap.setMap({ nodes: {}, edges: [] });
     }
   } catch (err) {
     $('#profileName').textContent = 'Not found';
     $('#profileHandle').textContent = err.message;
     $('#btnFriendAction').hidden = true;
+    $('#profileTabs').hidden = true;
     $('#profileLocked').hidden = false;
     $('#lockedText').textContent = err.message;
   }
+}
+
+function renderProfileTabs(maps) {
+  const bar = $('#profileTabs');
+  bar.innerHTML = '';
+  bar.hidden = maps.length < 2;
+  for (const m of maps) {
+    const b = document.createElement('button');
+    b.className = 'map-tab';
+    b.textContent = m.name;
+    b.dataset.id = m.id;
+    b.addEventListener('click', () => openProfileMap(m.id).catch(err => alert(err.message)));
+    bar.appendChild(b);
+  }
+}
+
+async function openProfileMap(id) {
+  for (const b of $('#profileTabs').children) b.classList.toggle('active', b.dataset.id === id);
+  const data = await api('/api/maps/' + id);
+  profileMap.setMap(data.map);
 }
 
 function renderFriendButton() {
@@ -1300,8 +1789,15 @@ $('#formSettings').addEventListener('submit', async e => {
 });
 
 $('#btnLogout').addEventListener('click', async () => {
+  flushSave();
+  stopLive();
+  closeChat();
   try { await api('/api/logout', 'POST'); } catch { /* ignore */ }
   me = null;
+  mapsMine = [];
+  mapsShared = [];
+  currentMapId = null;
+  currentMapInfo = null;
   location.hash = '';
   show('auth');
 });
@@ -1323,7 +1819,7 @@ $('#tabRegister').addEventListener('click', () => {
 });
 
 async function afterSignIn() {
-  await loadMyMap();
+  await loadMaps();
   refreshBadge();
   location.hash = '#/map';
   route();
@@ -1375,7 +1871,7 @@ $('#formRegister').addEventListener('submit', async e => {
   try {
     const data = await api('/api/me');
     me = data.user;
-    await loadMyMap();
+    await loadMaps();
     refreshBadge();
   } catch { me = null; }
   route();

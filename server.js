@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Mind/Map 3D server.
+ * MindMapShare (3D Mind Maps) server.
  * Accounts, sessions, friends, profile visibility, mind map storage, static files.
  *
  * Storage backends (picked automatically):
@@ -29,6 +29,7 @@ const newId = () => crypto.randomBytes(12).toString('hex');
    Storage — two backends, one async API:
      init(), getUserById, getUsersByIds, getUserByUsername,
      searchUsers(q), createUser(u), saveUser(u),
+     getUserByMapId(mapId), getUsersWithEditor(userId),
      createSession(sid, userId), getSessionUser(sid), deleteSession(sid)
 ================================================================ */
 
@@ -36,7 +37,7 @@ function pgStore() {
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: DATABASE_URL, max: 5 });
 
-  const rowToUser = r => r && {
+  const rowToUser = r => r && normalizeUser({
     id: r.id,
     username: r.username,
     salt: r.salt,
@@ -50,7 +51,8 @@ function pgStore() {
     requestsIn: r.requests_in,
     requestsOut: r.requests_out,
     map: r.map,
-  };
+    maps: r.maps,
+  });
 
   return {
     kind: 'postgres',
@@ -69,8 +71,22 @@ function pgStore() {
           friends JSONB NOT NULL DEFAULT '[]',
           requests_in JSONB NOT NULL DEFAULT '[]',
           requests_out JSONB NOT NULL DEFAULT '[]',
-          map JSONB NOT NULL DEFAULT '{}'
+          map JSONB NOT NULL DEFAULT '{}',
+          maps JSONB NOT NULL DEFAULT '[]'
         )`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS maps JSONB NOT NULL DEFAULT '[]'`);
+      // migrate legacy single-map rows into the multi-map shape
+      await pool.query(`
+        UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
+          'id', 'm' || id,
+          'name', 'My Map',
+          'visibility', visibility,
+          'editors', '[]'::jsonb,
+          'nodes', COALESCE(map->'nodes', '{}'::jsonb),
+          'edges', COALESCE(map->'edges', '[]'::jsonb),
+          'createdAt', created_at,
+          'updatedAt', created_at))
+        WHERE maps = '[]'::jsonb AND map ? 'nodes'`);
       await pool.query(`
         CREATE TABLE IF NOT EXISTS sessions (
           sid TEXT PRIMARY KEY,
@@ -105,21 +121,35 @@ function pgStore() {
     async createUser(u) {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
-                            visibility, bio, created_at, friends, requests_in, requests_out, map)
+                            visibility, bio, created_at, friends, requests_in, requests_out, maps)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
-         JSON.stringify(u.requestsOut), JSON.stringify(u.map)]);
+         JSON.stringify(u.requestsOut), JSON.stringify(u.maps)]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
-                          friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, map=$9::jsonb
+                          friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
-         JSON.stringify(u.requestsOut), JSON.stringify(u.map)]);
+         JSON.stringify(u.requestsOut), JSON.stringify(u.maps)]);
+    },
+    async getUserByMapId(mapId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE jsonb_path_exists(maps, '$[*] ? (@.id == $mid)', jsonb_build_object('mid', $1::text))
+         LIMIT 1`, [mapId]);
+      return rowToUser(rows[0]);
+    },
+    async getUsersWithEditor(userId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE jsonb_path_exists(maps, '$[*].editors[*] ? (@ == $uid)', jsonb_build_object('uid', $1::text))`,
+        [userId]);
+      return rows.map(rowToUser);
     },
     async createSession(sid, userId) {
       await pool.query('INSERT INTO sessions (sid, user_id, created_at) VALUES ($1,$2,$3)',
@@ -159,6 +189,14 @@ function fileStore() {
     }, 200);
   };
 
+  // migrate legacy single-map users into the multi-map shape
+  let migrated = false;
+  for (const u of Object.values(db.users)) {
+    if (!Array.isArray(u.maps) || !u.maps.length) migrated = true;
+    normalizeUser(u);
+  }
+  if (migrated) persist();
+
   return {
     kind: 'json file (data/data.json)',
     async init() {},
@@ -180,6 +218,12 @@ function fileStore() {
     },
     async createUser(u) { db.users[u.id] = u; persist(); },
     async saveUser(u) { db.users[u.id] = u; persist(); },
+    async getUserByMapId(mapId) {
+      return Object.values(db.users).find(u => (u.maps || []).some(m => m.id === mapId)) || null;
+    },
+    async getUsersWithEditor(userId) {
+      return Object.values(db.users).filter(u => (u.maps || []).some(m => (m.editors || []).includes(userId)));
+    },
     async createSession(sid, userId) { db.sessions[sid] = { userId, createdAt: Date.now() }; persist(); },
     async getSessionUser(sid) {
       const s = db.sessions[sid];
@@ -200,11 +244,48 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-function defaultMap(label) {
+const MAX_MAPS = 20;
+const MAX_EDITORS = 20;
+
+function makeMap(name, visibility, seedLabel) {
+  const now = Date.now();
   return {
-    nodes: { n1: { id: 'n1', label: label || 'Me', pos: [0, 0, 0], r: 62, hue: 0, parentId: null, kind: 'bubble' } },
+    id: newId(),
+    name: String(name || '').trim().slice(0, 60) || 'Untitled map',
+    visibility: visibility === 'friends' ? 'friends' : 'public',
+    editors: [],
+    nodes: { n1: { id: 'n1', label: seedLabel || 'Me', pos: [0, 0, 0], r: 62, hue: 0, parentId: null, kind: 'bubble' } },
     edges: [],
+    chat: [],
+    createdAt: now,
+    updatedAt: now,
   };
+}
+
+const MAX_CHAT = 400; // per map; oldest entries roll off
+
+// Legacy users carry a single `map`; wrap it into the multi-map shape in place.
+function normalizeUser(u) {
+  if (!u) return u;
+  if (!Array.isArray(u.maps)) u.maps = [];
+  if (!u.maps.length) {
+    const m = makeMap('My Map', u.visibility, u.displayName || u.username);
+    m.id = 'm' + u.id; // stable id so repeated reads agree before the first save
+    if (u.map && u.map.nodes && Object.keys(u.map.nodes).length) {
+      m.nodes = u.map.nodes;
+      m.edges = Array.isArray(u.map.edges) ? u.map.edges : [];
+    }
+    u.maps = [m];
+  }
+  for (const m of u.maps) {
+    if (!Array.isArray(m.editors)) m.editors = [];
+    if (m.visibility !== 'friends') m.visibility = 'public';
+    if (!m.nodes || typeof m.nodes !== 'object') m.nodes = {};
+    if (!Array.isArray(m.edges)) m.edges = [];
+    if (!Array.isArray(m.chat)) m.chat = [];
+  }
+  delete u.map;
+  return u;
 }
 
 function relationTo(viewer, owner) {
@@ -216,20 +297,41 @@ function relationTo(viewer, owner) {
   return 'none';
 }
 
-function canViewMap(viewer, owner) {
+function canViewMapObj(m, owner, viewer) {
   const rel = relationTo(viewer, owner);
   if (rel === 'self') return true;
-  if (owner.visibility === 'public') return true;
-  return rel === 'friends';
+  if (viewer && (m.editors || []).includes(viewer.id)) return true;
+  if (m.visibility === 'public') return true;
+  return m.visibility === 'friends' && rel === 'friends';
+}
+
+// Friends-only maps are invisible to non-friends: not listed, not counted.
+function visibleMapsOf(owner, viewer) {
+  return (owner.maps || []).filter(m => canViewMapObj(m, owner, viewer));
+}
+
+function mapMeta(m, extra) {
+  return Object.assign({
+    id: m.id,
+    name: m.name,
+    visibility: m.visibility,
+    nodeCount: Object.keys(m.nodes || {}).length,
+    updatedAt: m.updatedAt || 0,
+  }, extra || {});
+}
+
+function ownerRef(u) {
+  return { username: u.username, name: u.showDisplayName && u.displayName ? u.displayName : null };
 }
 
 function publicUser(u, viewer) {
+  const visible = visibleMapsOf(u, viewer);
   return {
     username: u.username,
     name: u.showDisplayName && u.displayName ? u.displayName : null,
     bio: u.bio || '',
-    visibility: u.visibility,
-    nodeCount: Object.keys((u.map && u.map.nodes) || {}).length,
+    mapCount: visible.length,
+    nodeCount: visible.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0),
     friendCount: (u.friends || []).length,
     relation: viewer ? relationTo(viewer, u) : 'none',
   };
@@ -243,6 +345,128 @@ function meUser(u) {
     visibility: u.visibility,
     bio: u.bio || '',
   };
+}
+
+/* ================================================================
+   Change diffing — turn a before/after map into human activity lines
+   like: Bob added bubble "Sun"
+================================================================ */
+function labelOf(n) {
+  const l = (n && n.label ? String(n.label).trim() : '') || 'Untitled';
+  return l.length > 40 ? l.slice(0, 40) + '…' : l;
+}
+
+function diffMaps(before, after, actor) {
+  const entries = [];
+  const bn = before.nodes || {}, an = after.nodes || {};
+  const noun = n => (n.kind === 'container' ? 'group' : 'bubble');
+
+  for (const id of Object.keys(an)) {
+    const now = an[id], was = bn[id];
+    if (!was) {
+      entries.push(`added ${noun(now)} "${labelOf(now)}"`);
+    } else {
+      if ((was.label || '') !== (now.label || '')) {
+        entries.push(`renamed ${noun(now)} "${labelOf(was)}" → "${labelOf(now)}"`);
+      }
+      const wasParent = was.parentId || null, nowParent = now.parentId || null;
+      if (wasParent !== nowParent) {
+        if (nowParent && an[nowParent]) entries.push(`moved "${labelOf(now)}" into group "${labelOf(an[nowParent])}"`);
+        else if (wasParent) entries.push(`took "${labelOf(now)}" out of a group`);
+      }
+    }
+  }
+  for (const id of Object.keys(bn)) {
+    if (!an[id]) entries.push(`deleted ${noun(bn[id])} "${labelOf(bn[id])}"`);
+  }
+
+  const edgeKey = e => (e.a < e.b ? e.a + '|' + e.b : e.b + '|' + e.a);
+  const be = new Map((before.edges || []).map(e => [edgeKey(e), e]));
+  const ae = new Map((after.edges || []).map(e => [edgeKey(e), e]));
+  const pair = e => `"${labelOf(an[e.a] || bn[e.a] || {})}" ↔ "${labelOf(an[e.b] || bn[e.b] || {})}"`;
+  for (const [k, e] of ae) {
+    if (!be.has(k)) entries.push(`connected ${pair(e)}`);
+    else if ((be.get(k).w || 1) !== (e.w || 1)) entries.push(`set ${pair(e)} strength to ${e.w}`);
+  }
+  for (const [k, e] of be) {
+    if (!ae.has(k)) entries.push(`removed the connection ${pair(e)}`);
+  }
+
+  // collapse a big rework into one line so the log stays readable
+  if (entries.length > 6) {
+    return [{ kind: 'activity', actor, text: `made ${entries.length} changes`, ts: Date.now(), id: newId() }];
+  }
+  return entries.map(text => ({ kind: 'activity', actor, text, ts: Date.now(), id: newId() }));
+}
+
+/* ================================================================
+   Live hub — in-memory SSE fan-out + presence, keyed by map id.
+   Nothing here is persisted; it is pure connection state.
+================================================================ */
+const liveHub = new Map(); // mapId → { clients:Set<res>, present:Map<res,{username,name}> }
+
+function hubFor(mapId) {
+  let h = liveHub.get(mapId);
+  if (!h) { h = { clients: new Set(), present: new Map() }; liveHub.set(mapId, h); }
+  return h;
+}
+
+function broadcast(mapId, event, data, exceptRes) {
+  const h = liveHub.get(mapId);
+  if (!h) return;
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of h.clients) {
+    if (res === exceptRes) continue;
+    try { res.write(frame); } catch { /* dropped; cleanup runs on close */ }
+  }
+}
+
+function presenceList(mapId) {
+  const h = liveHub.get(mapId);
+  if (!h) return [];
+  const seen = new Map();
+  for (const p of h.present.values()) seen.set(p.username, p); // one entry per user
+  return [...seen.values()];
+}
+
+function broadcastPresence(mapId) {
+  broadcast(mapId, 'presence', { users: presenceList(mapId) });
+}
+
+function pushChat(map, entry) {
+  map.chat.push(entry);
+  if (map.chat.length > MAX_CHAT) map.chat.splice(0, map.chat.length - MAX_CHAT);
+}
+
+// Open a long-lived Server-Sent Events stream for one viewer of one map.
+function startLiveStream(req, res, mapId, who) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // disable proxy buffering (nginx) so events flush live
+  });
+  res.write('retry: 3000\n\n'); // tell EventSource to reconnect quickly if dropped
+
+  const h = hubFor(mapId);
+  h.clients.add(res);
+  h.present.set(res, who);
+  broadcastPresence(mapId);
+  res.write(`event: hello\ndata: ${JSON.stringify({ you: who, users: presenceList(mapId) })}\n\n`);
+
+  const beat = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { /* closed */ }
+  }, 25000);
+
+  const cleanup = () => {
+    clearInterval(beat);
+    h.clients.delete(res);
+    h.present.delete(res);
+    if (!h.clients.size) liveHub.delete(mapId);
+    else broadcastPresence(mapId);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
 }
 
 /* ================================================================
@@ -403,7 +627,7 @@ async function handleApi(req, res, pathname) {
       bio: '',
       createdAt: Date.now(),
       friends: [], requestsIn: [], requestsOut: [],
-      map: defaultMap(displayName || username),
+      maps: [makeMap('My Map', body.visibility, displayName || username)],
     };
     try {
       await store.createUser(u);
@@ -454,15 +678,127 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { user: meUser(user) });
   }
 
-  if (route === 'GET /api/map') return sendJSON(res, 200, { map: user.map });
+  // --- maps ---
+  if (route === 'GET /api/maps') {
+    const editorIds = new Set();
+    for (const m of user.maps) for (const id of m.editors) editorIds.add(id);
+    const editorUsers = await store.getUsersByIds([...editorIds]);
+    const byId = new Map(editorUsers.map(x => [x.id, x]));
+    const mine = user.maps.map(m => mapMeta(m, {
+      editors: m.editors.map(id => byId.get(id)).filter(Boolean).map(ownerRef),
+    }));
+    const owners = await store.getUsersWithEditor(user.id);
+    const shared = [];
+    for (const owner of owners) {
+      if (owner.id === user.id) continue;
+      for (const m of owner.maps) {
+        if ((m.editors || []).includes(user.id)) shared.push(mapMeta(m, { owner: ownerRef(owner) }));
+      }
+    }
+    return sendJSON(res, 200, { mine, shared });
+  }
 
-  if (route === 'PUT /api/map') {
+  if (route === 'POST /api/maps') {
+    if (user.maps.length >= MAX_MAPS) return sendJSON(res, 400, { error: `You can have up to ${MAX_MAPS} maps.` });
     const body = await readBody(req);
-    const map = sanitizeMap(body.map);
-    if (!map) return sendJSON(res, 400, { error: 'Invalid map.' });
-    user.map = map;
+    const m = makeMap(body.name, body.visibility, user.displayName || user.username);
+    user.maps.push(m);
     await store.saveUser(user);
-    return sendJSON(res, 200, { ok: true });
+    return sendJSON(res, 200, { map: mapMeta(m, { editors: [] }) });
+  }
+
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live))?$/);
+  if (mapMatch) {
+    const mapId = mapMatch[1], sub = mapMatch[2];
+    const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    // a map the viewer may not see behaves exactly like a map that doesn't exist
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    const isOwner = owner.id === user.id;
+    const canEdit = isOwner || (m.editors || []).includes(user.id);
+
+    if (!sub && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges },
+        owner: ownerRef(owner), isOwner, canEdit,
+        present: presenceList(m.id),
+      });
+    }
+    if (!sub && req.method === 'PUT') {
+      if (!canEdit) return sendJSON(res, 403, { error: 'You do not have edit permission for this map.' });
+      const body = await readBody(req);
+      const clean = sanitizeMap(body.map);
+      if (!clean) return sendJSON(res, 400, { error: 'Invalid map.' });
+      const before = { nodes: m.nodes, edges: m.edges };
+      const activity = diffMaps(before, clean, ownerRef(user));
+      m.nodes = clean.nodes;
+      m.edges = clean.edges;
+      m.updatedAt = Date.now();
+      for (const entry of activity) pushChat(m, entry);
+      await store.saveUser(owner);
+      // live push: others viewing this map get the new state + the activity lines
+      broadcast(m.id, 'map', { nodes: m.nodes, edges: m.edges, by: user.username }, res);
+      for (const entry of activity) broadcast(m.id, 'chat', entry);
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (sub === 'chat' && req.method === 'GET') {
+      return sendJSON(res, 200, { chat: m.chat, canPost: canEdit });
+    }
+    if (sub === 'chat' && req.method === 'POST') {
+      if (!canEdit) return sendJSON(res, 403, { error: 'Only people who can edit this map can chat here.' });
+      const body = await readBody(req);
+      const text = String(body.text || '').trim().slice(0, 500);
+      if (!text) return sendJSON(res, 400, { error: 'Empty message.' });
+      const entry = { kind: 'message', actor: ownerRef(user), text, ts: Date.now(), id: newId() };
+      pushChat(m, entry);
+      await store.saveUser(owner);
+      broadcast(m.id, 'chat', entry);
+      return sendJSON(res, 200, { entry });
+    }
+    if (sub === 'live' && req.method === 'GET') {
+      return startLiveStream(req, res, m.id, ownerRef(user));
+    }
+    if (!sub && req.method === 'DELETE') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a map.' });
+      if (user.maps.length <= 1) return sendJSON(res, 400, { error: 'You need at least one map.' });
+      user.maps = user.maps.filter(x => x.id !== mapId);
+      await store.saveUser(user);
+      broadcast(mapId, 'gone', { reason: 'deleted' });
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (sub === 'meta' && req.method === 'PUT') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can change map settings.' });
+      const body = await readBody(req);
+      if ('name' in body) m.name = String(body.name || '').trim().slice(0, 60) || 'Untitled map';
+      if ('visibility' in body) m.visibility = body.visibility === 'friends' ? 'friends' : 'public';
+      m.updatedAt = Date.now();
+      await store.saveUser(user);
+      broadcast(m.id, 'meta', { name: m.name, visibility: m.visibility });
+      return sendJSON(res, 200, { map: mapMeta(m) });
+    }
+    if (sub === 'editors' && req.method === 'POST') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can change who edits this map.' });
+      const body = await readBody(req);
+      const target = await store.getUserByUsername(body.username);
+      if (!target || target.id === user.id) return sendJSON(res, 400, { error: 'Invalid user.' });
+      let removedTarget = false;
+      if (body.action === 'remove') {
+        m.editors = m.editors.filter(id => id !== target.id);
+        removedTarget = true;
+      } else {
+        if (m.editors.length >= MAX_EDITORS) return sendJSON(res, 400, { error: `A map can have up to ${MAX_EDITORS} editors.` });
+        if (!m.editors.includes(target.id)) m.editors.push(target.id);
+      }
+      m.updatedAt = Date.now();
+      await store.saveUser(user);
+      // if the removed editor is watching a friends-only map they can no longer see, cut them off
+      if (removedTarget && m.visibility === 'friends' && !(user.friends || []).includes(target.id)) {
+        broadcast(m.id, 'revoked', { username: target.username });
+      }
+      const eds = await store.getUsersByIds(m.editors);
+      return sendJSON(res, 200, { editors: eds.map(ownerRef) });
+    }
+    return sendJSON(res, 404, { error: 'Not found.' });
   }
 
   if (req.method === 'GET' && pathname === '/api/users') {
@@ -475,11 +811,10 @@ async function handleApi(req, res, pathname) {
   if (req.method === 'GET' && profileMatch) {
     const target = await store.getUserByUsername(profileMatch[1]);
     if (!target) return sendJSON(res, 404, { error: 'No such user.' });
-    const allowed = canViewMap(user, target);
+    // only maps the viewer is allowed to see are listed at all
     return sendJSON(res, 200, {
       user: publicUser(target, user),
-      canView: allowed,
-      map: allowed ? target.map : null,
+      maps: visibleMapsOf(target, user).map(m => mapMeta(m)),
     });
   }
 
@@ -591,7 +926,7 @@ const server = http.createServer(async (req, res) => {
 
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {
-    console.log(`Port ${PORT} is already in use — Mind/Map 3D is probably already running.`);
+    console.log(`Port ${PORT} is already in use — MindMapShare is probably already running.`);
     console.log(`Just open http://localhost:${PORT} in your browser.`);
     process.exit(0);
   }
@@ -600,7 +935,7 @@ server.on('error', err => {
 
 store.init().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Mind/Map 3D is running (storage: ${store.kind}):`);
+    console.log(`MindMapShare is running (storage: ${store.kind}):`);
     console.log(`  This computer:  http://localhost:${PORT}`);
     if (!DATABASE_URL) {
       console.log('  NOTE: no DATABASE_URL set — using local file storage. Fine for');
