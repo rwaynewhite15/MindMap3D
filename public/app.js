@@ -759,10 +759,29 @@ function createMapView(host, opts = {}) {
     return pts;
   }
 
-  // Force-directed 3D layout: repulsion spreads items evenly, weighted-edge
+  // Evenly pack `count` points on a flat z=0 disc (sunflower phyllotaxis);
+  // neighboring points end up roughly `spacing` apart.
+  function flatDisc(count, spacing) {
+    const pts = [];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < count; i++) {
+      const rr = spacing * Math.sqrt(i + 0.5);
+      const th = golden * i;
+      pts.push([Math.cos(th) * rr, Math.sin(th) * rr, 0]);
+    }
+    return pts;
+  }
+
+  // Force-directed layout: repulsion spreads items evenly, weighted-edge
   // springs keep connected items adjacent, gravity keeps the cloud compact.
   // items: [{ id, r, p:[x,y,z] }] — p is mutated. edges: [{ a, b, w }].
-  function forceLayout(items, edges, gap) {
+  // With `flat` set, starts are projected onto the z=0 plane and every random
+  // jiggle stays in-plane, so all forces (and thus the result) are planar.
+  function forceLayout(items, edges, gap, flat) {
+    const rnd = flat
+      ? () => { const t = Math.random() * Math.PI * 2; return [Math.cos(t), Math.sin(t), 0]; }
+      : randUnit;
+    if (flat) for (const it of items) it.p = [it.p[0], it.p[1], 0];
     const n = items.length;
     if (n < 2) { if (n === 1) items[0].p = [0, 0, 0]; return; }
     const idx = new Map(items.map((it, i) => [it.id, i]));
@@ -772,7 +791,7 @@ function createMapView(host, opts = {}) {
     // scatter exactly-coincident starts so forces have a direction to act on
     for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
       if (len(sub(items[i].p, items[j].p)) < 1) {
-        items[j].p = add3(items[j].p, mul(randUnit(), 5 + Math.random() * 10));
+        items[j].p = add3(items[j].p, mul(rnd(), 5 + Math.random() * 10));
       }
     }
 
@@ -796,7 +815,7 @@ function createMapView(host, opts = {}) {
       for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
         let d = sub(items[i].p, items[j].p);
         let dist = len(d);
-        if (dist < 1) { d = randUnit(); dist = 1; }
+        if (dist < 1) { d = rnd(); dist = 1; }
         const minD = items[i].r + items[j].r + gap;
         if (dist > cutoff && dist > minD) continue; // far apart and not touching: no push
         // full repulsion between unrelated items; barely any between linked ones
@@ -834,7 +853,7 @@ function createMapView(host, opts = {}) {
       for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
         let d = sub(items[j].p, items[i].p);
         let dist = len(d);
-        if (dist < 1) { d = randUnit(); dist = 1; }
+        if (dist < 1) { d = rnd(); dist = 1; }
         const minD = items[i].r + items[j].r + Math.min(gap, 30);
         if (dist < minD) {
           const shift = mul(d, (minD - dist) / dist / 2);
@@ -927,6 +946,84 @@ function createMapView(host, opts = {}) {
     return true;
   }
 
+  // Organize the whole map onto a single flat plane (z = 0) and face it
+  // head-on, so the 3D cloud reads as a clear 2D map. Same glide-and-save
+  // flow as autoArrange; also stops the spin and zooms to fit the layout.
+  function flattenTo2D() {
+    const all = Object.values(map.nodes);
+    if (!all.length || arranging) return false;
+
+    // 1) inside each group: pack children on a flat disc sized to fit them
+    const containerKids = new Map();
+    for (const nd of all) if (nd.kind === 'container') containerKids.set(nd.id, []);
+    for (const nd of all) {
+      if (nd.parentId && containerKids.has(nd.parentId)) containerKids.get(nd.parentId).push(nd);
+    }
+    const newSize = new Map();     // containerId → radius that snugly fits its children
+    const childOffset = new Map(); // childId → flat offset from its container's center
+    for (const [cid, kids] of containerKids) {
+      if (!kids.length) { newSize.set(cid, 150); continue; }
+      const mr = Math.max(...kids.map(kd => kd.r));
+      const spacing = 2 * mr + 24;
+      const pts = kids.length === 1 ? [[0, 0, 0]] : flatDisc(kids.length, spacing);
+      kids.forEach((kd, i) => childOffset.set(kd.id, pts[i]));
+      const discR = kids.length === 1 ? 0 : spacing * Math.sqrt(kids.length);
+      newSize.set(cid, Math.max(130, discR + mr + 20));
+    }
+
+    // 2) top level (loose bubbles + groups): force-directed spread in the plane.
+    // Edges that reach inside a group count as edges to the group itself.
+    const isTop = nd => !(nd.parentId && map.nodes[nd.parentId]);
+    const items = all.filter(isTop).map(nd => ({
+      id: nd.id,
+      r: nd.kind === 'container' ? (newSize.get(nd.id) || nd.r) : nd.r,
+      p: [...nd.pos],
+    }));
+    const rep = id => {
+      const nd = map.nodes[id];
+      return nd && nd.parentId && map.nodes[nd.parentId] ? nd.parentId : id;
+    };
+    const topEdges = new Map();
+    for (const e of map.edges) {
+      const a = rep(e.a), b = rep(e.b);
+      if (a === b) continue;
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      const prev = topEdges.get(key);
+      if (!prev || e.w > prev.w) topEdges.set(key, { a, b, w: e.w });
+    }
+    forceLayout(items, [...topEdges.values()], 40, true);
+
+    // 3) collect targets; children ride along with their group (flat offsets,
+    // so they land in the same plane)
+    const to = {};
+    for (const it of items) {
+      to[it.id] = it.p;
+      const kids = containerKids.get(it.id);
+      if (kids) for (const kd of kids) to[kd.id] = add3(it.p, childOffset.get(kd.id));
+    }
+    for (const [cid, r] of newSize) { const c = map.nodes[cid]; if (c) c.r = r; }
+    buildDOM();
+
+    // 4) face the plane straight-on and stop the spin so it stays 2D on screen;
+    // pull the camera back just far enough that the whole layout fits
+    yaw = 0; pitch = 0;
+    pivot = [0, 0, 0];
+    centeredId = null;
+    spinning = false;
+    let extent = 200;
+    for (const it of items) {
+      extent = Math.max(extent, Math.hypot(it.p[0], it.p[1]) + it.r);
+    }
+    const half = Math.max(120, Math.min(host.clientWidth || 800, host.clientHeight || 600) / 2 - 40);
+    camDist = Math.min(3200, Math.max(300, (FOCAL * extent) / half));
+
+    // 5) glide everything to its new spot, then save
+    const from = {};
+    for (const id of Object.keys(to)) from[id] = [...map.nodes[id].pos];
+    arranging = { t0: performance.now(), dur: 750, from, to };
+    return true;
+  }
+
   /* ---------- public API ---------- */
   return {
     setMap(m) {
@@ -1003,7 +1100,7 @@ function createMapView(host, opts = {}) {
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode,
-    setWeight, deleteEdge, moveIntoContainer, autoArrange,
+    setWeight, deleteEdge, moveIntoContainer, autoArrange, flattenTo2D,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
       const n = map.nodes[id];
@@ -1525,6 +1622,14 @@ function initEditor() {
   $('#btnArrange').addEventListener('click', () => {
     if (myMap.autoArrange()) setHint('Auto-arranged — bubbles spread out evenly', false);
     else setHint('Nothing to arrange yet — add a couple of bubbles first', false);
+  });
+  $('#btnFlatten').addEventListener('click', () => {
+    if (myMap.flattenTo2D()) {
+      $('#btnSpin').classList.toggle('active', myMap.getSpin()); // flatten stops the spin
+      setHint('Flattened into a 2D map — spin is off; press ↻ to go 3D again', false);
+    } else {
+      setHint('Nothing to flatten yet — add a bubble first', false);
+    }
   });
   $('#btnConnect').addEventListener('click', () => {
     if (myMap.isConnecting()) {
