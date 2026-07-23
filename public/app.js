@@ -206,15 +206,23 @@ function createMapView(host, opts = {}) {
       label.className = 'label';
       label.textContent = n.label || 'Untitled';
       el.appendChild(label);
-      // a small dog-ear badge marks bubbles that carry a note
-      if (n.note && n.note.trim()) {
-        const badge = document.createElement('div');
-        badge.className = 'note-badge';
-        badge.textContent = '📝';
-        badge.title = 'Has a note';
-        el.appendChild(badge);
+      // small badges mark bubbles that carry a note and/or a link
+      const badges = [];
+      if (n.note && n.note.trim()) badges.push(['📝', 'Has a note']);
+      if (n.link) badges.push(['🔗', 'Has a link']);
+      if (badges.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'node-badges';
+        for (const [icon, title] of badges) {
+          const b = document.createElement('div');
+          b.className = 'note-badge';
+          b.textContent = icon; b.title = title;
+          wrap.appendChild(b);
+        }
+        el.appendChild(wrap);
       }
       el.classList.toggle('has-note', !!(n.note && n.note.trim()));
+      el.classList.toggle('done', !!n.done); // completed task: dimmed + struck through
       layer.appendChild(el);
       nodeEls.set(n.id, el);
     }
@@ -650,7 +658,7 @@ function createMapView(host, opts = {}) {
     const sel = selectedId && map.nodes[selectedId];
     const id = newId();
     const n = {
-      id, label: '', note: '', pos: [0, 0, 0], r: 62,
+      id, label: '', note: '', link: '', done: false, pos: [0, 0, 0], r: 62,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
       parentId: null, kind: 'bubble',
     };
@@ -686,7 +694,7 @@ function createMapView(host, opts = {}) {
     const base = sel ? sel.pos : [0, 0, 0];
     const offset = sel ? (sel.r + 150 + 90) : 200 + Math.random() * 120;
     const n = {
-      id, label: '', note: '', kind: 'container', r: 150,
+      id, label: '', note: '', link: '', done: false, kind: 'container', r: 150,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
       parentId: null,
       pos: sel ? add3(base, mul(randUnit(), offset)) : mul(randUnit(), offset),
@@ -738,6 +746,50 @@ function createMapView(host, opts = {}) {
     n.note = next;
     changed();
     return true;
+  }
+
+  // A node's link (an http(s) URL). Non-URLs are cleared. Returns true if changed.
+  function setLink(id, link) {
+    const n = map.nodes[id];
+    if (!n) return false;
+    let next = String(link || '').trim().slice(0, 300);
+    if (next && !/^https?:\/\//i.test(next)) next = 'https://' + next; // be forgiving
+    if (next && !/^https?:\/\//i.test(next)) next = '';
+    if (next === (n.link || '')) return false;
+    n.link = next;
+    changed();
+    return true;
+  }
+
+  // Mark a node done (a completed task) or not. Returns true if changed.
+  function setDone(id, done) {
+    const n = map.nodes[id];
+    if (!n) return false;
+    if (!!done === !!n.done) return false;
+    n.done = !!done;
+    changed();
+    return true;
+  }
+
+  // Replace the whole map's contents (nodes + edges) in place — used by AI
+  // generation. Keeps the current camera; caller persists via onChange.
+  function loadGenerated(m) {
+    const src = (m && m.nodes) || {};
+    map.nodes = {};
+    for (const [id, n] of Object.entries(src)) {
+      map.nodes[id] = {
+        id, label: n.label || '', note: n.note || '', link: n.link || '', done: !!n.done,
+        pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0],
+        r: n.r || 62, hue: n.hue || 0, parentId: n.parentId || null,
+        kind: n.kind === 'container' ? 'container' : 'bubble',
+      };
+    }
+    map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+    selectedId = null; connectFrom = null; highlightedEdge = null;
+    hueCounter = Object.keys(map.nodes).length;
+    buildDOM();
+    fitView();
+    if (opts.onChange) opts.onChange();
   }
 
   function setWeight(edgeId, w) {
@@ -983,6 +1035,8 @@ function createMapView(host, opts = {}) {
           id,
           label: n.label || '',
           note: n.note || '',
+          link: n.link || '',
+          done: !!n.done,
           pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0], // flat 2D: z always 0
           r: n.r || 62,
           hue: n.hue || 0,
@@ -1024,6 +1078,8 @@ function createMapView(host, opts = {}) {
           id,
           label: n.label || '',
           note: n.note || '',
+          link: n.link || '',
+          done: !!n.done,
           pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0], // flat 2D: z always 0
           r: n.r || 62,
           hue: n.hue || 0,
@@ -1051,6 +1107,7 @@ function createMapView(host, opts = {}) {
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
+    setLink, setDone, loadGenerated,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
@@ -1079,6 +1136,16 @@ function createMapView(host, opts = {}) {
       selectedId = id;
       updateSelectionClasses();
       if (opts.onSelect) opts.onSelect(id);
+    },
+    // select a node and pan the view to center it (used by the outline)
+    focusNode(id) {
+      const n = map.nodes[id];
+      if (!n) return false;
+      selectedId = id;
+      pivot = [...n.pos];
+      updateSelectionClasses();
+      if (opts.onSelect) opts.onSelect(id);
+      return true;
     },
     // center the rotation on a node (used by read-only viewers)
     centerOnNode(id) {
@@ -1142,6 +1209,8 @@ const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settin
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
+  if (name !== 'map' && outlineOpen) toggleOutline(false); // outline belongs to the editor
+  $('#btnAI').hidden = !(me && me.aiEnabled); // AI button only when the server enables it
   for (const s of sections) $('#view-' + s).hidden = s !== name;
   // hide the top bar only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
@@ -1182,7 +1251,7 @@ window.addEventListener('hashchange', route);
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1215,6 +1284,8 @@ function openRename(nodeId, focusField) {
   input.placeholder = isGroup ? 'Name this group…' : 'Type an idea…';
   const note = $('#noteInput');
   note.value = n.note || '';
+  $('#linkInput').value = n.link || '';
+  $('#doneInput').checked = !!n.done;
   requestAnimationFrame(() => {
     if (focusField === 'note') { note.focus(); note.select(); }
     else { input.focus(); input.select(); }
@@ -1224,7 +1295,10 @@ function commitRenameIfOpen() {
   if (renameTarget && !$('#sheetRename').hidden) {
     myMap.renameNode(renameTarget, $('#renameInput').value);
     myMap.setNote(renameTarget, $('#noteInput').value);
+    myMap.setLink(renameTarget, $('#linkInput').value);
+    myMap.setDone(renameTarget, $('#doneInput').checked);
     refreshToolbar(); // reflect a note being added/removed on the Note button
+    refreshOutlineIfOpen();
   }
 }
 $('#renameSave').addEventListener('click', () => { commitRenameIfOpen(); closeSheets(); });
@@ -1239,6 +1313,11 @@ $('#noteInput').addEventListener('keydown', e => {
   e.stopPropagation(); // Enter here is a newline; don't trigger global shortcuts
   // Cmd/Ctrl+Enter saves without hunting for the button
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { commitRenameIfOpen(); closeSheets(); }
+  if (e.key === 'Escape') closeSheets();
+});
+$('#linkInput').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { commitRenameIfOpen(); closeSheets(); }
   if (e.key === 'Escape') closeSheets();
 });
 
@@ -1478,6 +1557,7 @@ let mapDirty = false;
 
 function saveMap() {
   if (!currentMapId) return;
+  refreshOutlineIfOpen(); // keep the outline in sync with edits
   mapDirty = true;
   clearTimeout(saveTimer);
   const state = $('#saveState');
@@ -1532,6 +1612,128 @@ function refreshToolbar() {
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
   $('#btnAddBubble').textContent = sel && sel.kind === 'container' ? '+ Bubble in group' : '+ Bubble';
 }
+
+/* ================================================================
+   Outline view — the map as a collapsible text tree
+================================================================ */
+let outlineOpen = false;
+const outlineCollapsed = new Set(); // group ids currently collapsed
+
+function toggleOutline(force) {
+  outlineOpen = force === undefined ? !outlineOpen : force;
+  $('#outlinePanel').hidden = !outlineOpen;
+  $('#btnOutline').classList.toggle('active', outlineOpen);
+  if (outlineOpen) buildOutline();
+}
+function refreshOutlineIfOpen() { if (outlineOpen) buildOutline(); }
+
+function makeOutlineRow(n, depth, childrenOf) {
+  const row = document.createElement('div');
+  row.className = 'outline-row' + (n.kind === 'container' ? ' group' : '') + (n.done ? ' done' : '');
+  row.style.paddingLeft = (8 + depth * 16) + 'px';
+
+  if (n.kind === 'container') {
+    const caret = document.createElement('button');
+    caret.className = 'outline-caret';
+    caret.textContent = outlineCollapsed.has(n.id) ? '▸' : '▾';
+    caret.title = 'Collapse / expand';
+    caret.addEventListener('click', e => {
+      e.stopPropagation();
+      if (outlineCollapsed.has(n.id)) outlineCollapsed.delete(n.id); else outlineCollapsed.add(n.id);
+      buildOutline();
+    });
+    row.appendChild(caret);
+  } else {
+    const dot = document.createElement('span');
+    dot.className = 'outline-dot';
+    row.appendChild(dot);
+  }
+
+  const label = document.createElement('span');
+  label.className = 'outline-label';
+  label.textContent = n.label || 'Untitled';
+  row.appendChild(label);
+
+  const meta = document.createElement('span');
+  meta.className = 'outline-meta';
+  const bits = [];
+  if (n.note && n.note.trim()) bits.push('📝');
+  if (n.link) bits.push('🔗');
+  if (n.done) bits.push('✓');
+  meta.textContent = bits.join(' ');
+  row.appendChild(meta);
+
+  // single click focuses the node on the canvas; double-click opens the editor
+  row.addEventListener('click', () => { myMap.focusNode(n.id); refreshToolbar(); });
+  row.addEventListener('dblclick', () => openRename(n.id));
+  return row;
+}
+
+function buildOutline() {
+  const body = $('#outlineBody');
+  body.innerHTML = '';
+  const map = myMap.getMap();
+  const byId = map.nodes || {};
+  const nodes = Object.values(byId);
+  if (!nodes.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'Empty map — add a bubble to get started.';
+    body.appendChild(d);
+    return;
+  }
+  const childrenOf = id => nodes.filter(n => n.parentId === id);
+  const groups = nodes.filter(n => n.kind === 'container');
+  const loose = nodes.filter(n => n.kind === 'bubble' && !(n.parentId && byId[n.parentId]));
+
+  const addRow = (n, depth) => {
+    body.appendChild(makeOutlineRow(n, depth, childrenOf));
+    if (n.kind === 'container' && !outlineCollapsed.has(n.id)) {
+      for (const k of childrenOf(n.id)) addRow(k, depth + 1);
+    }
+  };
+  for (const g of groups) addRow(g, 0);
+  for (const b of loose) addRow(b, 0);
+}
+
+$('#btnOutlineClose').addEventListener('click', () => toggleOutline(false));
+
+/* ================================================================
+   AI map generation (optional — only when the server has it configured)
+================================================================ */
+function openAISheet() {
+  if (!me || !me.aiEnabled) return;
+  openSheet('#sheetAI');
+  $('#aiError').textContent = '';
+  const ta = $('#aiPrompt');
+  requestAnimationFrame(() => ta.focus());
+}
+async function runAIGenerate() {
+  const prompt = $('#aiPrompt').value.trim();
+  const err = $('#aiError');
+  if (prompt.length < 3) { err.textContent = 'Describe the map you want in a few words.'; return; }
+  if (!currentMapId) return;
+  const btn = $('#aiGenerate');
+  btn.disabled = true; btn.textContent = 'Generating…'; err.textContent = '';
+  try {
+    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt });
+    myMap.loadGenerated(data.map); // replaces contents, fits the view, and saves
+    refreshToolbar();
+    refreshOutlineIfOpen();
+    closeSheets();
+    setHint('Generated a map ✨ — edit away, it saves automatically', false);
+  } catch (e) {
+    err.textContent = e.message || 'Generation failed.';
+  }
+  btn.disabled = false; btn.textContent = 'Generate';
+}
+$('#aiCancel').addEventListener('click', () => closeSheets());
+$('#aiGenerate').addEventListener('click', runAIGenerate);
+$('#aiPrompt').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate();
+  if (e.key === 'Escape') closeSheets();
+});
 
 function initEditor() {
   myMap = createMapView($('#myMapHost'), {
@@ -1588,6 +1790,8 @@ function initEditor() {
     if (myMap.autoArrange()) setHint('Tidied — bubbles spread out evenly', false);
     else setHint('Nothing to tidy yet — add a bubble first', false);
   });
+  $('#btnOutline').addEventListener('click', () => toggleOutline());
+  $('#btnAI').addEventListener('click', openAISheet);
   $('#btnConnect').addEventListener('click', () => {
     if (myMap.isConnecting()) {
       myMap.cancelConnect();
@@ -2673,7 +2877,17 @@ function setProfileHint(text) {
 // read-only note reader shown when a map viewer taps a bubble that has a note
 function showNoteViewer(n) {
   $('#noteViewerTitle').textContent = n.label || 'Untitled';
-  $('#noteViewerBody').textContent = n.note || '';
+  const body = $('#noteViewerBody');
+  body.textContent = n.note || '';
+  body.hidden = !(n.note && n.note.trim());
+  const link = $('#noteViewerLink');
+  if (n.link && /^https?:\/\//i.test(n.link)) {
+    link.href = n.link;
+    link.textContent = '🔗 ' + n.link;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
   $('#noteViewer').hidden = false;
 }
 function hideNoteViewer() { $('#noteViewer').hidden = true; }
@@ -2689,8 +2903,8 @@ function initProfileViewer() {
       if (id === null) { hideNoteViewer(); setProfileHint('Drag to pan · tap a bubble to focus it'); return; }
       const n = profileMap.getNode(id);
       if (!n) return;
-      // tapping a bubble that carries a note pops it open to read
-      if (n.note && n.note.trim()) showNoteViewer(n);
+      // tapping a bubble that carries a note or link pops it open to read
+      if ((n.note && n.note.trim()) || n.link) showNoteViewer(n);
       else { hideNoteViewer(); setProfileHint(`"${n.label || 'Untitled'}" · drag to pan`); }
     },
     isSheetOpen: () => !$('#pickMenu').hidden,
