@@ -405,6 +405,12 @@ function diffMaps(before, after, actor) {
       if ((was.label || '') !== (now.label || '')) {
         entries.push(`renamed ${noun(now)} "${labelOf(was)}" → "${labelOf(now)}"`);
       }
+      const wasNote = (was.note || '').trim(), nowNote = (now.note || '').trim();
+      if (wasNote !== nowNote) {
+        if (!wasNote) entries.push(`added a note to "${labelOf(now)}"`);
+        else if (!nowNote) entries.push(`removed the note from "${labelOf(now)}"`);
+        else entries.push(`edited the note on "${labelOf(now)}"`);
+      }
       const wasParent = was.parentId || null, nowParent = now.parentId || null;
       if (wasParent !== nowParent) {
         if (nowParent && an[nowParent]) entries.push(`moved "${labelOf(now)}" into group "${labelOf(an[nowParent])}"`);
@@ -521,6 +527,7 @@ function sanitizeMap(input) {
     out.nodes[safeId] = {
       id: safeId,
       label: String(n.label || '').slice(0, 80),
+      note: String(n.note || '').slice(0, 4000),
       pos: Array.isArray(n.pos) ? [num(n.pos[0]), num(n.pos[1]), num(n.pos[2])] : [0, 0, 0],
       r: Math.max(20, Math.min(400, num(n.r) || 62)),
       hue: Math.max(0, Math.min(11, Math.floor(num(n.hue)))),

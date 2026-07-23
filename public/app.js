@@ -201,6 +201,15 @@ function createMapView(host, opts = {}) {
       label.className = 'label';
       label.textContent = n.label || 'Untitled';
       el.appendChild(label);
+      // a small dog-ear badge marks bubbles that carry a note
+      if (n.note && n.note.trim()) {
+        const badge = document.createElement('div');
+        badge.className = 'note-badge';
+        badge.textContent = '📝';
+        badge.title = 'Has a note';
+        el.appendChild(badge);
+      }
+      el.classList.toggle('has-note', !!(n.note && n.note.trim()));
       layer.appendChild(el);
       nodeEls.set(n.id, el);
     }
@@ -636,7 +645,7 @@ function createMapView(host, opts = {}) {
     const sel = selectedId && map.nodes[selectedId];
     const id = newId();
     const n = {
-      id, label: '', pos: [0, 0, 0], r: 62,
+      id, label: '', note: '', pos: [0, 0, 0], r: 62,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
       parentId: null, kind: 'bubble',
     };
@@ -672,7 +681,7 @@ function createMapView(host, opts = {}) {
     const base = sel ? sel.pos : [0, 0, 0];
     const offset = sel ? (sel.r + 150 + 90) : 200 + Math.random() * 120;
     const n = {
-      id, label: '', kind: 'container', r: 150,
+      id, label: '', note: '', kind: 'container', r: 150,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
       parentId: null,
       pos: sel ? add3(base, mul(randUnit(), offset)) : mul(randUnit(), offset),
@@ -712,6 +721,18 @@ function createMapView(host, opts = {}) {
     if (!n) return;
     n.label = String(label || '').trim().slice(0, 80) || 'Untitled';
     changed();
+  }
+
+  // Set the free-text note attached to a node. Returns true if it changed,
+  // so callers can skip a needless save/broadcast when nothing was edited.
+  function setNote(id, note) {
+    const n = map.nodes[id];
+    if (!n) return false;
+    const next = String(note || '').slice(0, 4000);
+    if (next === (n.note || '')) return false;
+    n.note = next;
+    changed();
+    return true;
   }
 
   function setWeight(edgeId, w) {
@@ -1033,6 +1054,7 @@ function createMapView(host, opts = {}) {
         map.nodes[id] = {
           id,
           label: n.label || '',
+          note: n.note || '',
           pos: Array.isArray(n.pos) ? [...n.pos] : [0, 0, 0],
           r: n.r || 62,
           hue: n.hue || 0,
@@ -1073,6 +1095,7 @@ function createMapView(host, opts = {}) {
         map.nodes[id] = {
           id,
           label: n.label || '',
+          note: n.note || '',
           pos: Array.isArray(n.pos) ? [...n.pos] : [0, 0, 0],
           r: n.r || 62,
           hue: n.hue || 0,
@@ -1099,7 +1122,7 @@ function createMapView(host, opts = {}) {
     containers,
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
-    addBubble, addContainer, deleteSelected, renameSelected, renameNode,
+    addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setWeight, deleteEdge, moveIntoContainer, autoArrange, flattenTo2D,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
@@ -1193,6 +1216,7 @@ let chatUnread = 0;
 const sections = ['auth', 'map', 'browse', 'friends', 'profile', 'settings'];
 
 function show(name) {
+  if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
   for (const s of sections) $('#view-' + s).hidden = s !== name;
   // hide the top bar only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
@@ -1250,28 +1274,45 @@ function closeSheets() {
 function anySheetOpen() { return allSheets.some(s => !$(s).hidden) || !$('#pickMenu').hidden; }
 sheetShade.addEventListener('pointerdown', () => { commitRenameIfOpen(); closeSheets(); });
 
-/* ---------- rename sheet ---------- */
+/* ---------- edit sheet (name + notes) ---------- */
 let renameTarget = null;
-function openRename(nodeId) {
+// focusField: 'label' (default, used on add/rename) or 'note' (used by 📝 Note)
+function openRename(nodeId, focusField) {
   const n = myMap.getNode(nodeId);
   if (!n) return;
   renameTarget = nodeId;
   openSheet('#sheetRename');
+  const isGroup = n.kind === 'container';
+  $('#renameTitle').textContent = isGroup ? 'Edit group' : 'Edit bubble';
   const input = $('#renameInput');
   input.value = n.label === 'Untitled' ? '' : n.label;
-  input.placeholder = n.kind === 'container' ? 'Name this group…' : 'Type an idea…';
-  requestAnimationFrame(() => { input.focus(); input.select(); });
+  input.placeholder = isGroup ? 'Name this group…' : 'Type an idea…';
+  const note = $('#noteInput');
+  note.value = n.note || '';
+  requestAnimationFrame(() => {
+    if (focusField === 'note') { note.focus(); note.select(); }
+    else { input.focus(); input.select(); }
+  });
 }
 function commitRenameIfOpen() {
   if (renameTarget && !$('#sheetRename').hidden) {
     myMap.renameNode(renameTarget, $('#renameInput').value);
+    myMap.setNote(renameTarget, $('#noteInput').value);
+    refreshToolbar(); // reflect a note being added/removed on the Note button
   }
 }
 $('#renameSave').addEventListener('click', () => { commitRenameIfOpen(); closeSheets(); });
 $('#renameCancel').addEventListener('click', () => closeSheets());
 $('#renameInput').addEventListener('keydown', e => {
   e.stopPropagation();
+  // Enter in the name field saves right away (keeps the quick add-and-name flow)
   if (e.key === 'Enter') { commitRenameIfOpen(); closeSheets(); }
+  if (e.key === 'Escape') closeSheets();
+});
+$('#noteInput').addEventListener('keydown', e => {
+  e.stopPropagation(); // Enter here is a newline; don't trigger global shortcuts
+  // Cmd/Ctrl+Enter saves without hunting for the button
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { commitRenameIfOpen(); closeSheets(); }
   if (e.key === 'Escape') closeSheets();
 });
 
@@ -1556,6 +1597,11 @@ function refreshToolbar() {
   const sel = myMap ? myMap.getSelected() : null;
   $('#btnConnect').disabled = !sel;
   $('#btnRename').disabled = !sel;
+  const noteBtn = $('#btnNote');
+  noteBtn.disabled = !sel;
+  const hasNote = !!sel && !!(sel.note && sel.note.trim());
+  noteBtn.classList.toggle('active', hasNote);
+  noteBtn.textContent = hasNote ? '📝 Note ✓' : '📝 Note';
   $('#btnCenterSel').disabled = !sel;
   $('#btnDelete').disabled = !sel;
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
@@ -1645,6 +1691,10 @@ function initEditor() {
     const sel = myMap.getSelected();
     if (sel) openRename(sel.id);
   });
+  $('#btnNote').addEventListener('click', () => {
+    const sel = myMap.getSelected();
+    if (sel) openRename(sel.id, 'note');
+  });
   $('#btnColor').addEventListener('click', openColorSheet);
   $('#btnCenterSel').addEventListener('click', () => {
     const sel = myMap.getSelected();
@@ -1703,6 +1753,9 @@ function initEditor() {
     else if (e.key === 'F2') {
       const sel = myMap.getSelected();
       if (sel) { e.preventDefault(); openRename(sel.id); }
+    } else if (e.key === 'n' || e.key === 'N') {
+      const sel = myMap.getSelected();
+      if (sel) { e.preventDefault(); openRename(sel.id, 'note'); }
     } else if (e.key === 'Escape' && myMap.isConnecting()) {
       myMap.cancelConnect();
       $('#btnConnect').classList.remove('active');
@@ -2551,6 +2604,14 @@ function setProfileHint(text) {
   profileHintTimer = setTimeout(() => { $('#profileHint').textContent = PROFILE_HINT_DEFAULT; }, 2500);
 }
 
+// read-only note reader shown when a map viewer taps a bubble that has a note
+function showNoteViewer(n) {
+  $('#noteViewerTitle').textContent = n.label || 'Untitled';
+  $('#noteViewerBody').textContent = n.note || '';
+  $('#noteViewer').hidden = false;
+}
+function hideNoteViewer() { $('#noteViewer').hidden = true; }
+
 function initProfileViewer() {
   // read-only, but a tap on any bubble makes it the center of rotation;
   // overlapping bubbles open a dropdown to choose which one
@@ -2559,12 +2620,16 @@ function initProfileViewer() {
     tapToCenter: true,
     onPick: (hits, cx, cy, mode) => showPickMenu(profileMap, true, hits, cx, cy, mode),
     onCenter: id => {
-      if (id === null) { setProfileHint('Panning — tap a bubble to orbit around it'); return; }
+      if (id === null) { hideNoteViewer(); setProfileHint('Panning — tap a bubble to orbit around it'); return; }
       const n = profileMap.getNode(id);
-      if (n) setProfileHint(`Orbiting "${n.label || 'Untitled'}" — click empty space to pan`);
+      if (!n) return;
+      // tapping a bubble that carries a note pops it open to read
+      if (n.note && n.note.trim()) showNoteViewer(n);
+      else { hideNoteViewer(); setProfileHint(`Orbiting "${n.label || 'Untitled'}" — click empty space to pan`); }
     },
     isSheetOpen: () => !$('#pickMenu').hidden,
   });
+  $('#noteViewerClose').addEventListener('click', hideNoteViewer);
   $('#btnPSpin').classList.add('active');
   $('#btnPSpin').addEventListener('click', () => {
     profileMap.setSpin(!profileMap.getSpin());
