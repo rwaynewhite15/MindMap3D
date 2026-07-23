@@ -72,6 +72,8 @@
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
+      <button id="btnAI" class="tb" hidden title="Generate a mind map from a prompt with AI">✨ AI</button>
+      <button id="btnOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <button id="btnArrange" class="tb" title="Tidy: spread all bubbles and groups out evenly">✨ Tidy</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
@@ -106,6 +108,15 @@
         </form>
       </div>
       <div id="chatResize" class="chat-resize" title="Drag to resize" aria-hidden="true"></div>
+    </aside>
+
+    <!-- outline: the map as a collapsible text tree -->
+    <aside id="outlinePanel" class="outline-panel" hidden>
+      <div class="outline-head">
+        <div class="outline-title">Outline</div>
+        <button id="btnOutlineClose" class="tb icon" title="Close outline" aria-label="Close outline">✕</button>
+      </div>
+      <div id="outlineBody" class="outline-body"></div>
     </aside>
   </section>
 
@@ -202,11 +213,25 @@
 <div id="sheetRename" class="sheet" hidden>
   <div class="sheet-title" id="renameTitle">Edit bubble</div>
   <input id="renameInput" maxlength="80" placeholder="Type an idea…">
-  <label class="field-title" for="noteInput">Notes <span class="muted">— details, links, context</span></label>
-  <textarea id="noteInput" maxlength="4000" rows="5" placeholder="Add notes for this bubble… (visible to anyone who can see the map)"></textarea>
+  <label class="field-title" for="noteInput">Notes <span class="muted">— details, context</span></label>
+  <textarea id="noteInput" maxlength="4000" rows="4" placeholder="Add notes for this bubble… (visible to anyone who can see the map)"></textarea>
+  <label class="field-title" for="linkInput">Link <span class="muted">— an optional web address</span></label>
+  <input id="linkInput" type="url" maxlength="300" placeholder="https://…">
+  <label class="check"><input type="checkbox" id="doneInput"> Mark as a completed task</label>
   <div class="sheet-row">
     <button id="renameCancel" class="tb">Cancel</button>
     <button id="renameSave" class="tb primary-tb">Save</button>
+  </div>
+</div>
+
+<div id="sheetAI" class="sheet" hidden>
+  <div class="sheet-title">✨ Generate a mind map</div>
+  <div class="muted" style="margin-bottom:8px">Describe a topic and AI will build a starting map. This replaces the current map's contents.</div>
+  <textarea id="aiPrompt" maxlength="600" rows="3" placeholder="e.g. A launch plan for a coffee subscription startup"></textarea>
+  <div class="form-error" id="aiError"></div>
+  <div class="sheet-row">
+    <button id="aiCancel" class="tb">Cancel</button>
+    <button id="aiGenerate" class="tb primary-tb">Generate</button>
   </div>
 </div>
 
@@ -232,6 +257,7 @@
     <button id="noteViewerClose" class="tb icon" title="Close" aria-label="Close note">✕</button>
   </div>
   <div id="noteViewerBody" class="note-viewer-body"></div>
+  <a id="noteViewerLink" class="note-viewer-link" target="_blank" rel="noopener noreferrer" hidden></a>
 </div>
 
 <div id="sheetGroup" class="sheet" hidden>

@@ -405,6 +405,7 @@ function meUser(u) {
     showDisplayName: !!u.showDisplayName,
     visibility: u.visibility,
     bio: u.bio || '',
+    aiEnabled: aiConfigured(), // whether AI map generation is available
   };
 }
 
@@ -435,6 +436,9 @@ function diffMaps(before, after, actor) {
         if (!wasNote) entries.push(`added a note to "${labelOf(now)}"`);
         else if (!nowNote) entries.push(`removed the note from "${labelOf(now)}"`);
         else entries.push(`edited the note on "${labelOf(now)}"`);
+      }
+      if (!was.done !== !now.done) {
+        entries.push(`${now.done ? 'completed' : 'reopened'} "${labelOf(now)}"`);
       }
       const wasParent = was.parentId || null, nowParent = now.parentId || null;
       if (wasParent !== nowParent) {
@@ -539,6 +543,14 @@ function startLiveStream(req, res, mapId, who) {
 /* ================================================================
    Map validation
 ================================================================ */
+// A node link may only be an http(s) URL — never javascript:, data:, etc.,
+// since it becomes a clickable anchor in viewers' browsers.
+function cleanLink(v) {
+  const s = String(v || '').trim().slice(0, 300);
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : '';
+}
+
 function sanitizeMap(input) {
   if (!input || typeof input !== 'object') return null;
   const out = { nodes: {}, edges: [] };
@@ -553,6 +565,8 @@ function sanitizeMap(input) {
       id: safeId,
       label: String(n.label || '').slice(0, 80),
       note: String(n.note || '').slice(0, 4000),
+      link: cleanLink(n.link),
+      done: !!n.done,
       pos: Array.isArray(n.pos) ? [num(n.pos[0]), num(n.pos[1]), num(n.pos[2])] : [0, 0, 0],
       r: Math.max(20, Math.min(400, num(n.r) || 62)),
       hue: Math.max(0, Math.min(11, Math.floor(num(n.hue)))),
@@ -585,6 +599,154 @@ function sanitizeMap(input) {
   const anchor = input.anchorId ? String(input.anchorId).slice(0, 24) : null;
   out.anchorId = anchor && out.nodes[anchor] ? anchor : null;
   return out;
+}
+
+/* ================================================================
+   AI map generation (optional — requires ANTHROPIC_API_KEY at runtime)
+================================================================ */
+const AI_MODEL = 'claude-opus-4-8';
+const AI_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    groups: {
+      type: 'array',
+      description: 'Optional groupings that cluster related ideas.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { id: { type: 'string' }, label: { type: 'string' } },
+        required: ['id', 'label'],
+      },
+    },
+    nodes: {
+      type: 'array',
+      description: 'The idea bubbles. 12–30 is a good range.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          label: { type: 'string', description: 'Short label, a few words.' },
+          note: { type: 'string', description: 'Optional 1–2 sentence detail, or empty string.' },
+          group: { type: 'string', description: 'id of the group this belongs to, or empty string.' },
+        },
+        required: ['id', 'label', 'note', 'group'],
+      },
+    },
+    edges: {
+      type: 'array',
+      description: 'Connections between node ids. weight 1 (loose) to 10 (tight).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          weight: { type: 'integer' },
+        },
+        required: ['from', 'to', 'weight'],
+      },
+    },
+  },
+  required: ['groups', 'nodes', 'edges'],
+};
+
+function aiConfigured() { return !!process.env.ANTHROPIC_API_KEY; }
+
+async function generateMapFromPrompt(prompt) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const e = new Error('AI map generation isn’t configured on this server. Set ANTHROPIC_API_KEY to enable it.');
+    e.status = 503; throw e;
+  }
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch { const e = new Error('AI map generation is unavailable (the Anthropic SDK is not installed).'); e.status = 503; throw e; }
+  const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
+  const system =
+    'You design clear, well-organized mind maps. Given a topic, break it into a central set of ' +
+    'ideas with short labels, cluster closely related ones into a few named groups, and connect ' +
+    'ideas that relate with weighted edges (heavier = more strongly related). Aim for 12–30 nodes. ' +
+    'Keep labels to a few words; put any extra detail in the optional note. Use only ids you define.';
+  const response = await client.messages.create({
+    model: AI_MODEL,
+    max_tokens: 8000,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
+    system,
+    messages: [{ role: 'user', content: 'Create a mind map for this topic:\n\n' + prompt }],
+  });
+  if (response.stop_reason === 'refusal') {
+    const e = new Error('The AI declined to generate a map for that prompt.'); e.status = 422; throw e;
+  }
+  const textBlock = (response.content || []).find(b => b.type === 'text');
+  let data;
+  try { data = JSON.parse(textBlock ? textBlock.text : '{}'); }
+  catch { const e = new Error('The AI returned an unexpected response. Please try again.'); e.status = 502; throw e; }
+  return buildMapFromAI(data);
+}
+
+// Turn the model's {groups, nodes, edges} into a sanitized map (nodes+edges),
+// remapping arbitrary ids to safe ones and laying nodes out radially.
+function buildMapFromAI(data) {
+  const groupsIn = Array.isArray(data.groups) ? data.groups.slice(0, 8) : [];
+  const nodesIn = Array.isArray(data.nodes) ? data.nodes.slice(0, 40) : [];
+  const edgesIn = Array.isArray(data.edges) ? data.edges.slice(0, 80) : [];
+  const HUES_N = 6;
+  const nodes = {};
+  const idMap = new Map();     // AI id → new id (groups and nodes share the namespace)
+  const groupNewId = new Map();
+  let counter = 1;
+  const mkId = () => 'n' + (counter++);
+
+  groupsIn.forEach((g, i) => {
+    if (!g || typeof g !== 'object') return;
+    const id = mkId();
+    const aiId = String(g.id != null ? g.id : 'g' + i);
+    idMap.set(aiId, id); groupNewId.set(aiId, id);
+    nodes[id] = { id, kind: 'container', label: String(g.label || 'Group'), note: '', link: '', done: false, r: 150, hue: i % HUES_N, parentId: null, pos: [0, 0, 0] };
+  });
+  nodesIn.forEach((nd, i) => {
+    if (!nd || typeof nd !== 'object') return;
+    const id = mkId();
+    const aiId = String(nd.id != null ? nd.id : 'x' + i);
+    idMap.set(aiId, id);
+    const parentAi = nd.group ? String(nd.group) : '';
+    const parentId = parentAi && groupNewId.has(parentAi) ? groupNewId.get(parentAi) : null;
+    const hue = parentId ? nodes[parentId].hue : i % HUES_N;
+    nodes[id] = { id, kind: 'bubble', label: String(nd.label || 'Idea'), note: String(nd.note || ''), link: '', done: false, r: 62, hue, parentId, pos: [0, 0, 0] };
+  });
+
+  // radial layout: top-level items on a big circle, children around their group
+  const top = Object.values(nodes).filter(n => !n.parentId);
+  const R = Math.max(320, top.length * 70);
+  top.forEach((n, i) => {
+    const a = (i / Math.max(1, top.length)) * Math.PI * 2;
+    n.pos = [Math.cos(a) * R, Math.sin(a) * R, 0];
+  });
+  for (const g of Object.values(nodes)) {
+    if (g.kind !== 'container') continue;
+    const kids = Object.values(nodes).filter(n => n.parentId === g.id);
+    const kr = Math.max(90, kids.length * 26);
+    kids.forEach((k, i) => {
+      const a = (i / Math.max(1, kids.length)) * Math.PI * 2;
+      k.pos = [g.pos[0] + Math.cos(a) * kr, g.pos[1] + Math.sin(a) * kr, 0];
+    });
+    g.r = Math.max(150, kr + 80);
+  }
+
+  const edges = [];
+  const seen = new Set();
+  for (const e of edgesIn) {
+    if (!e || typeof e !== 'object') continue;
+    const a = idMap.get(String(e.from)), b = idMap.get(String(e.to));
+    if (!a || !b || a === b) continue;
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ id: 'e' + edges.length, a, b, w: Math.max(1, Math.min(10, Math.round(Number(e.weight) || 3))) });
+  }
+  return sanitizeMap({ nodes, edges });
 }
 
 /* ================================================================
@@ -828,7 +990,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { map: mapMeta(m, { editors: [] }) });
   }
 
-  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like))?$/);
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate))?$/);
   if (mapMatch) {
     const mapId = mapMatch[1], sub = mapMatch[2];
     const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
@@ -873,6 +1035,23 @@ async function handleApi(req, res, pathname) {
     }
     if (sub === 'live' && req.method === 'GET') {
       return startLiveStream(req, res, m.id, Object.assign(actorRef(user), { canEdit }));
+    }
+    // AI: generate a mind map from a text prompt. Returns nodes+edges for the
+    // client to load into this map (it then saves + broadcasts as a normal edit).
+    if (sub === 'generate' && req.method === 'POST') {
+      if (!canEdit) return sendJSON(res, 403, { error: 'You do not have edit permission for this map.' });
+      if (tooMany('gen:' + user.id, 30, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many generations this hour. Try again later.' });
+      }
+      const body = await readBody(req);
+      const prompt = String(body.prompt || '').trim().slice(0, 600);
+      if (prompt.length < 3) return sendJSON(res, 400, { error: 'Describe the map you want in a few words.' });
+      try {
+        const result = await generateMapFromPrompt(prompt);
+        return sendJSON(res, 200, { map: { nodes: result.nodes, edges: result.edges } });
+      } catch (err) {
+        return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
+      }
     }
     // Like / unlike a map. Anyone who can view it can like it (canViewMapObj
     // was already enforced above). Toggles the viewer's id in m.likes.
