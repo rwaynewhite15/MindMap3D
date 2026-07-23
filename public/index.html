@@ -75,6 +75,7 @@
       <button id="btnFlatten" class="tb" title="Organize the whole map into a clear flat 2D layout, viewed head-on">🗺 Flatten</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
+      <button id="btnNote" class="tb" disabled title="Add or edit a note on the selected bubble (N)">📝 Note</button>
       <button id="btnColor" class="tb" title="Choose bubble colors">🎨 Color</button>
       <button id="btnCenterSel" class="tb" disabled title="Make this the center of rotation">◎ Center</button>
       <button id="btnAnchor" class="tb" disabled title="Anchor this as the center the view resets to (saved with the map)">⚓ Anchor</button>
@@ -186,8 +187,10 @@
 <div id="sheetShade" hidden></div>
 
 <div id="sheetRename" class="sheet" hidden>
-  <div class="sheet-title">Rename bubble</div>
+  <div class="sheet-title" id="renameTitle">Edit bubble</div>
   <input id="renameInput" maxlength="80" placeholder="Type an idea…">
+  <label class="field-title" for="noteInput">Notes <span class="muted">— details, links, context</span></label>
+  <textarea id="noteInput" maxlength="4000" rows="5" placeholder="Add notes for this bubble… (visible to anyone who can see the map)"></textarea>
   <div class="sheet-row">
     <button id="renameCancel" class="tb">Cancel</button>
     <button id="renameSave" class="tb primary-tb">Save</button>
@@ -208,6 +211,15 @@
 </div>
 
 <div id="pickMenu" hidden></div>
+
+<!-- read-only note reader (map viewers) -->
+<div id="noteViewer" class="note-viewer" hidden>
+  <div class="note-viewer-head">
+    <div id="noteViewerTitle" class="note-viewer-title"></div>
+    <button id="noteViewerClose" class="tb icon" title="Close" aria-label="Close note">✕</button>
+  </div>
+  <div id="noteViewerBody" class="note-viewer-body"></div>
+</div>
 
 <div id="sheetGroup" class="sheet" hidden>
   <div class="sheet-title" id="groupSheetTitle">Move into group</div>
