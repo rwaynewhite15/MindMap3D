@@ -55,11 +55,14 @@ function createMapView(host, opts = {}) {
   let idCounter = 1;
   let hueCounter = 0;
   let hueOverride = null;   // user-chosen color for new bubbles; null = round-robin
-  let yaw = 0.4, pitch = -0.25, camDist = 950;
-  let pivot = [0, 0, 0];    // world point at screen center: rotation pivot AND pan position
-  let centeredId = null;    // node the view is orbiting; null → background drag pans
+  // The view is a flat 2D plane: yaw/pitch are pinned to 0 so project() collapses
+  // to orthographic pan + uniform-scale zoom. camDist drives zoom; pivot is the
+  // world point held at screen center. There is no rotation, orbit, or spin.
+  let yaw = 0, pitch = 0, camDist = 950;
+  let pivot = [0, 0, 0];    // world point at screen center (pan position)
+  let centeredId = null;    // node the view last recentered on (read-only tap-to-focus)
   let anchorId = null;      // node that "reset view" centers on (persisted with the map)
-  let spinning = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let spinning = false;     // 2D: never auto-spins
   let showWeights = true;   // show the numbered weight badges on connections
   let selectedId = null;
   let connectFrom = null;
@@ -84,9 +87,11 @@ function createMapView(host, opts = {}) {
   const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
   const len = a => Math.hypot(a[0], a[1], a[2]);
   const norm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  // flat 2D: random directions live in the z=0 plane so every placement,
+  // clamp, and layout scatter keeps nodes on the plane
   const randUnit = () => {
-    const t = Math.random() * Math.PI * 2, z = Math.random() * 2 - 1, r = Math.sqrt(1 - z * z);
-    return [r * Math.cos(t), z, r * Math.sin(t)];
+    const t = Math.random() * Math.PI * 2;
+    return [Math.cos(t), Math.sin(t), 0];
   };
 
   /* ---------- projection ---------- */
@@ -388,12 +393,9 @@ function createMapView(host, opts = {}) {
     const hits = (editable || opts.tapToCenter) ? hitTest(pt.x, pt.y) : [];
     const top = hits[0] || null;
 
-    // background drag: orbit when the view is centered on a bubble, else pan
+    // background drag always pans (2D: there is no orbit)
     const bgDrag = () => {
-      const orbiting = centeredId && map.nodes[centeredId];
-      drag = orbiting
-        ? { type: 'orbit', startX: e.clientX, startY: e.clientY, startYaw: yaw, startPitch: pitch, moved: false }
-        : { type: 'pan', startX: e.clientX, startY: e.clientY, startPivot: [...pivot], moved: false };
+      drag = { type: 'pan', startX: e.clientX, startY: e.clientY, startPivot: [...pivot], moved: false };
       host.classList.add('dragging');
     };
 
@@ -565,27 +567,19 @@ function createMapView(host, opts = {}) {
       const n = map.nodes[drag.id];
       if (n) clampInside(n);
     } else if (drag.type === 'centerTap') {
-      // dragging from a bubble in read-only view behaves like a background drag:
-      // orbit if the view is centered on a bubble, otherwise pan
+      // dragging from a bubble in read-only view pans the flat view
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (Math.abs(dx) + Math.abs(dy) > 4) {
         if (!drag.moved) {
           drag.moved = true;
-          drag.orbiting = !!(centeredId && map.nodes[centeredId]);
-          drag.startYaw = yaw; drag.startPitch = pitch;
           drag.startPivot = [...pivot];
           drag.grabX = e.clientX; drag.grabY = e.clientY;
           host.classList.add('dragging');
         }
-        if (drag.orbiting) {
-          yaw = drag.startYaw + (e.clientX - drag.grabX) * 0.006;
-          pitch = Math.max(-1.4, Math.min(1.4, drag.startPitch + (e.clientY - drag.grabY) * 0.006));
-        } else {
-          const { right, up } = cameraBasis();
-          const wpp = camDist / FOCAL;
-          pivot = sub(drag.startPivot,
-            add3(mul(right, (e.clientX - drag.grabX) * wpp), mul(up, (e.clientY - drag.grabY) * wpp)));
-        }
+        const { right, up } = cameraBasis();
+        const wpp = camDist / FOCAL;
+        pivot = sub(drag.startPivot,
+          add3(mul(right, (e.clientX - drag.grabX) * wpp), mul(up, (e.clientY - drag.grabY) * wpp)));
       }
     } else if (drag.type === 'edgeTap') {
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
@@ -765,21 +759,7 @@ function createMapView(host, opts = {}) {
     changed();
   }
 
-  /* ---------- auto-arrange layout helpers ---------- */
-  // Evenly place `count` points on a sphere of `radius` (golden-spiral with a
-  // half-step offset so no point sits exactly on a pole crowding its neighbor).
-  function fibSphere(count, radius) {
-    const pts = [];
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < count; i++) {
-      const y = 1 - ((i + 0.5) / count) * 2;
-      const rr = Math.sqrt(Math.max(0, 1 - y * y));
-      const th = golden * i;
-      pts.push([Math.cos(th) * rr * radius, y * radius, Math.sin(th) * rr * radius]);
-    }
-    return pts;
-  }
-
+  /* ---------- auto-arrange (2D tidy) layout helpers ---------- */
   // Evenly pack `count` points on a flat z=0 disc (sunflower phyllotaxis);
   // neighboring points end up roughly `spacing` apart.
   function flatDisc(count, spacing) {
@@ -904,73 +884,10 @@ function createMapView(host, opts = {}) {
     if (opts.onChange) opts.onChange(); // persist the arranged layout
   }
 
+  // Tidy the whole map into a clean, evenly-spread 2D layout and fit it on
+  // screen. Group children pack onto flat discs inside their container;
+  // top-level bubbles and groups spread with a planar force-directed layout.
   function autoArrange() {
-    const all = Object.values(map.nodes);
-    if (all.length < 2 || arranging) return false;
-
-    // 1) inside each group: spread children evenly on a sphere sized to fit them
-    const containerKids = new Map();
-    for (const nd of all) if (nd.kind === 'container') containerKids.set(nd.id, []);
-    for (const nd of all) {
-      if (nd.parentId && containerKids.has(nd.parentId)) containerKids.get(nd.parentId).push(nd);
-    }
-    const newSize = new Map();    // containerId → radius that snugly fits its children
-    const childOffset = new Map(); // childId → offset from its container's center
-    for (const [cid, kids] of containerKids) {
-      if (!kids.length) { newSize.set(cid, 150); continue; }
-      const mr = Math.max(...kids.map(kd => kd.r));
-      // shell radius so neighboring children don't touch (surface area per point)
-      const shellR = kids.length === 1 ? 0
-        : Math.max(mr + 30, (2 * mr + 24) * Math.sqrt(kids.length) / 3.5);
-      const pts = fibSphere(kids.length, shellR);
-      kids.forEach((kd, i) => childOffset.set(kd.id, pts[i]));
-      newSize.set(cid, Math.max(130, shellR + mr + 20));
-    }
-
-    // 2) top level (loose bubbles + groups): force-directed spread.
-    // Edges that reach inside a group count as edges to the group itself.
-    const isTop = nd => !(nd.parentId && map.nodes[nd.parentId]);
-    const items = all.filter(isTop).map(nd => ({
-      id: nd.id,
-      r: nd.kind === 'container' ? (newSize.get(nd.id) || nd.r) : nd.r,
-      p: [...nd.pos],
-    }));
-    const rep = id => {
-      const nd = map.nodes[id];
-      return nd && nd.parentId && map.nodes[nd.parentId] ? nd.parentId : id;
-    };
-    const topEdges = new Map();
-    for (const e of map.edges) {
-      const a = rep(e.a), b = rep(e.b);
-      if (a === b) continue;
-      const key = a < b ? a + '|' + b : b + '|' + a;
-      const prev = topEdges.get(key);
-      if (!prev || e.w > prev.w) topEdges.set(key, { a, b, w: e.w });
-    }
-    forceLayout(items, [...topEdges.values()], 40);
-
-    // 3) collect targets; children ride along with their group
-    const to = {};
-    for (const it of items) {
-      to[it.id] = it.p;
-      const kids = containerKids.get(it.id);
-      if (kids) for (const kd of kids) to[kd.id] = add3(it.p, childOffset.get(kd.id));
-    }
-    // container sizes apply immediately (radius isn't tweened; positions are)
-    for (const [cid, r] of newSize) { const c = map.nodes[cid]; if (c) c.r = r; }
-    buildDOM();
-
-    // 4) glide everything to its new spot, then save
-    const from = {};
-    for (const id of Object.keys(to)) from[id] = [...map.nodes[id].pos];
-    arranging = { t0: performance.now(), dur: 750, from, to };
-    return true;
-  }
-
-  // Organize the whole map onto a single flat plane (z = 0) and face it
-  // head-on, so the 3D cloud reads as a clear 2D map. Same glide-and-save
-  // flow as autoArrange; also stops the spin and zooms to fit the layout.
-  function flattenTo2D() {
     const all = Object.values(map.nodes);
     if (!all.length || arranging) return false;
 
@@ -1055,7 +972,7 @@ function createMapView(host, opts = {}) {
           id,
           label: n.label || '',
           note: n.note || '',
-          pos: Array.isArray(n.pos) ? [...n.pos] : [0, 0, 0],
+          pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0], // flat 2D: z always 0
           r: n.r || 62,
           hue: n.hue || 0,
           parentId: n.parentId || null,
@@ -1096,7 +1013,7 @@ function createMapView(host, opts = {}) {
           id,
           label: n.label || '',
           note: n.note || '',
-          pos: Array.isArray(n.pos) ? [...n.pos] : [0, 0, 0],
+          pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0], // flat 2D: z always 0
           r: n.r || 62,
           hue: n.hue || 0,
           parentId: n.parentId || null,
@@ -1123,7 +1040,7 @@ function createMapView(host, opts = {}) {
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
-    setWeight, deleteEdge, moveIntoContainer, autoArrange, flattenTo2D,
+    setWeight, deleteEdge, moveIntoContainer, autoArrange,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
       const n = map.nodes[id];
@@ -1167,33 +1084,30 @@ function createMapView(host, opts = {}) {
       if (!b) applyHover(null); // next frame recomputes from the real cursor
     },
     zoom(f) { camDist = Math.min(3200, Math.max(300, camDist * f)); },
-    resetCamera() {
-      yaw = 0.4; pitch = -0.25; camDist = 950;
-      // reset returns to the anchored node if one is set, else the origin
-      const a = anchorId && map.nodes[anchorId];
-      pivot = a ? [...a.pos] : [0, 0, 0];
-      centeredId = a ? anchorId : null; // anchored maps reset into orbit mode
-    },
-    // make the selected node the center of rotation (and recenter it on screen)
-    centerOnSelected() {
-      const n = selectedId && map.nodes[selectedId];
-      if (!n) return false;
-      pivot = [...n.pos];
-      centeredId = n.id;
-      return true;
-    },
-    isCentered() {
-      const n = selectedId && map.nodes[selectedId];
-      return !!n && pivot[0] === n.pos[0] && pivot[1] === n.pos[1] && pivot[2] === n.pos[2];
-    },
-    // anchor: the node the view resets to. null clears it.
-    setAnchor(id) { anchorId = id && map.nodes[id] ? id : null; },
-    getAnchor: () => anchorId,
-    setSpin(b) { spinning = b; },
-    getSpin: () => spinning,
+    // reset view = fit the whole map on screen, centered
+    resetCamera() { fitView(); },
     setShowWeights(b) { showWeights = b; },
     getShowWeights: () => showWeights,
   };
+
+  // Center the pivot on the content's bounding box and pick a zoom that fits
+  // it comfortably on screen (with a margin). Used by "reset view".
+  function fitView() {
+    const all = Object.values(map.nodes);
+    if (!all.length) { pivot = [0, 0, 0]; camDist = 950; return; }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of all) {
+      minX = Math.min(minX, n.pos[0] - n.r); maxX = Math.max(maxX, n.pos[0] + n.r);
+      minY = Math.min(minY, n.pos[1] - n.r); maxY = Math.max(maxY, n.pos[1] + n.r);
+    }
+    pivot = [(minX + maxX) / 2, (minY + maxY) / 2, 0];
+    const w = host.clientWidth || 800, h = host.clientHeight || 600;
+    const halfW = Math.max(200, (maxX - minX) / 2 + 60);
+    const halfH = Math.max(160, (maxY - minY) / 2 + 60);
+    // camDist so FOCAL/camDist * half-extent fits within the half-viewport
+    const need = Math.max((FOCAL * halfW) / (w / 2), (FOCAL * halfH) / (h / 2));
+    camDist = Math.min(3200, Math.max(300, need));
+  }
 }
 
 /* ================================================================
@@ -1213,7 +1127,7 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'map', 'browse', 'friends', 'profile', 'settings'];
+const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings'];
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
@@ -1233,7 +1147,7 @@ function show(name) {
 function route() {
   closeSheets();
   hidePickMenu();
-  const h = location.hash.replace(/^#\/?/, '') || (me ? 'map' : 'browse');
+  const h = location.hash.replace(/^#\/?/, '') || (me ? 'home' : 'browse');
 
   if (!me) {
     // anonymous visitors may browse public maps and view public profiles;
@@ -1245,6 +1159,7 @@ function route() {
   }
 
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
+  if (h === 'home') { show('home'); loadFeed(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
@@ -1541,7 +1456,7 @@ window.addEventListener('keydown', e => {
    My map (editor) wiring
 ================================================================ */
 const hintEl = $('#mapHint');
-const DEFAULT_HINT = 'Tap to select · Drag background to pan (orbits when ◎ centered) · Pinch/scroll to zoom · Double-tap overlaps to pick';
+const DEFAULT_HINT = 'Tap to select · Drag a bubble to move it · Drag background to pan · Pinch/scroll to zoom';
 
 function setHint(text, accent) {
   hintEl.textContent = text;
@@ -1602,16 +1517,9 @@ function refreshToolbar() {
   const hasNote = !!sel && !!(sel.note && sel.note.trim());
   noteBtn.classList.toggle('active', hasNote);
   noteBtn.textContent = hasNote ? '📝 Note ✓' : '📝 Note';
-  $('#btnCenterSel').disabled = !sel;
   $('#btnDelete').disabled = !sel;
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
   $('#btnAddBubble').textContent = sel && sel.kind === 'container' ? '+ Bubble in group' : '+ Bubble';
-  // anchor button: enabled with a selection; shows active when that node is the anchor
-  const anchorBtn = $('#btnAnchor');
-  anchorBtn.disabled = !sel;
-  const isAnchor = !!sel && myMap.getAnchor() === sel.id;
-  anchorBtn.classList.toggle('active', isAnchor);
-  anchorBtn.textContent = isAnchor ? '⚓ Anchored' : '⚓ Anchor';
 }
 
 function initEditor() {
@@ -1666,16 +1574,8 @@ function initEditor() {
     openRename(id);
   });
   $('#btnArrange').addEventListener('click', () => {
-    if (myMap.autoArrange()) setHint('Auto-arranged — bubbles spread out evenly', false);
-    else setHint('Nothing to arrange yet — add a couple of bubbles first', false);
-  });
-  $('#btnFlatten').addEventListener('click', () => {
-    if (myMap.flattenTo2D()) {
-      $('#btnSpin').classList.toggle('active', myMap.getSpin()); // flatten stops the spin
-      setHint('Flattened into a 2D map — spin is off; press ↻ to go 3D again', false);
-    } else {
-      setHint('Nothing to flatten yet — add a bubble first', false);
-    }
+    if (myMap.autoArrange()) setHint('Tidied — bubbles spread out evenly', false);
+    else setHint('Nothing to tidy yet — add a bubble first', false);
   });
   $('#btnConnect').addEventListener('click', () => {
     if (myMap.isConnecting()) {
@@ -1696,34 +1596,8 @@ function initEditor() {
     if (sel) openRename(sel.id, 'note');
   });
   $('#btnColor').addEventListener('click', openColorSheet);
-  $('#btnCenterSel').addEventListener('click', () => {
-    const sel = myMap.getSelected();
-    if (myMap.centerOnSelected()) {
-      setHint(`Rotating around "${sel.label || 'Untitled'}"`, false);
-    }
-  });
-  $('#btnAnchor').addEventListener('click', () => {
-    const sel = myMap.getSelected();
-    if (!sel) return;
-    const already = myMap.getAnchor() === sel.id;
-    myMap.setAnchor(already ? null : sel.id);
-    if (!already) myMap.centerOnSelected(); // snap to it now so the effect is visible
-    refreshToolbar();
-    setHint(already
-      ? 'Anchor removed — view resets to the default center'
-      : `"${sel.label || 'Untitled'}" is now the anchor — the view resets here`, false);
-    saveMap(); // persist the anchor change
-  });
   $('#btnDelete').addEventListener('click', () => { myMap.deleteSelected(); refreshToolbar(); });
   $('#btnGroupMenu').addEventListener('click', openGroupSheet);
-
-  const btnSpin = $('#btnSpin');
-  btnSpin.classList.toggle('active', true);
-  btnSpin.addEventListener('click', () => {
-    myMap.setSpin(!myMap.getSpin());
-    btnSpin.classList.toggle('active', myMap.getSpin());
-  });
-  btnSpin.classList.toggle('active', myMap.getSpin());
 
   // connection weight numbers: on by default, choice remembered
   const btnWeights = $('#btnWeights');
@@ -2371,6 +2245,27 @@ function userCard(u, actionsHtmlBuilder) {
   } else {
     const meta = document.createElement('div');
     meta.className = 'meta';
+    // a quick follow toggle right from the list (not on your own card)
+    if (me && u.username !== me.username && 'followedByMe' in u) {
+      const follow = document.createElement('button');
+      const paint = () => {
+        follow.className = 'tb sm' + (u.followedByMe ? '' : ' primary-tb');
+        follow.textContent = u.followedByMe ? '✓ Following' : '+ Follow';
+      };
+      paint();
+      follow.addEventListener('click', async e => {
+        e.stopPropagation();
+        follow.disabled = true;
+        try {
+          const r = await api('/api/follow', 'POST', {
+            username: u.username, action: u.followedByMe ? 'unfollow' : 'follow',
+          });
+          u.followedByMe = r.following; paint();
+        } catch (err) { alert(err.message); }
+        follow.disabled = false;
+      });
+      meta.appendChild(follow);
+    }
     const pill = document.createElement('span');
     pill.className = 'pill' + (u.relation === 'friends' ? ' friends' : '');
     // to a stranger, private and friends-only maps are both simply invisible
@@ -2402,6 +2297,114 @@ $('#searchInput').addEventListener('input', () => {
   clearTimeout(browseTimer);
   browseTimer = setTimeout(loadBrowse, 300);
 });
+
+/* ================================================================
+   Home feed (social) — recent maps from people you follow, plus discovery
+================================================================ */
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24); if (d < 7) return d + 'd ago';
+  const w = Math.floor(d / 7); if (w < 5) return w + 'w ago';
+  return new Date(ts).toLocaleDateString();
+}
+
+let pendingProfileMapId = null; // a specific map a feed card asked to open next
+
+function feedCard(item) {
+  const owner = item.owner || {};
+  const shownName = owner.name || '@' + owner.username;
+  const card = document.createElement('div');
+  card.className = 'feed-card';
+
+  const head = document.createElement('div');
+  head.className = 'feed-card-head';
+  const av = document.createElement('div');
+  av.className = 'avatar sm';
+  av.style.setProperty('--av', avatarColor(owner.username || '?'));
+  av.textContent = (shownName.replace('@', '').charAt(0) || '?').toUpperCase();
+  const meta = document.createElement('div');
+  meta.className = 'feed-meta';
+  const who = document.createElement('div'); who.className = 'feed-who'; who.textContent = shownName;
+  const sub = document.createElement('div'); sub.className = 'feed-sub muted';
+  sub.textContent = '@' + owner.username + ' · ' + timeAgo(item.updatedAt);
+  meta.appendChild(who); meta.appendChild(sub);
+  head.appendChild(av); head.appendChild(meta);
+  const goProfile = () => { location.hash = '#/u/' + owner.username; };
+  av.style.cursor = who.style.cursor = 'pointer';
+  av.addEventListener('click', goProfile);
+  who.addEventListener('click', goProfile);
+
+  const openMap = () => { pendingProfileMapId = item.id; location.hash = '#/u/' + owner.username; };
+
+  const body = document.createElement('button');
+  body.className = 'feed-body';
+  const title = document.createElement('div'); title.className = 'feed-title'; title.textContent = item.name || 'Untitled map';
+  const stat = document.createElement('div'); stat.className = 'feed-stat muted';
+  const n = item.nodeCount || 0;
+  stat.textContent = n + ' bubble' + (n === 1 ? '' : 's') + (item.visibility === 'friends' ? ' · friends-only' : '');
+  body.appendChild(title); body.appendChild(stat);
+  body.addEventListener('click', openMap);
+
+  const foot = document.createElement('div');
+  foot.className = 'feed-foot';
+  const like = document.createElement('button');
+  const paint = () => {
+    like.className = 'like-btn' + (item.likedByMe ? ' liked' : '');
+    like.innerHTML = (item.likedByMe ? '♥' : '♡') + ' <span>' + (item.likeCount || 0) + '</span>';
+  };
+  paint();
+  like.addEventListener('click', async e => {
+    e.stopPropagation();
+    like.disabled = true;
+    try {
+      const r = await api('/api/maps/' + item.id + '/like', 'POST');
+      item.likedByMe = r.likedByMe; item.likeCount = r.likeCount; paint();
+    } catch (err) { alert(err.message); }
+    like.disabled = false;
+  });
+  const open = document.createElement('button');
+  open.className = 'tb';
+  open.textContent = 'Open map →';
+  open.addEventListener('click', openMap);
+  foot.appendChild(like); foot.appendChild(open);
+
+  card.appendChild(head); card.appendChild(body); card.appendChild(foot);
+  return card;
+}
+
+async function loadFeed() {
+  const list = $('#feedList');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const data = await api('/api/feed');
+    list.innerHTML = '';
+    if (!data.items.length) {
+      const d = document.createElement('div'); d.className = 'empty';
+      d.textContent = data.following
+        ? 'No fresh maps from people you follow yet — check back soon.'
+        : "You're not following anyone yet. Follow people to fill your feed — or explore public maps below.";
+      list.appendChild(d);
+    } else {
+      for (const it of data.items) list.appendChild(feedCard(it));
+    }
+    const disc = $('#feedDiscover');
+    if (data.discover && data.discover.length) {
+      disc.hidden = false;
+      const dl = $('#feedDiscoverList'); dl.innerHTML = '';
+      for (const it of data.discover) dl.appendChild(feedCard(it));
+    } else {
+      disc.hidden = true;
+    }
+  } catch (err) {
+    list.innerHTML = '';
+    const d = document.createElement('div'); d.className = 'empty'; d.textContent = err.message;
+    list.appendChild(d);
+  }
+}
 
 /* ================================================================
    Friends
@@ -2492,13 +2495,20 @@ async function openProfile(username) {
     const bits = ['@' + u.username];
     if (u.bio) bits.push(u.bio);
     $('#profileHandle').textContent = bits.join(' · ');
+    const fc = u.followerCount || 0;
+    $('#profileHandle').textContent = bits.join(' · ') + ' · ' + fc + ' follower' + (fc === 1 ? '' : 's');
+    renderFollowButton();
     renderFriendButton();
     renderProfileTabs(data.maps);
     if (data.maps.length) {
       $('#profileLocked').hidden = true;
       $('#profileToolbar').hidden = false;
       $('#profileHint').hidden = false;
-      await openProfileMap(data.maps[0].id);
+      // a feed card may have requested a specific map; else show the first
+      const wanted = pendingProfileMapId && data.maps.some(m => m.id === pendingProfileMapId)
+        ? pendingProfileMapId : data.maps[0].id;
+      pendingProfileMapId = null;
+      await openProfileMap(wanted);
       profileMap.start();
     } else {
       $('#profileLocked').hidden = false;
@@ -2539,6 +2549,7 @@ function renderProfileTabs(maps) {
 
 let profileMapId = null;    // map currently previewed on a profile
 let profileCanEdit = false; // whether that previewed map is editable by me
+let profileLike = { count: 0, liked: false }; // like state of the previewed map
 
 async function openProfileMap(id) {
   for (const b of $('#profileTabs').children) b.classList.toggle('active', b.dataset.id === id);
@@ -2548,7 +2559,28 @@ async function openProfileMap(id) {
   profileMap.setMap(data.map);
   // if the owner granted us edit rights, offer to open it in the real editor
   $('#btnPEdit').hidden = !data.canEdit;
+  profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };
+  renderProfileLike(!!data.isOwner);
 }
+
+function renderProfileLike(isOwner) {
+  const btn = $('#btnPLike');
+  // you can't like your own map, and anonymous visitors can't like at all
+  if (isOwner || !me) { btn.hidden = true; return; }
+  btn.hidden = false;
+  btn.classList.toggle('liked', profileLike.liked);
+  btn.textContent = (profileLike.liked ? '♥ ' : '♡ ') + profileLike.count;
+}
+$('#btnPLike').addEventListener('click', async () => {
+  if (!profileMapId) return;
+  $('#btnPLike').disabled = true;
+  try {
+    const r = await api('/api/maps/' + profileMapId + '/like', 'POST');
+    profileLike = { count: r.likeCount, liked: r.likedByMe };
+    renderProfileLike(false);
+  } catch (err) { alert(err.message); }
+  $('#btnPLike').disabled = false;
+});
 
 // jump from the read-only profile preview into the full editor
 async function editProfileMap() {
@@ -2591,13 +2623,36 @@ $('#btnFriendAction').addEventListener('click', async () => {
   } catch (err) { alert(err.message); }
 });
 
+// follow button on a profile (asymmetric follow, distinct from friends)
+function renderFollowButton() {
+  const btn = $('#btnFollowAction');
+  if (!currentProfile || !me) { btn.hidden = true; return; }
+  const u = currentProfile.user;
+  btn.hidden = false;
+  btn.className = 'tb' + (u.followedByMe ? '' : ' primary-tb');
+  btn.textContent = u.followedByMe ? '✓ Following' : '+ Follow';
+}
+
+$('#btnFollowAction').addEventListener('click', async () => {
+  if (!currentProfile || !me) return;
+  const u = currentProfile.user;
+  try {
+    const r = await api('/api/follow', 'POST', {
+      username: u.username, action: u.followedByMe ? 'unfollow' : 'follow',
+    });
+    u.followedByMe = r.following;
+    u.followerCount = r.followerCount;
+    renderFollowButton();
+  } catch (err) { alert(err.message); }
+});
+
 $('#btnProfileBack').addEventListener('click', () => {
   if (history.length > 1) history.back();
-  else location.hash = '#/browse';
+  else location.hash = '#/home';
 });
 
 let profileHintTimer = null;
-const PROFILE_HINT_DEFAULT = 'Tap a bubble to orbit around it · Drag empty space to pan · Pinch/scroll to zoom';
+const PROFILE_HINT_DEFAULT = 'Tap a bubble to focus it · Drag to pan · Pinch/scroll to zoom';
 function setProfileHint(text) {
   $('#profileHint').textContent = text;
   clearTimeout(profileHintTimer);
@@ -2613,28 +2668,23 @@ function showNoteViewer(n) {
 function hideNoteViewer() { $('#noteViewer').hidden = true; }
 
 function initProfileViewer() {
-  // read-only, but a tap on any bubble makes it the center of rotation;
+  // read-only; a tap on a bubble focuses it (and pops its note if it has one);
   // overlapping bubbles open a dropdown to choose which one
   profileMap = createMapView($('#profileMapHost'), {
     editable: false,
     tapToCenter: true,
     onPick: (hits, cx, cy, mode) => showPickMenu(profileMap, true, hits, cx, cy, mode),
     onCenter: id => {
-      if (id === null) { hideNoteViewer(); setProfileHint('Panning — tap a bubble to orbit around it'); return; }
+      if (id === null) { hideNoteViewer(); setProfileHint('Drag to pan · tap a bubble to focus it'); return; }
       const n = profileMap.getNode(id);
       if (!n) return;
       // tapping a bubble that carries a note pops it open to read
       if (n.note && n.note.trim()) showNoteViewer(n);
-      else { hideNoteViewer(); setProfileHint(`Orbiting "${n.label || 'Untitled'}" — click empty space to pan`); }
+      else { hideNoteViewer(); setProfileHint(`"${n.label || 'Untitled'}" · drag to pan`); }
     },
     isSheetOpen: () => !$('#pickMenu').hidden,
   });
   $('#noteViewerClose').addEventListener('click', hideNoteViewer);
-  $('#btnPSpin').classList.add('active');
-  $('#btnPSpin').addEventListener('click', () => {
-    profileMap.setSpin(!profileMap.getSpin());
-    $('#btnPSpin').classList.toggle('active', profileMap.getSpin());
-  });
   $('#btnPCenter').addEventListener('click', () => profileMap.resetCamera());
   $('#btnPZoomIn').addEventListener('click', () => profileMap.zoom(0.85));
   $('#btnPZoomOut').addEventListener('click', () => profileMap.zoom(1.18));
@@ -2707,7 +2757,7 @@ async function afterSignIn() {
   loadChatLayout();
   await loadMaps();
   refreshBadge();
-  location.hash = '#/map';
+  location.hash = '#/home';
   route();
 }
 

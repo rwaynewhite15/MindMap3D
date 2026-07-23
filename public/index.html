@@ -4,16 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#10141D">
-<title>MindMapShare — 3D Mind Maps</title>
+<title>MindMapShare — Social Mind Maps</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%234FD1E0'/><circle cx='38' cy='36' r='12' fill='%23ffffff' opacity='0.55'/></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header id="topbar" hidden>
-  <div id="logo">MindMap<span>Share</span> <em>3D Mind Maps</em></div>
+  <div id="logo">MindMap<span>Share</span> <em>Social Mind Maps</em></div>
   <nav id="mainNav">
-    <a href="#/map" data-nav="map" data-auth>My Map</a>
+    <a href="#/home" data-nav="home" data-auth>Home</a>
+    <a href="#/map" data-nav="map" data-auth>My Maps</a>
     <a href="#/browse" data-nav="browse">Browse</a>
     <a href="#/friends" data-nav="friends" data-auth>Friends<span id="friendBadge" class="badge" hidden></span></a>
     <a href="#/settings" data-nav="settings" data-auth>Settings</a>
@@ -27,8 +28,8 @@
   <section id="view-auth" hidden>
     <div class="auth-card">
       <div class="auth-logo">MindMap<span>Share</span></div>
-      <div class="auth-sub">3D Mind Maps</div>
-      <p class="auth-tag">Your mind, in bubbles. Share it — or don't.</p>
+      <div class="auth-sub">Social Mind Maps</div>
+      <p class="auth-tag">Your mind, in bubbles. Share it, follow others, and explore.</p>
 
       <div class="auth-tabs">
         <button id="tabLogin" class="active">Sign in</button>
@@ -66,25 +67,21 @@
       <span id="presencePill" class="presence-pill" hidden></span>
     </div>
     <div id="saveState" class="save-state" hidden>Saved</div>
-    <div id="mapHint" class="hint">Tap to select · Drag background to pan (orbits when ◎ centered) · Pinch/scroll to zoom · Double-tap overlaps to pick</div>
+    <div id="mapHint" class="hint">Tap to select · Drag a bubble to move it · Drag background to pan · Pinch/scroll to zoom</div>
 
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
-      <button id="btnArrange" class="tb" title="Automatically spread all bubbles and groups out evenly">✨ Arrange</button>
-      <button id="btnFlatten" class="tb" title="Organize the whole map into a clear flat 2D layout, viewed head-on">🗺 Flatten</button>
+      <button id="btnArrange" class="tb" title="Tidy: spread all bubbles and groups out evenly">✨ Tidy</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
       <button id="btnNote" class="tb" disabled title="Add or edit a note on the selected bubble (N)">📝 Note</button>
       <button id="btnColor" class="tb" title="Choose bubble colors">🎨 Color</button>
-      <button id="btnCenterSel" class="tb" disabled title="Make this the center of rotation">◎ Center</button>
-      <button id="btnAnchor" class="tb" disabled title="Anchor this as the center the view resets to (saved with the map)">⚓ Anchor</button>
       <button id="btnGroupMenu" class="tb" disabled title="Move the selected bubble into or out of a group">Group ▾</button>
       <button id="btnDelete" class="tb danger" disabled title="Delete the selected item (Delete)">Delete</button>
       <span class="tb-sep"></span>
       <button id="btnWeights" class="tb icon" title="Show/hide connection weight numbers">①</button>
-      <button id="btnSpin" class="tb icon" title="Toggle auto-spin">↻</button>
-      <button id="btnCenter" class="tb icon" title="Reset the view (angle, zoom, and center)">⌖</button>
+      <button id="btnCenter" class="tb icon" title="Reset the view (fit &amp; center)">⌖</button>
       <button id="btnZoomOut" class="tb icon" title="Zoom out">−</button>
       <button id="btnZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
@@ -112,6 +109,21 @@
     </aside>
   </section>
 
+  <!-- ============ HOME FEED ============ -->
+  <section id="view-home" hidden>
+    <div class="page">
+      <div class="feed-head">
+        <h1>Home</h1>
+        <div class="muted">Fresh mind maps from people you follow</div>
+      </div>
+      <div id="feedList" class="feed-list"></div>
+      <div id="feedDiscover" hidden>
+        <div class="section-title">Discover public maps</div>
+        <div id="feedDiscoverList" class="feed-list"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ BROWSE ============ -->
   <section id="view-browse" hidden>
     <div class="page">
@@ -137,11 +149,12 @@
         <div id="profileName"></div>
         <div id="profileHandle" class="muted"></div>
       </div>
+      <button id="btnFollowAction" class="tb" hidden></button>
       <button id="btnFriendAction" class="tb" hidden></button>
     </div>
     <div id="profileTabs" class="map-tabs" hidden></div>
     <div id="profileMapHost" class="map-host"></div>
-    <div id="profileHint" class="hint">Tap a bubble to orbit around it · Drag empty space to pan · Pinch/scroll to zoom</div>
+    <div id="profileHint" class="hint">Tap a bubble to focus it · Drag to pan · Pinch/scroll to zoom</div>
     <div id="profileLocked" class="locked" hidden>
       <div class="locked-card">
         <div class="lock-ico">🔒</div>
@@ -150,8 +163,8 @@
     </div>
     <div class="edit-toolbar" id="profileToolbar">
       <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
+      <button id="btnPLike" class="tb" title="Like this map">♡ Like</button>
       <span class="tb-sep"></span>
-      <button id="btnPSpin" class="tb icon" title="Toggle auto-spin">↻</button>
       <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
       <button id="btnPZoomOut" class="tb icon" title="Zoom out">−</button>
       <button id="btnPZoomIn" class="tb icon" title="Zoom in">+</button>

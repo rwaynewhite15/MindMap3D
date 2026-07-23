@@ -58,6 +58,8 @@ function pgStore() {
     friends: r.friends,
     requestsIn: r.requests_in,
     requestsOut: r.requests_out,
+    following: r.following,
+    followers: r.followers,
     map: r.map,
     maps: r.maps,
   });
@@ -83,6 +85,9 @@ function pgStore() {
           maps JSONB NOT NULL DEFAULT '[]'
         )`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS maps JSONB NOT NULL DEFAULT '[]'`);
+      // asymmetric follow graph (distinct from mutual friends)
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS following JSONB NOT NULL DEFAULT '[]'`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS followers JSONB NOT NULL DEFAULT '[]'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -129,21 +134,25 @@ function pgStore() {
     async createUser(u) {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
-                            visibility, bio, created_at, friends, requests_in, requests_out, maps)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb)`,
+                            visibility, bio, created_at, friends, requests_in, requests_out, maps,
+                            following, followers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
-         JSON.stringify(u.requestsOut), JSON.stringify(u.maps)]);
+         JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
+         JSON.stringify(u.following || []), JSON.stringify(u.followers || [])]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
-                          friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb
+                          friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
+                          following=$10::jsonb, followers=$11::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
-         JSON.stringify(u.requestsOut), JSON.stringify(u.maps)]);
+         JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
+         JSON.stringify(u.following || []), JSON.stringify(u.followers || [])]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -275,6 +284,8 @@ const MAX_CHAT = 400; // per map; oldest entries roll off
 // Legacy users carry a single `map`; wrap it into the multi-map shape in place.
 function normalizeUser(u) {
   if (!u) return u;
+  if (!Array.isArray(u.following)) u.following = [];
+  if (!Array.isArray(u.followers)) u.followers = [];
   if (!Array.isArray(u.maps)) u.maps = [];
   if (!u.maps.length) {
     const m = makeMap('My Map', u.visibility, u.displayName || u.username);
@@ -291,6 +302,7 @@ function normalizeUser(u) {
     if (!m.nodes || typeof m.nodes !== 'object') m.nodes = {};
     if (!Array.isArray(m.edges)) m.edges = [];
     if (!Array.isArray(m.chat)) m.chat = [];
+    if (!Array.isArray(m.likes)) m.likes = []; // user ids who liked this map
   }
   delete u.map;
   return u;
@@ -353,7 +365,16 @@ function mapMeta(m, extra) {
     visibility: m.visibility,
     nodeCount: Object.keys(m.nodes || {}).length,
     updatedAt: m.updatedAt || 0,
+    likeCount: (m.likes || []).length,
   }, extra || {});
+}
+
+// mapMeta plus this viewer's like state — used where the viewer is known
+// (feed, single-map view) and we want to render a filled/empty heart.
+function mapMetaFor(m, viewer, extra) {
+  return mapMeta(m, Object.assign({
+    likedByMe: !!viewer && (m.likes || []).includes(viewer.id),
+  }, extra || {}));
 }
 
 function ownerRef(u, viewer) {
@@ -369,6 +390,10 @@ function publicUser(u, viewer) {
     mapCount: visible.length,
     nodeCount: visible.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0),
     friendCount: (u.friends || []).length,
+    followerCount: (u.followers || []).length,
+    followingCount: (u.following || []).length,
+    // does the signed-in viewer follow this user?
+    followedByMe: !!viewer && (viewer.following || []).includes(u.id),
     relation: viewer ? relationTo(viewer, u) : 'none',
   };
 }
@@ -674,6 +699,7 @@ async function handleApi(req, res, pathname) {
       bio: '',
       createdAt: Date.now(),
       friends: [], requestsIn: [], requestsOut: [],
+      following: [], followers: [],
       maps: [makeMap('My Map', body.visibility, displayName || username)],
     };
     try {
@@ -752,6 +778,8 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, {
       map: { id: m.id, name: m.name, visibility: m.visibility, nodes: m.nodes, edges: m.edges, anchorId: m.anchorId || null },
       owner: ownerRef(owner, user), isOwner, canEdit,
+      likeCount: (m.likes || []).length,
+      likedByMe: !!user && (m.likes || []).includes(user.id),
       present: presenceList(m.id),
     });
   }
@@ -800,7 +828,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { map: mapMeta(m, { editors: [] }) });
   }
 
-  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live))?$/);
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like))?$/);
   if (mapMatch) {
     const mapId = mapMatch[1], sub = mapMatch[2];
     const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
@@ -845,6 +873,16 @@ async function handleApi(req, res, pathname) {
     }
     if (sub === 'live' && req.method === 'GET') {
       return startLiveStream(req, res, m.id, Object.assign(actorRef(user), { canEdit }));
+    }
+    // Like / unlike a map. Anyone who can view it can like it (canViewMapObj
+    // was already enforced above). Toggles the viewer's id in m.likes.
+    if (sub === 'like' && req.method === 'POST') {
+      if (!Array.isArray(m.likes)) m.likes = [];
+      const i = m.likes.indexOf(user.id);
+      const liked = i < 0;
+      if (liked) m.likes.push(user.id); else m.likes.splice(i, 1);
+      await store.saveUser(owner);
+      return sendJSON(res, 200, { likeCount: m.likes.length, likedByMe: liked });
     }
     if (!sub && req.method === 'DELETE') {
       if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a map.' });
@@ -939,6 +977,65 @@ async function handleApi(req, res, pathname) {
     await store.saveUser(user);
     await store.saveUser(target);
     return sendJSON(res, 200, { ok: true, relation: relationTo(user, target) });
+  }
+
+  // --- follow (asymmetric) ---
+  if (route === 'POST /api/follow') {
+    const body = await readBody(req);
+    const target = await store.getUserByUsername(body.username);
+    if (!target || target.id === user.id) return sendJSON(res, 400, { error: 'Invalid user.' });
+    const rm = (arr, id) => { const i = arr.indexOf(id); if (i >= 0) arr.splice(i, 1); };
+    const following = body.action !== 'unfollow';
+    if (following) {
+      if (!user.following.includes(target.id)) user.following.push(target.id);
+      if (!target.followers.includes(user.id)) target.followers.push(user.id);
+    } else {
+      rm(user.following, target.id);
+      rm(target.followers, user.id);
+    }
+    await store.saveUser(user);
+    await store.saveUser(target);
+    return sendJSON(res, 200, { ok: true, following, followerCount: target.followers.length });
+  }
+
+  // --- home feed: recent maps from people you follow (and your friends),
+  //     newest activity first, with like state for the current viewer ---
+  if (route === 'GET /api/feed') {
+    const sourceIds = new Set([...(user.following || []), ...(user.friends || [])]);
+    const authors = await store.getUsersByIds([...sourceIds]);
+    const items = [];
+    for (const author of authors) {
+      for (const m of visibleMapsOf(author, user)) {
+        if (!(m.updatedAt || m.createdAt)) continue;
+        items.push(mapMetaFor(m, user, {
+          owner: ownerRef(author, user),
+          updatedAt: m.updatedAt || m.createdAt || 0,
+        }));
+      }
+    }
+    items.sort((a, b) => b.updatedAt - a.updatedAt);
+    const following = (user.following || []).length;
+    // when the feed is thin, surface recent public maps to discover + follow
+    let discover = [];
+    if (items.length < 8) {
+      const everyone = await store.searchUsers('');
+      const seen = new Set([user.id, ...sourceIds]);
+      const pool = [];
+      for (const other of everyone) {
+        if (seen.has(other.id)) continue;
+        for (const m of other.maps) {
+          if (m.visibility === 'public' && Object.keys(m.nodes || {}).length) {
+            pool.push(mapMetaFor(m, user, {
+              owner: ownerRef(other, user),
+              updatedAt: m.updatedAt || m.createdAt || 0,
+            }));
+          }
+        }
+      }
+      pool.sort((a, b) => b.updatedAt - a.updatedAt);
+      discover = pool.slice(0, 12);
+    }
+    return sendJSON(res, 200, { items: items.slice(0, 60), discover, following });
   }
 
   return sendJSON(res, 404, { error: 'Not found.' });
