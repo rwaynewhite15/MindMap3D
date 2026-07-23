@@ -1696,6 +1696,71 @@ function buildOutline() {
   for (const b of loose) addRow(b, 0);
 }
 
+// The name of the currently open map (from the switcher), for export titles/filenames.
+function currentMapName() {
+  const sel = $('#mapSelect');
+  const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+  const raw = (opt ? opt.textContent : '') || '';
+  return raw.replace(/\s*👥.*$/, '').trim() || 'Mind map'; // strip the shared-with marker
+}
+
+// Build a Markdown outline of the map: groups with their nested bubbles, plus
+// each node's note (as a blockquote), completed tasks struck through, and links.
+function buildOutlineMarkdown() {
+  const map = myMap.getMap();
+  const byId = map.nodes || {};
+  const nodes = Object.values(byId);
+  const childrenOf = id => nodes.filter(n => n.parentId === id);
+  const groups = nodes.filter(n => n.kind === 'container');
+  const loose = nodes.filter(n => n.kind === 'bubble' && !(n.parentId && byId[n.parentId]));
+
+  const label = n => {
+    let s = (n.label || 'Untitled').trim() || 'Untitled';
+    if (n.done) s = '~~' + s + '~~ ✓';
+    if (n.link) s += ' ([link](' + n.link + '))';
+    return s;
+  };
+  const noteBlock = (n, pad) => {
+    if (!n.note || !n.note.trim()) return '';
+    return n.note.replace(/\r/g, '').trim().split('\n')
+      .map(line => pad + '> ' + line).join('\n') + '\n';
+  };
+
+  let out = '# ' + currentMapName() + '\n\n';
+  if (!nodes.length) return out + '_(empty map)_\n';
+
+  for (const g of groups) {
+    out += '- **' + label(g) + '**\n';
+    out += noteBlock(g, '  ');
+    for (const c of childrenOf(g.id)) {
+      out += '  - ' + label(c) + '\n';
+      out += noteBlock(c, '    ');
+    }
+  }
+  for (const b of loose) {
+    out += '- ' + label(b) + '\n';
+    out += noteBlock(b, '  ');
+  }
+  return out;
+}
+
+function exportOutline() {
+  if (!myMap) return;
+  const md = buildOutlineMarkdown();
+  const safe = currentMapName().replace(/[^\w\- ]+/g, '').trim() || 'mindmap';
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = safe + ' outline.md';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setHint('Outline exported as Markdown', false);
+}
+
+$('#btnOutlineExport').addEventListener('click', exportOutline);
 $('#btnOutlineClose').addEventListener('click', () => toggleOutline(false));
 
 /* ================================================================
