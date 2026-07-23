@@ -263,7 +263,7 @@ function createMapView(host, opts = {}) {
       if (p.behind) { el.style.display = 'none'; continue; }
       el.style.display = '';
       el.style.transform = `translate(-50%, -50%) translate(${p.x}px, ${p.y}px) scale(${p.scale})`;
-      el.style.opacity = Math.max(0.4, Math.min(1, p.s * 1.05));
+      el.style.opacity = 1; // flat 2D: every node is fully opaque (no depth fade)
       // containers sit slightly behind their contents in the stacking order
       el.style.zIndex = Math.round(100000 - p.zc) - (n.kind === 'container' ? 40 : 0);
     }
@@ -278,20 +278,31 @@ function createMapView(host, opts = {}) {
         continue;
       }
       els.line.style.display = '';
-      els.line.setAttribute('x1', a.x); els.line.setAttribute('y1', a.y);
-      els.line.setAttribute('x2', b.x); els.line.setAttribute('y2', b.y);
+      // stop the line at each bubble's edge instead of running to its center:
+      // trim by the on-screen radius of each end (capped so ends never cross)
+      const na = map.nodes[e.a], nb = map.nodes[e.b];
+      const ddx = b.x - a.x, ddy = b.y - a.y;
+      const dlen = Math.hypot(ddx, ddy) || 1;
+      const ux = ddx / dlen, uy = ddy / dlen;
+      const cap = dlen * 0.45; // keep at least ~10% of the span visible
+      const ta = Math.min(na.r * a.scale, cap), tb = Math.min(nb.r * b.scale, cap);
+      const x1 = a.x + ux * ta, y1 = a.y + uy * ta;
+      const x2 = b.x - ux * tb, y2 = b.y - uy * tb;
+      els.line.setAttribute('x1', x1); els.line.setAttribute('y1', y1);
+      els.line.setAttribute('x2', x2); els.line.setAttribute('y2', y2);
       const depth = (a.s + b.s) / 2;
       const hi = e.id === highlightedEdge;
       const hov = e.id === hoverEdgeId;
       // weight IS the thickness: 1 → hairline, 10 → thick rope
-      let op = Math.max(0.18, Math.min(0.85, depth * 0.7));
-      if (hov) op = Math.min(1, op + 0.35);
+      let op = Math.max(0.5, Math.min(0.95, depth * 0.9));
+      if (hov) op = Math.min(1, op + 0.3);
       if (hi) op = 1;
       els.line.setAttribute('stroke-opacity', op);
-      els.line.setAttribute('stroke-width', Math.max(1.2, (0.5 + e.w) * depth) + (hi ? 1.5 : hov ? 1 : 0));
+      els.line.setAttribute('stroke-width', Math.max(1.6, (0.6 + e.w) * depth) + (hi ? 1.5 : hov ? 1 : 0));
       if (els.handle) {
         els.handle.style.display = showWeights ? '' : 'none';
-        els.handle.setAttribute('transform', `translate(${(a.x + b.x) / 2}, ${(a.y + b.y) / 2}) scale(${Math.max(0.7, Math.min(1.2, depth))})`);
+        // sit the weight badge at the midpoint of the visible (trimmed) segment
+        els.handle.setAttribute('transform', `translate(${(x1 + x2) / 2}, ${(y1 + y2) / 2}) scale(${Math.max(0.7, Math.min(1.2, depth))})`);
       }
     }
 

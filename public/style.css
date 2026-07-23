@@ -528,18 +528,18 @@ button.primary {
     0 2px 8px rgba(0, 0, 0, 0.30);
 }
 .bubble .label {
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 700;
   color: #0e1118;
-  line-height: 1.15;
+  line-height: 1.2;
   padding: 8%;
   max-width: 100%;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   word-break: break-word;
-  text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.35);
   pointer-events: none;
 }
 /* hover: shows what a click would select (selected style below wins over it) */
@@ -556,18 +556,18 @@ button.primary {
     0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
-/* container groups: a flat translucent region with a tinted ring */
+/* container groups: a flat, solid (opaque) region with a tinted ring */
 .bubble.container {
-  background: color-mix(in srgb, var(--main) 10%, transparent);
-  border: 1.5px solid color-mix(in srgb, var(--main) 50%, transparent);
+  background: color-mix(in srgb, var(--main) 22%, var(--panel));
+  border: 2px solid color-mix(in srgb, var(--main) 75%, var(--panel));
   box-shadow: none;
   align-items: flex-start;
 }
 .bubble.container .label {
-  color: var(--main);
-  text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  color: var(--lite);
+  text-shadow: 0 1px 4px rgba(0,0,0,0.85);
   margin-top: 6%;
-  font-size: 14px;
+  font-size: 18px;
 }
 .bubble.container.hovered {
   border-color: var(--main);
