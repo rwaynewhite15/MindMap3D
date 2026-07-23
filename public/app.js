@@ -44,10 +44,15 @@ function createMapView(host, opts = {}) {
   const FOCAL = 700;
 
   host.innerHTML = '';
+  // three stacked layers so connections read correctly over opaque groups:
+  //   group circles (bottom) → connection lines (middle) → bubbles (top)
+  const groupLayer = document.createElement('div');
+  groupLayer.className = 'group-layer';
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('class', 'edges');
   const layer = document.createElement('div');
   layer.className = 'nodes-layer';
+  host.appendChild(groupLayer);
   host.appendChild(svg);
   host.appendChild(layer);
 
@@ -158,6 +163,7 @@ function createMapView(host, opts = {}) {
   /* ---------- DOM build ---------- */
   function buildDOM() {
     layer.innerHTML = '';
+    groupLayer.innerHTML = '';
     svg.innerHTML = '';
     nodeEls.clear();
     edgeEls.clear();
@@ -223,7 +229,9 @@ function createMapView(host, opts = {}) {
       }
       el.classList.toggle('has-note', !!(n.note && n.note.trim()));
       el.classList.toggle('done', !!n.done); // completed task: dimmed + struck through
-      layer.appendChild(el);
+      // group circles go in the bottom layer (behind the connection lines);
+      // bubbles go in the top layer (in front of the lines)
+      (n.kind === 'container' ? groupLayer : layer).appendChild(el);
       nodeEls.set(n.id, el);
     }
     updateSelectionClasses();
@@ -272,8 +280,9 @@ function createMapView(host, opts = {}) {
       el.style.display = '';
       el.style.transform = `translate(-50%, -50%) translate(${p.x}px, ${p.y}px) scale(${p.scale})`;
       el.style.opacity = 1; // flat 2D: every node is fully opaque (no depth fade)
-      // containers sit slightly behind their contents in the stacking order
-      el.style.zIndex = Math.round(100000 - p.zc) - (n.kind === 'container' ? 40 : 0);
+      // small, layer-local z-index: selected/hovered come forward among their
+      // siblings. Kept tiny (was ~99500) so nodes never paint over the menus.
+      el.style.zIndex = id === selectedId ? 3 : id === hoverId ? 2 : 1;
     }
 
     for (const e of map.edges) {
