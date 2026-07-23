@@ -52,9 +52,14 @@ function createMapView(host, opts = {}) {
   svg.setAttribute('class', 'edges');
   const layer = document.createElement('div');
   layer.className = 'nodes-layer';
+  // group name labels ride in their own top layer so they're never hidden
+  // behind connection lines or the bubbles that sit inside the group
+  const labelLayer = document.createElement('div');
+  labelLayer.className = 'label-layer';
   host.appendChild(groupLayer);
   host.appendChild(svg);
   host.appendChild(layer);
+  host.appendChild(labelLayer);
 
   let map = { nodes: {}, edges: [] };
   let idCounter = 1;
@@ -85,6 +90,7 @@ function createMapView(host, opts = {}) {
 
   const nodeEls = new Map();
   const edgeEls = new Map();
+  const labelEls = new Map(); // container id → floating group-name label (top layer)
 
   /* ---------- vector helpers ---------- */
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -164,9 +170,11 @@ function createMapView(host, opts = {}) {
   function buildDOM() {
     layer.innerHTML = '';
     groupLayer.innerHTML = '';
+    labelLayer.innerHTML = '';
     svg.innerHTML = '';
     nodeEls.clear();
     edgeEls.clear();
+    labelEls.clear();
 
     for (const e of map.edges) {
       const na = map.nodes[e.a], nb = map.nodes[e.b];
@@ -208,10 +216,22 @@ function createMapView(host, opts = {}) {
       el.style.setProperty('--dark', col.dark);
       el.style.width = n.r * 2 + 'px';
       el.style.height = n.r * 2 + 'px';
-      const label = document.createElement('div');
-      label.className = 'label';
-      label.textContent = n.label || 'Untitled';
-      el.appendChild(label);
+      if (n.kind === 'container') {
+        // group name floats in the top layer so lines and inner bubbles can't
+        // cover it; the render loop parks it just above the group circle
+        const glabel = document.createElement('div');
+        glabel.className = 'group-label';
+        glabel.textContent = n.label || 'Untitled';
+        glabel.style.setProperty('--main', col.main);
+        glabel.style.setProperty('--lite', col.lite);
+        labelLayer.appendChild(glabel);
+        labelEls.set(n.id, glabel);
+      } else {
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = n.label || 'Untitled';
+        el.appendChild(label);
+      }
       // small badges mark bubbles that carry a note and/or a link
       const badges = [];
       if (n.note && n.note.trim()) badges.push(['📝', 'Has a note']);
@@ -283,6 +303,16 @@ function createMapView(host, opts = {}) {
       // small, layer-local z-index: selected/hovered come forward among their
       // siblings. Kept tiny (was ~99500) so nodes never paint over the menus.
       el.style.zIndex = id === selectedId ? 3 : id === hoverId ? 2 : 1;
+    }
+
+    // park each group's name just above its circle, in the top label layer
+    for (const [id, glabel] of labelEls) {
+      const p = proj[id];
+      const n = map.nodes[id];
+      if (!p || !n || p.behind) { glabel.style.display = 'none'; continue; }
+      glabel.style.display = '';
+      const top = p.y - n.r * p.scale - 8; // 8px gap above the ring
+      glabel.style.transform = `translate(-50%, -100%) translate(${p.x}px, ${top}px)`;
     }
 
     for (const e of map.edges) {
@@ -956,84 +986,6 @@ function createMapView(host, opts = {}) {
     if (opts.onChange) opts.onChange(); // persist the arranged layout
   }
 
-  // Tidy the whole map into a clean, evenly-spread 2D layout and fit it on
-  // screen. Group children pack onto flat discs inside their container;
-  // top-level bubbles and groups spread with a planar force-directed layout.
-  function autoArrange() {
-    const all = Object.values(map.nodes);
-    if (!all.length || arranging) return false;
-
-    // 1) inside each group: pack children on a flat disc sized to fit them
-    const containerKids = new Map();
-    for (const nd of all) if (nd.kind === 'container') containerKids.set(nd.id, []);
-    for (const nd of all) {
-      if (nd.parentId && containerKids.has(nd.parentId)) containerKids.get(nd.parentId).push(nd);
-    }
-    const newSize = new Map();     // containerId → radius that snugly fits its children
-    const childOffset = new Map(); // childId → flat offset from its container's center
-    for (const [cid, kids] of containerKids) {
-      if (!kids.length) { newSize.set(cid, 150); continue; }
-      const mr = Math.max(...kids.map(kd => kd.r));
-      const spacing = 2 * mr + 24;
-      const pts = kids.length === 1 ? [[0, 0, 0]] : flatDisc(kids.length, spacing);
-      kids.forEach((kd, i) => childOffset.set(kd.id, pts[i]));
-      const discR = kids.length === 1 ? 0 : spacing * Math.sqrt(kids.length);
-      newSize.set(cid, Math.max(130, discR + mr + 20));
-    }
-
-    // 2) top level (loose bubbles + groups): force-directed spread in the plane.
-    // Edges that reach inside a group count as edges to the group itself.
-    const isTop = nd => !(nd.parentId && map.nodes[nd.parentId]);
-    const items = all.filter(isTop).map(nd => ({
-      id: nd.id,
-      r: nd.kind === 'container' ? (newSize.get(nd.id) || nd.r) : nd.r,
-      p: [...nd.pos],
-    }));
-    const rep = id => {
-      const nd = map.nodes[id];
-      return nd && nd.parentId && map.nodes[nd.parentId] ? nd.parentId : id;
-    };
-    const topEdges = new Map();
-    for (const e of map.edges) {
-      const a = rep(e.a), b = rep(e.b);
-      if (a === b) continue;
-      const key = a < b ? a + '|' + b : b + '|' + a;
-      const prev = topEdges.get(key);
-      if (!prev || e.w > prev.w) topEdges.set(key, { a, b, w: e.w });
-    }
-    forceLayout(items, [...topEdges.values()], 40, true);
-
-    // 3) collect targets; children ride along with their group (flat offsets,
-    // so they land in the same plane)
-    const to = {};
-    for (const it of items) {
-      to[it.id] = it.p;
-      const kids = containerKids.get(it.id);
-      if (kids) for (const kd of kids) to[kd.id] = add3(it.p, childOffset.get(kd.id));
-    }
-    for (const [cid, r] of newSize) { const c = map.nodes[cid]; if (c) c.r = r; }
-    buildDOM();
-
-    // 4) face the plane straight-on and stop the spin so it stays 2D on screen;
-    // pull the camera back just far enough that the whole layout fits
-    yaw = 0; pitch = 0;
-    pivot = [0, 0, 0];
-    centeredId = null;
-    spinning = false;
-    let extent = 200;
-    for (const it of items) {
-      extent = Math.max(extent, Math.hypot(it.p[0], it.p[1]) + it.r);
-    }
-    const half = Math.max(120, Math.min(host.clientWidth || 800, host.clientHeight || 600) / 2 - 40);
-    camDist = Math.min(3200, Math.max(300, (FOCAL * extent) / half));
-
-    // 5) glide everything to its new spot, then save
-    const from = {};
-    for (const id of Object.keys(to)) from[id] = [...map.nodes[id].pos];
-    arranging = { t0: performance.now(), dur: 750, from, to };
-    return true;
-  }
-
   /* ---------- public API ---------- */
   return {
     setMap(m) {
@@ -1117,7 +1069,7 @@ function createMapView(host, opts = {}) {
     stop() { running = false; },
     addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setLink, setDone, loadGenerated,
-    setWeight, deleteEdge, moveIntoContainer, autoArrange,
+    setWeight, deleteEdge, moveIntoContainer,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
       const n = map.nodes[id];
@@ -1217,7 +1169,7 @@ let chatUnread = 0;
 const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings'];
 
 function show(name) {
-  if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
+  if (name !== 'profile') { hideNoteViewer(); viewingOwnPreview = false; } // the note reader belongs to the profile map
   if (name !== 'map' && outlineOpen) toggleOutline(false); // outline belongs to the editor
   $('#btnAI').hidden = !(me && me.aiEnabled); // AI button only when the server enables it
   for (const s of sections) $('#view-' + s).hidden = s !== name;
@@ -1248,6 +1200,7 @@ function route() {
   }
 
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
+  if (h === 'view') { openViewMode().catch(err => { alert(err.message); location.hash = '#/map'; }); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
@@ -1913,9 +1866,9 @@ function initEditor() {
     refreshToolbar();
     openRename(id);
   });
-  $('#btnArrange').addEventListener('click', () => {
-    if (myMap.autoArrange()) setHint('Tidied — bubbles spread out evenly', false);
-    else setHint('Nothing to tidy yet — add a bubble first', false);
+  $('#btnViewMode').addEventListener('click', () => {
+    if (!currentMapId) { setHint('Open a map first', false); return; }
+    location.hash = '#/view';
   });
   $('#btnOutline').addEventListener('click', () => toggleOutline());
   $('#btnAI').addEventListener('click', openAISheet);
@@ -2892,8 +2845,37 @@ function renderProfileTabs(maps) {
 let profileMapId = null;    // map currently previewed on a profile
 let profileCanEdit = false; // whether that previewed map is editable by me
 let profileLike = { count: 0, liked: false }; // like state of the previewed map
+let viewingOwnPreview = false; // true when previewing my own map via "👁 View"
+
+// Preview the map that's open in the editor exactly as viewers see it (read-only).
+async function openViewMode() {
+  const id = currentMapId;
+  if (!id) { location.hash = '#/map'; return; }
+  flushSave(); // make sure the preview reflects unsaved edits
+  viewingOwnPreview = true;
+  currentProfile = null;
+  show('profile');
+  const data = await api('/api/maps/' + id);
+  const name = (data.map && data.map.name) || 'Preview';
+  $('#profileName').textContent = name;
+  $('#profileHandle').textContent = 'Preview — how this map looks in view mode';
+  $('#btnFollowAction').hidden = true;
+  $('#btnFriendAction').hidden = true;
+  $('#profileTabs').hidden = true;
+  $('#profileLocked').hidden = true;
+  $('#profileToolbar').hidden = false;
+  $('#profileHint').hidden = false;
+  profileMapId = id;
+  profileCanEdit = true; // it's my map — the edit button returns to the editor
+  profileMap.setMap(data.map);
+  $('#btnPEdit').hidden = false;
+  $('#btnPEdit').textContent = '✎ Back to editing';
+  $('#btnPLike').hidden = true; // you can't like your own map
+  profileMap.start();
+}
 
 async function openProfileMap(id) {
+  viewingOwnPreview = false;
   for (const b of $('#profileTabs').children) b.classList.toggle('active', b.dataset.id === id);
   const data = await api('/api/maps/' + id);
   profileMapId = id;
@@ -2901,6 +2883,7 @@ async function openProfileMap(id) {
   profileMap.setMap(data.map);
   // if the owner granted us edit rights, offer to open it in the real editor
   $('#btnPEdit').hidden = !data.canEdit;
+  $('#btnPEdit').textContent = '✎ Edit this map';
   profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };
   renderProfileLike(!!data.isOwner);
 }
@@ -2989,6 +2972,7 @@ $('#btnFollowAction').addEventListener('click', async () => {
 });
 
 $('#btnProfileBack').addEventListener('click', () => {
+  if (viewingOwnPreview) { location.hash = '#/map'; return; }
   if (history.length > 1) history.back();
   else location.hash = '#/home';
 });

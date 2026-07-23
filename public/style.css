@@ -262,6 +262,8 @@ button.primary {
 .map-host .group-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 .map-host svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 .map-host .nodes-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+/* group names ride above everything so lines/bubbles never cover them */
+.map-host .label-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 .map-host.hoverable { cursor: pointer; }
 
 .edit-toolbar {
@@ -568,15 +570,12 @@ button.primary {
   box-shadow: none;
   overflow: visible; /* the label sits outside the circle */
 }
-/* group label sits just above the circle, not inside it, so it never covers
-   the bubbles within the group */
-.bubble.container > .label {
+/* group name label: floats in the top layer just above the circle, so it's
+   never hidden behind connection lines or the bubbles inside the group. The
+   render loop sets its transform (position); left/top are the transform origin. */
+.group-label {
   position: absolute;
-  display: block;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 6px;
+  left: 0; top: 0;
   max-width: 220px;
   white-space: nowrap;
   overflow: hidden;
@@ -587,9 +586,11 @@ button.primary {
   line-height: 1.2;
   padding: 3px 10px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid color-mix(in srgb, var(--main) 55%, transparent);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+  will-change: transform;
 }
 .bubble.container.hovered {
   border-color: var(--main);

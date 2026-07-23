@@ -74,7 +74,7 @@
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
       <button id="btnAI" class="tb" hidden title="Generate a mind map from a prompt with AI">✨ AI</button>
       <button id="btnOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
-      <button id="btnArrange" class="tb" title="Tidy: spread all bubbles and groups out evenly">✨ Tidy</button>
+      <button id="btnViewMode" class="tb" title="Preview this map in read-only view mode">👁 View</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
       <button id="btnNote" class="tb" disabled title="Add or edit a note on the selected bubble (N)">📝 Note</button>
@@ -218,8 +218,8 @@
   <input id="renameInput" maxlength="80" placeholder="Type an idea…">
   <label class="field-title" for="noteInput">Notes <span class="muted">— details, context</span></label>
   <textarea id="noteInput" maxlength="4000" rows="4" placeholder="Add notes for this bubble… (visible to anyone who can see the map)"></textarea>
-  <label class="field-title" for="linkInput">Link <span class="muted">— an optional web address</span></label>
-  <input id="linkInput" type="url" maxlength="300" placeholder="https://…">
+  <label class="field-title" for="linkInput" id="linkFieldLabel" hidden>Link <span class="muted">— an optional web address</span></label>
+  <input id="linkInput" type="url" maxlength="300" placeholder="https://…" hidden>
   <label class="check"><input type="checkbox" id="doneInput"> Mark as a completed task</label>
   <div class="sheet-row">
     <button id="renameCancel" class="tb">Cancel</button>
