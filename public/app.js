@@ -1260,7 +1260,7 @@ window.addEventListener('hashchange', route);
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI', '#sheetExport'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1713,63 +1713,116 @@ function currentMapName() {
   return raw.replace(/\s*👥.*$/, '').trim() || 'Mind map'; // strip the shared-with marker
 }
 
-// Build a Markdown outline of the map: groups with their nested bubbles, plus
-// each node's note (as a blockquote), completed tasks struck through, and links.
-function buildOutlineMarkdown() {
+// The ordered outline structure: top-level groups (with their children) and
+// then loose bubbles — the same shape the Outline panel renders.
+function outlineStructure() {
   const map = myMap.getMap();
   const byId = map.nodes || {};
   const nodes = Object.values(byId);
   const childrenOf = id => nodes.filter(n => n.parentId === id);
   const groups = nodes.filter(n => n.kind === 'container');
   const loose = nodes.filter(n => n.kind === 'bubble' && !(n.parentId && byId[n.parentId]));
+  return { nodes, childrenOf, groups, loose };
+}
 
+// Markdown: groups as bold bullets, bubbles nested, notes as blockquotes,
+// done tasks struck through, links as markdown links.
+function buildOutlineMarkdown() {
+  const { nodes, childrenOf, groups, loose } = outlineStructure();
   const label = n => {
     let s = (n.label || 'Untitled').trim() || 'Untitled';
     if (n.done) s = '~~' + s + '~~ ✓';
     if (n.link) s += ' ([link](' + n.link + '))';
     return s;
   };
-  const noteBlock = (n, pad) => {
-    if (!n.note || !n.note.trim()) return '';
-    return n.note.replace(/\r/g, '').trim().split('\n')
-      .map(line => pad + '> ' + line).join('\n') + '\n';
-  };
+  const note = (n, pad) => (!n.note || !n.note.trim()) ? ''
+    : n.note.replace(/\r/g, '').trim().split('\n').map(l => pad + '> ' + l).join('\n') + '\n';
 
   let out = '# ' + currentMapName() + '\n\n';
   if (!nodes.length) return out + '_(empty map)_\n';
-
   for (const g of groups) {
-    out += '- **' + label(g) + '**\n';
-    out += noteBlock(g, '  ');
-    for (const c of childrenOf(g.id)) {
-      out += '  - ' + label(c) + '\n';
-      out += noteBlock(c, '    ');
-    }
+    out += '- **' + label(g) + '**\n' + note(g, '  ');
+    for (const c of childrenOf(g.id)) out += '  - ' + label(c) + '\n' + note(c, '    ');
   }
-  for (const b of loose) {
-    out += '- ' + label(b) + '\n';
-    out += noteBlock(b, '  ');
-  }
+  for (const b of loose) out += '- ' + label(b) + '\n' + note(b, '  ');
   return out;
 }
 
-function exportOutline() {
+// Plain text: an indented outline with •/- bullets; notes indented beneath.
+function buildOutlineText() {
+  const { nodes, childrenOf, groups, loose } = outlineStructure();
+  const label = n => {
+    let s = (n.label || 'Untitled').trim() || 'Untitled';
+    if (n.done) s += ' [done]';
+    if (n.link) s += ' (' + n.link + ')';
+    return s;
+  };
+  const note = (n, pad) => (!n.note || !n.note.trim()) ? ''
+    : n.note.replace(/\r/g, '').trim().split('\n').map(l => pad + l).join('\n') + '\n';
+
+  const title = currentMapName();
+  let out = title + '\n' + '='.repeat(title.length) + '\n\n';
+  if (!nodes.length) return out + '(empty map)\n';
+  for (const g of groups) {
+    out += '• ' + label(g) + '\n' + note(g, '    ');
+    for (const c of childrenOf(g.id)) out += '    - ' + label(c) + '\n' + note(c, '        ');
+  }
+  for (const b of loose) out += '• ' + label(b) + '\n' + note(b, '    ');
+  return out;
+}
+
+// OPML 2.0: a standard outline format importable by many outliners/mind-map
+// tools. Notes ride on the conventional `_note` attribute.
+function buildOutlineOPML() {
+  const { childrenOf, groups, loose } = outlineStructure();
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\r/g, '').replace(/\n/g, '&#10;');
+  const node = (n, indent) => {
+    const attrs = ['text="' + esc(n.label || 'Untitled') + '"'];
+    if (n.note && n.note.trim()) attrs.push('_note="' + esc(n.note.trim()) + '"');
+    if (n.link) attrs.push('url="' + esc(n.link) + '"');
+    if (n.done) attrs.push('_done="true"');
+    const kids = childrenOf(n.id);
+    if (n.kind === 'container' && kids.length) {
+      return indent + '<outline ' + attrs.join(' ') + '>\n'
+        + kids.map(k => node(k, indent + '  ')).join('')
+        + indent + '</outline>\n';
+    }
+    return indent + '<outline ' + attrs.join(' ') + '/>\n';
+  };
+  const body = groups.map(g => node(g, '    ')).join('') + loose.map(b => node(b, '    ')).join('');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n'
+    + '  <head><title>' + esc(currentMapName()) + '</title></head>\n'
+    + '  <body>\n' + body + '  </body>\n</opml>\n';
+}
+
+const EXPORT_FORMATS = {
+  md: { build: buildOutlineMarkdown, mime: 'text/markdown;charset=utf-8', ext: 'md', name: 'Markdown' },
+  txt: { build: buildOutlineText, mime: 'text/plain;charset=utf-8', ext: 'txt', name: 'plain text' },
+  opml: { build: buildOutlineOPML, mime: 'text/x-opml;charset=utf-8', ext: 'opml', name: 'OPML' },
+};
+
+function downloadOutline(format) {
   if (!myMap) return;
-  const md = buildOutlineMarkdown();
+  const f = EXPORT_FORMATS[format] || EXPORT_FORMATS.md;
   const safe = currentMapName().replace(/[^\w\- ]+/g, '').trim() || 'mindmap';
-  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const blob = new Blob([f.build()], { type: f.mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = safe + ' outline.md';
+  a.download = safe + ' outline.' + f.ext;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  setHint('Outline exported as Markdown', false);
+  setHint('Outline exported as ' + f.name, false);
 }
 
-$('#btnOutlineExport').addEventListener('click', exportOutline);
+$('#btnOutlineExport').addEventListener('click', () => openSheet('#sheetExport'));
+$('#exportMd').addEventListener('click', () => { downloadOutline('md'); closeSheets(); });
+$('#exportTxt').addEventListener('click', () => { downloadOutline('txt'); closeSheets(); });
+$('#exportOpml').addEventListener('click', () => { downloadOutline('opml'); closeSheets(); });
+$('#exportCancel').addEventListener('click', () => closeSheets());
 $('#btnOutlineClose').addEventListener('click', () => toggleOutline(false));
 
 /* ================================================================
