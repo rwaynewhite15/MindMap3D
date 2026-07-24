@@ -210,8 +210,16 @@
         <div id="settingsSaved" class="muted" hidden>Saved ✓</div>
       </form>
       <hr>
+      <label class="field-title">Your data</label>
+      <p class="muted" style="margin:-2px 0 8px">Download everything on your account — profile, maps, and social connections — as a JSON file.</p>
+      <button id="btnExportData" class="tb">⤓ Export my data</button>
+      <hr>
       <div class="muted" id="settingsWho"></div>
       <button id="btnLogout" class="danger-outline">Sign out</button>
+      <hr>
+      <label class="field-title" style="color:var(--danger)">Danger zone</label>
+      <p class="muted" style="margin:-2px 0 8px">Deleting your account permanently removes your profile, all your maps, and your connections. This can't be undone.</p>
+      <button id="btnDeleteAccount" class="danger-outline">Delete my account…</button>
     </div>
   </section>
 
@@ -410,6 +418,18 @@
   </div>
   <div class="sheet-row">
     <button id="exportCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<div id="sheetDeleteAccount" class="sheet" hidden>
+  <div class="sheet-title">Delete your account?</div>
+  <div class="muted" style="margin-bottom:10px">This permanently deletes your profile, all your maps, and your connections. It <strong>cannot be undone</strong>. Consider exporting your data first.</div>
+  <label class="field-title">Enter your password to confirm</label>
+  <input id="deleteAcctPassword" type="password" autocomplete="current-password" placeholder="Your password">
+  <div class="form-error" id="deleteAcctError"></div>
+  <div class="sheet-row">
+    <button id="deleteAcctCancel" class="tb">Cancel</button>
+    <button id="deleteAcctConfirm" class="tb danger">Delete account permanently</button>
   </div>
 </div>
 

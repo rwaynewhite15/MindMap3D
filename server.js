@@ -182,6 +182,49 @@ function pgStore() {
     async deleteSession(sid) {
       await pool.query('DELETE FROM sessions WHERE sid = $1', [sid]);
     },
+    // Delete a user and scrub every reference to them from other users: friend
+    // links, requests, follow graph, and any map editor/like grants. Sessions
+    // cascade via the FK. Done in one transaction so we never half-delete.
+    async deleteUser(userId) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // strip the id out of every other user's relationship arrays
+        await client.query(
+          `UPDATE users SET
+             friends      = (friends      - $1),
+             requests_in  = (requests_in  - $1),
+             requests_out = (requests_out - $1),
+             following    = (following    - $1),
+             followers    = (followers    - $1)
+           WHERE friends @> $2 OR requests_in @> $2 OR requests_out @> $2
+              OR following @> $2 OR followers @> $2`,
+          [userId, JSON.stringify([userId])]);
+        // scrub the id from any map's editors[] and likes[] on other accounts
+        const { rows } = await client.query(
+          `SELECT id, maps FROM users
+           WHERE jsonb_path_exists(maps, '$[*].editors[*] ? (@ == $u)', jsonb_build_object('u', $1::text))
+              OR jsonb_path_exists(maps, '$[*].likes[*] ? (@ == $u)',   jsonb_build_object('u', $1::text))`,
+          [userId]);
+        for (const r of rows) {
+          if (r.id === userId) continue;
+          const maps = r.maps.map(m => ({
+            ...m,
+            editors: (m.editors || []).filter(id => id !== userId),
+            likes: (m.likes || []).filter(id => id !== userId),
+          }));
+          await client.query('UPDATE users SET maps = $2::jsonb WHERE id = $1',
+            [r.id, JSON.stringify(maps)]);
+        }
+        await client.query('DELETE FROM users WHERE id = $1', [userId]); // sessions cascade
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
@@ -249,6 +292,26 @@ function fileStore() {
       return user ? { user, createdAt: s.createdAt } : null;
     },
     async deleteSession(sid) { delete db.sessions[sid]; persist(); },
+    async deleteUser(userId) {
+      const rm = arr => Array.isArray(arr) ? arr.filter(id => id !== userId) : arr;
+      for (const u of Object.values(db.users)) {
+        if (u.id === userId) continue;
+        u.friends = rm(u.friends);
+        u.requestsIn = rm(u.requestsIn);
+        u.requestsOut = rm(u.requestsOut);
+        u.following = rm(u.following);
+        u.followers = rm(u.followers);
+        for (const m of u.maps || []) {
+          m.editors = rm(m.editors);
+          if (Array.isArray(m.likes)) m.likes = rm(m.likes);
+        }
+      }
+      delete db.users[userId];
+      for (const [sid, s] of Object.entries(db.sessions)) {
+        if (s.userId === userId) delete db.sessions[sid];
+      }
+      persist();
+    },
   };
 }
 
@@ -1016,6 +1079,67 @@ async function handleApi(req, res, pathname) {
     if ('bio' in body) user.bio = String(body.bio || '').slice(0, 300);
     await store.saveUser(user);
     return sendJSON(res, 200, { user: meUser(user) });
+  }
+
+  // Export everything we hold for this account as a downloadable JSON file.
+  // Resolves ids to usernames where useful so the export is human-readable, and
+  // never includes the password hash/salt.
+  if (route === 'GET /api/me/export') {
+    const refIds = [...new Set([
+      ...(user.friends || []), ...(user.requestsIn || []), ...(user.requestsOut || []),
+      ...(user.following || []), ...(user.followers || []),
+      ...user.maps.flatMap(m => m.editors || []),
+    ])];
+    const refUsers = await store.getUsersByIds(refIds);
+    const uname = id => { const u = refUsers.find(x => x.id === id); return u ? u.username : null; };
+    const unames = ids => (ids || []).map(uname).filter(Boolean);
+    const data = {
+      exportedAt: new Date().toISOString(),
+      account: {
+        username: user.username,
+        displayName: user.displayName || '',
+        showDisplayName: !!user.showDisplayName,
+        defaultVisibility: user.visibility,
+        bio: user.bio || '',
+        createdAt: new Date(user.createdAt).toISOString(),
+      },
+      social: {
+        friends: unames(user.friends),
+        followRequestsIncoming: unames(user.requestsIn),
+        followRequestsOutgoing: unames(user.requestsOut),
+        following: unames(user.following),
+        followers: unames(user.followers),
+      },
+      maps: user.maps.map(m => ({
+        id: m.id, name: m.name, visibility: m.visibility,
+        editors: unames(m.editors),
+        createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : null,
+        updatedAt: m.updatedAt ? new Date(m.updatedAt).toISOString() : null,
+        nodes: m.nodes, edges: m.edges, anchorId: m.anchorId || null,
+        chat: m.chat || [],
+      })),
+    };
+    const body = JSON.stringify(data, null, 2);
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="mindmapshare-${user.username}.json"`,
+      'Content-Length': Buffer.byteLength(body),
+    });
+    return res.end(body);
+  }
+
+  // Permanently delete this account. Requires the current password (re-typed),
+  // compared in constant time, then scrubs every reference to the user and ends
+  // the session.
+  if (route === 'DELETE /api/me') {
+    const body = await readBody(req);
+    const password = String(body.password || '');
+    const got = hashPassword(password, user.salt);
+    const ok = crypto.timingSafeEqual(Buffer.from(got, 'hex'), Buffer.from(user.passHash, 'hex'));
+    if (!ok) return sendJSON(res, 403, { error: 'Password is incorrect.' });
+    await store.deleteUser(user.id);
+    res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
+    return sendJSON(res, 200, { ok: true });
   }
 
   // --- maps ---
