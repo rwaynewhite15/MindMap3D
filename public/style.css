@@ -140,6 +140,12 @@ main > section[hidden] { display: none; }
 .legal-meta { font-style: italic; margin-bottom: 14px; }
 .legal-intro { margin-bottom: 8px; }
 .legal-outro { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
+.legal-nav { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+.legal-nav a { color: var(--accent); }
+.legal-egg { color: var(--dim); opacity: 0.5; font-size: 12px; }
+.legal-egg a { color: inherit; }
+.legal-draft, .legal-meta strong { color: var(--danger); }
+.legal-doc code { background: var(--line); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 .auth-tabs { display: flex; gap: 6px; margin-bottom: 18px; }
 .auth-tabs button {
   flex: 1;
