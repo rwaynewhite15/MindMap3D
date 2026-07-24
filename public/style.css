@@ -47,6 +47,36 @@ input, textarea { font-family: inherit; }
 #logo span, .auth-logo span { color: var(--accent); }
 #logo em, .auth-logo em { color: var(--dim); font-weight: 400; font-style: normal; }
 
+/* hamburger toggle — only shown on phones (see the small-screen media query) */
+.nav-toggle {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: none;               /* flex on small screens */
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  flex: none;
+}
+.nav-toggle:active { background: var(--line); }
+.nav-toggle span {
+  display: block;
+  height: 2px;
+  width: 20px;
+  margin: 0 auto;
+  background: var(--ink);
+  border-radius: 2px;
+  transition: transform 0.2s, opacity 0.2s;
+}
+/* animate into an “X” when the menu is open */
+.nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
 #mainNav { display: flex; gap: 2px; margin-left: auto; }
 #mainNav a {
   color: var(--dim);
@@ -289,8 +319,12 @@ button.primary {
   align-items: center;
   z-index: 18;
   max-width: calc(100% - 106px); /* keep clear of the save-state pill */
+  overflow-x: auto;              /* on narrow screens the controls scroll, never overflow */
+  scrollbar-width: none;         /* the row is a compact control strip; hide the bar */
+  padding-bottom: 2px;
 }
-#mapBar .tb { min-height: 38px; padding: 8px 11px; background: #232938ee; }
+#mapBar::-webkit-scrollbar { display: none; }
+#mapBar .tb { min-height: 38px; padding: 8px 11px; background: #232938ee; flex: none; }
 #mapSelect {
   background: #141926ee;
   color: var(--ink);
@@ -302,6 +336,7 @@ button.primary {
   min-height: 38px;
   min-width: 0;
   max-width: 44vw;
+  flex: none;
   outline: none;
 }
 #mapSelect:focus { border-color: var(--accent); }
@@ -806,8 +841,16 @@ button.primary {
 }
 #profileWho { flex: 1; min-width: 0; }
 #profileName { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#profileHandle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #profileMapHost { top: 58px; }
 #profileToolbar { justify-content: flex-end; }
+
+/* when the map-tabs row shows (2+ maps), drop the viewer, hint and lock card
+   below it so the tab pills never sit over the map or its labels */
+#view-profile.has-tabs #profileMapHost,
+#view-profile.has-tabs .locked { top: 100px; }
+#view-profile.has-tabs .locked { inset: 100px 0 0 0; }
+#view-profile.has-tabs #profileHint { top: 100px; }
 
 .locked {
   position: absolute;
@@ -987,6 +1030,62 @@ button.primary {
 @media (max-width: 560px) {
   #logo { font-size: 13px; }
   #logo em { display: none; }
-  #mainNav a { font-size: 12px; padding: 8px 7px; }
   .tb { padding: 10px 11px; font-size: 12.5px; }
+
+  /* top nav collapses behind a hamburger */
+  #topbar { position: relative; }
+  .nav-toggle { display: flex; }
+  #mainNav {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    margin: 0;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 190px;
+    padding: 8px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+    z-index: 40;
+    animation: sheet-up 0.16s ease-out;
+  }
+  #mainNav:not(.open) { display: none; }
+  #mainNav a {
+    font-size: 15px;
+    padding: 12px 14px;
+    min-height: 46px;
+    border-radius: 8px;
+    width: 100%;
+  }
+  #mainNav a.active { background: var(--line); }
+
+  /* profile (read-only viewer) header: keep the name and its two action
+     buttons on one line without the buttons crowding the name off-screen */
+  #profileBar { gap: 6px; }
+  #profileBar .tb { padding: 8px 10px; font-size: 12px; }
+  #profileName { font-size: 14px; }
+  #profileHandle { font-size: 11px; }
+
+  /* the read-only note reader spans the width so long notes don't clip, and
+     sits just above the viewer toolbar */
+  .note-viewer {
+    left: 10px; right: 10px;
+    width: auto;
+    bottom: 76px;
+    max-height: 40dvh;
+  }
+
+  /* viewer hint pill: keep it inside the screen and above the toolbar text */
+  #profileHint, .hint { font-size: 10.5px; max-width: 94%; }
+}
+
+/* very narrow phones: the map-tabs row wraps to two lines, so give the viewer
+   and hint a little more room below it */
+@media (max-width: 380px) {
+  #view-profile.has-tabs #profileMapHost,
+  #view-profile.has-tabs .locked { top: 108px; }
+  #view-profile.has-tabs .locked { inset: 108px 0 0 0; }
+  #view-profile.has-tabs #profileHint { top: 108px; }
 }

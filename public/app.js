@@ -146,11 +146,29 @@ function createMapView(host, opts = {}) {
     if (L > maxL) n.pos = add3(c.pos, mul(d, maxL / L));
   }
 
+  const GROUP_MIN_R = 130;   // an empty group never shrinks below this
+  const GROUP_PAD = 22;      // breathing room between the outermost child and the ring
+
+  // Size a container to snugly fit its children: big enough that every child
+  // sits fully inside (plus padding), but no bigger. Unlike a grow-only pass,
+  // this also shrinks a group back down when children are removed or pulled in,
+  // so a group always tracks the space its contents actually need.
+  function fitContainer(c) {
+    if (!c || c.kind !== 'container') return;
+    let need = GROUP_MIN_R;
+    for (const ch of childrenOf(c.id)) {
+      need = Math.max(need, len(sub(ch.pos, c.pos)) + ch.r + GROUP_PAD);
+    }
+    c.r = need;
+  }
+
+  // Grow a container just enough to contain a newly added/moved child, without
+  // shrinking it (used on live edits so an existing layout doesn't jump).
   function growContainer(c) {
     if (!c || c.kind !== 'container') return;
-    let need = 130;
+    let need = GROUP_MIN_R;
     for (const ch of childrenOf(c.id)) {
-      need = Math.max(need, len(sub(ch.pos, c.pos)) + ch.r + 20);
+      need = Math.max(need, len(sub(ch.pos, c.pos)) + ch.r + GROUP_PAD);
     }
     c.r = Math.max(c.r, need);
   }
@@ -593,7 +611,11 @@ function createMapView(host, opts = {}) {
         if (map.nodes[sid]) map.nodes[sid].pos = add3(s, delta);
       }
       const n = map.nodes[drag.id];
-      if (n) clampInside(n);
+      if (n) {
+        clampInside(n);
+        // dragging a bubble around inside its group nudges the ring to keep it fit
+        if (n.kind !== 'container' && n.parentId && map.nodes[n.parentId]) fitContainer(map.nodes[n.parentId]);
+      }
     } else if (drag.type === 'centerTap') {
       // dragging from a bubble in read-only view pans the flat view
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
@@ -724,8 +746,11 @@ function createMapView(host, opts = {}) {
       if (kids.length && !confirm(`Delete this group and the ${kids.length} bubble${kids.length > 1 ? 's' : ''} inside it?`)) return;
       for (const k of kids) doomed.push(k.id);
     }
+    // deleting a bubble that lived in a group frees up space — shrink the group to fit
+    const parent = n.kind !== 'container' && n.parentId && map.nodes[n.parentId];
     for (const id of doomed) delete map.nodes[id];
     map.edges = map.edges.filter(e => !doomed.includes(e.a) && !doomed.includes(e.b));
+    if (parent) fitContainer(parent);
     selectedId = null;
     changed();
     if (opts.onSelect) opts.onSelect(null);
@@ -826,7 +851,10 @@ function createMapView(host, opts = {}) {
       growContainer(c);
     } else {
       n.parentId = null;
-      if (old) n.pos = add3(old.pos, mul(norm(sub(n.pos, old.pos)), old.r + n.r + 50));
+      if (old) {
+        n.pos = add3(old.pos, mul(norm(sub(n.pos, old.pos)), old.r + n.r + 50));
+        fitContainer(old); // the child left — shrink the old group back down to fit
+      }
     }
     changed();
   }
@@ -972,13 +1000,15 @@ function createMapView(host, opts = {}) {
     const newSize = new Map();     // containerId → radius that snugly fits its children
     const childOffset = new Map(); // childId → flat offset from its container's center
     for (const [cid, kids] of containerKids) {
-      if (!kids.length) { newSize.set(cid, 150); continue; }
+      if (!kids.length) { newSize.set(cid, GROUP_MIN_R); continue; }
       const mr = Math.max(...kids.map(kd => kd.r));
       const spacing = 2 * mr + 24;
       const pts = kids.length === 1 ? [[0, 0, 0]] : flatDisc(kids.length, spacing);
       kids.forEach((kd, i) => childOffset.set(kd.id, pts[i]));
-      const discR = kids.length === 1 ? 0 : spacing * Math.sqrt(kids.length);
-      newSize.set(cid, Math.max(130, discR + mr + 20));
+      // radius to the farthest child's outer edge (+ padding) — a snug fit
+      let discR = 0;
+      for (const p of pts) discR = Math.max(discR, Math.hypot(p[0], p[1]));
+      newSize.set(cid, Math.max(GROUP_MIN_R, discR + mr + GROUP_PAD));
     }
 
     // 2) top level (loose bubbles + groups): force-directed spread in the plane.
@@ -1221,8 +1251,9 @@ function show(name) {
   if (name !== 'map' && outlineOpen) toggleOutline(false); // outline belongs to the editor
   $('#btnAI').hidden = !(me && me.aiEnabled); // AI button only when the server enables it
   for (const s of sections) $('#view-' + s).hidden = s !== name;
-  // hide the top bar only on the full-screen auth card
+  // hide the top bar (and its hamburger) only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
+  $('#navToggle').hidden = name === 'auth';
   // auth-only nav links are hidden for anonymous visitors; show a Sign in link instead
   for (const a of document.querySelectorAll('#mainNav a[data-auth]')) a.hidden = !me;
   $('#navSignIn').hidden = !!me;
@@ -1236,6 +1267,7 @@ function show(name) {
 function route() {
   closeSheets();
   hidePickMenu();
+  closeNavMenu(); // any navigation closes the mobile hamburger menu
   const h = location.hash.replace(/^#\/?/, '') || (me ? 'home' : 'browse');
 
   if (!me) {
@@ -1255,6 +1287,33 @@ function route() {
   show('map');
 }
 window.addEventListener('hashchange', route);
+
+/* ================================================================
+   Mobile hamburger menu (top nav)
+================================================================ */
+const navToggle = $('#navToggle');
+const mainNav = $('#mainNav');
+
+function openNavMenu() {
+  mainNav.classList.add('open');
+  navToggle.setAttribute('aria-expanded', 'true');
+}
+function closeNavMenu() {
+  mainNav.classList.remove('open');
+  navToggle.setAttribute('aria-expanded', 'false');
+}
+
+navToggle.addEventListener('click', e => {
+  e.stopPropagation();
+  mainNav.classList.contains('open') ? closeNavMenu() : openNavMenu();
+});
+// tap a link closes it (route() also closes on hash change, but same-hash taps
+// wouldn't fire that); tap anywhere outside closes it too
+mainNav.addEventListener('click', e => { if (e.target.closest('a')) closeNavMenu(); });
+document.addEventListener('click', e => {
+  if (mainNav.classList.contains('open') &&
+      !mainNav.contains(e.target) && !navToggle.contains(e.target)) closeNavMenu();
+});
 
 /* ================================================================
    Sheets
@@ -1913,10 +1972,6 @@ function initEditor() {
     refreshToolbar();
     openRename(id);
   });
-  $('#btnArrange').addEventListener('click', () => {
-    if (myMap.autoArrange()) setHint('Tidied — bubbles spread out evenly', false);
-    else setHint('Nothing to tidy yet — add a bubble first', false);
-  });
   $('#btnOutline').addEventListener('click', () => toggleOutline());
   $('#btnAI').addEventListener('click', openAISheet);
   $('#btnConnect').addEventListener('click', () => {
@@ -2100,6 +2155,15 @@ function openMapSettings() {
   fillFriendPick();
 }
 $('#btnMapSettings').addEventListener('click', openMapSettings);
+
+// Preview my own maps in the read-only viewer, the way a visitor sees them.
+// Opens on the map I'm currently editing (flushing any pending save first).
+$('#btnPreview').addEventListener('click', () => {
+  if (!me) return;
+  flushSave();
+  if (currentMapId) pendingProfileMapId = currentMapId;
+  location.hash = '#/u/' + me.username;
+});
 
 function renderMsEditors() {
   const box = $('#msEditors');
@@ -2826,14 +2890,17 @@ async function refreshBadge() {
 /* ================================================================
    Profile (view someone else's map)
 ================================================================ */
+// Are we viewing our own profile (read-only viewer preview of our own maps)?
+let viewingSelf = false;
+
 async function openProfile(username) {
-  if (me && username === me.username) { location.hash = '#/map'; return; }
+  viewingSelf = !!(me && username === me.username);
   show('profile');
   try {
     const data = await api('/api/users/' + username);
     currentProfile = data;
     const u = data.user;
-    $('#profileName').textContent = u.name || '@' + u.username;
+    $('#profileName').textContent = (u.name || '@' + u.username) + (viewingSelf ? ' · preview' : '');
     const bits = ['@' + u.username];
     if (u.bio) bits.push(u.bio);
     $('#profileHandle').textContent = bits.join(' · ');
@@ -2859,7 +2926,8 @@ async function openProfile(username) {
       const who = u.name || '@' + u.username;
       // could be friends-only maps (become a friend to see them) or all-private maps
       $('#lockedText').textContent =
-        !me ? who + " has no public maps. Sign in and add them as a friend to see friends-only maps."
+        viewingSelf ? "You don't have any maps yet. Head to My Maps to create one."
+        : !me ? who + " has no public maps. Sign in and add them as a friend to see friends-only maps."
         : u.relation === 'friends' ? who + " hasn't shared any maps with friends."
         : who + "'s maps aren't public. Add them as a friend to see friends-only maps.";
       profileMap.setMap({ nodes: {}, edges: [] });
@@ -2879,6 +2947,9 @@ function renderProfileTabs(maps) {
   const bar = $('#profileTabs');
   bar.innerHTML = '';
   bar.hidden = maps.length < 2;
+  // when the map-tabs row is showing, push the viewer + hint below it so they
+  // don't sit under the tabs (CSS keys off this class)
+  $('#view-profile').classList.toggle('has-tabs', maps.length >= 2);
   for (const m of maps) {
     const b = document.createElement('button');
     b.className = 'map-tab';
@@ -2937,8 +3008,8 @@ $('#btnPEdit').addEventListener('click', () => editProfileMap().catch(err => ale
 
 function renderFriendButton() {
   const btn = $('#btnFriendAction');
-  // anonymous visitors can view but not friend anyone
-  if (!currentProfile || !me) { btn.hidden = true; return; }
+  // anonymous visitors can view but not friend anyone; you can't friend yourself
+  if (!currentProfile || !me || viewingSelf) { btn.hidden = true; return; }
   const rel = currentProfile.user.relation;
   btn.hidden = false;
   btn.className = 'tb';
@@ -2968,7 +3039,7 @@ $('#btnFriendAction').addEventListener('click', async () => {
 // follow button on a profile (asymmetric follow, distinct from friends)
 function renderFollowButton() {
   const btn = $('#btnFollowAction');
-  if (!currentProfile || !me) { btn.hidden = true; return; }
+  if (!currentProfile || !me || viewingSelf) { btn.hidden = true; return; }
   const u = currentProfile.user;
   btn.hidden = false;
   btn.className = 'tb' + (u.followedByMe ? '' : ' primary-tb');
