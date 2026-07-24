@@ -1066,7 +1066,7 @@ function createMapView(host, opts = {}) {
 
   /* ---------- public API ---------- */
   return {
-    setMap(m) {
+    setMap(m, opts) {
       map = { nodes: {}, edges: [] };
       const nodes = (m && m.nodes) || {};
       for (const [id, n] of Object.entries(nodes)) {
@@ -1102,6 +1102,13 @@ function createMapView(host, opts = {}) {
       clearTimeout(pendingTimer); pendingTimer = null;
       clearTimeout(dwellTimer); dwellTimer = null;
       buildDOM();
+      // fit the whole map into view when a map is opened/selected (not on live
+      // remote updates, which preserve the viewer's camera). Deferred a frame so
+      // the host has its real size if the section just became visible.
+      if (opts && opts.fit) {
+        centeredId = null; // frame the map flat rather than orbiting the anchor
+        requestAnimationFrame(fitView);
+      }
     },
     // Apply a map that arrived from another user, preserving this user's
     // camera, spin, and selection. Skipped mid-drag so we never yank a bubble
@@ -2258,7 +2265,7 @@ async function openMyMap(id) {
   try { localStorage.setItem(lastMapKey(), id); } catch { /* private mode */ }
   $('#mapSelect').value = id;
   $('#btnMapSettings').hidden = !data.isOwner;
-  myMap.setMap(data.map);
+  myMap.setMap(data.map, { fit: true }); // opening/selecting a map frames the whole thing
   refreshToolbar();
   setHint(data.isOwner ? DEFAULT_HINT : `Editing @${data.owner.username}'s map “${data.map.name}”`, false);
   await startLive(id, data.canEdit);
@@ -2322,7 +2329,20 @@ function renderMsOrder() {
   msOrder.forEach((m, i) => {
     const row = document.createElement('div');
     row.className = 'map-order-row' + (m.id === currentMapId ? ' current' : '');
+    row.dataset.idx = i;
 
+    // drag handle: press and drag to reorder (works with mouse and touch)
+    const grip = document.createElement('span');
+    grip.className = 'mo-grip';
+    grip.textContent = '⠿';
+    grip.title = 'Drag to reorder';
+    grip.addEventListener('pointerdown', e => startMsDrag(e, i));
+
+    const name = document.createElement('span');
+    name.className = 'mo-name';
+    name.textContent = m.name;
+
+    // ↑/↓ remain as a keyboard/touch-friendly fallback alongside dragging
     const up = document.createElement('button');
     up.className = 'mo-move';
     up.textContent = '↑';
@@ -2337,11 +2357,7 @@ function renderMsOrder() {
     down.disabled = i === msOrder.length - 1;
     down.addEventListener('click', () => moveMsOrder(i, 1));
 
-    const name = document.createElement('span');
-    name.className = 'mo-name';
-    name.textContent = m.name;
-
-    row.append(name, up, down);
+    row.append(grip, name, up, down);
     box.appendChild(row);
   });
 }
@@ -2351,6 +2367,70 @@ function moveMsOrder(i, dir) {
   if (j < 0 || j >= msOrder.length) return;
   [msOrder[i], msOrder[j]] = [msOrder[j], msOrder[i]];
   renderMsOrder();
+}
+
+// Pointer-driven drag-to-reorder for the Map settings order list. The grip that
+// starts the drag keeps pointer capture for the whole gesture (so touch and
+// mouse both track smoothly); as the pointer moves we splice the dragged map to
+// whichever row-height band it's over and shuffle the live DOM in place (a full
+// re-render happens only on release, so the captured grip survives the drag).
+let msDrag = null;
+function startMsDrag(e, index) {
+  e.preventDefault();
+  const rect = $('#msOrder').children[index].getBoundingClientRect();
+  msDrag = {
+    id: msOrder[index].id,
+    grip: e.currentTarget,          // the grip keeps capture the whole drag
+    grabDY: e.clientY - rect.top,   // where inside the row we grabbed
+    height: rect.height || 40,
+  };
+  markMsDragging();
+  e.currentTarget.setPointerCapture(e.pointerId);
+  e.currentTarget.addEventListener('pointermove', onMsDragMove);
+  e.currentTarget.addEventListener('pointerup', endMsDrag);
+  e.currentTarget.addEventListener('pointercancel', endMsDrag);
+}
+function markMsDragging() {
+  if (!msDrag) return;
+  for (const r of $('#msOrder').children) {
+    r.classList.toggle('dragging', msOrder[+r.dataset.idx] && msOrder[+r.dataset.idx].id === msDrag.id);
+  }
+}
+function onMsDragMove(e) {
+  if (!msDrag) return;
+  const box = $('#msOrder');
+  const from = msOrder.findIndex(m => m.id === msDrag.id);
+  if (from < 0) return;
+  const boxRect = box.getBoundingClientRect();
+  // pointer y within the list, adjusted to the dragged row's centre, picks the slot
+  const y = e.clientY - boxRect.top - msDrag.grabDY + msDrag.height / 2;
+  let to = Math.floor(y / msDrag.height);
+  to = Math.max(0, Math.min(msOrder.length - 1, to));
+  if (to !== from) {
+    // reorder both the array and the live DOM by MOVING the dragged row — never
+    // re-render mid-drag, or we'd destroy the grip that holds the pointer capture
+    const [item] = msOrder.splice(from, 1);
+    msOrder.splice(to, 0, item);
+    const rows = [...box.children];
+    const dragRow = rows[from];
+    const refRow = to < rows.length ? rows[to] : null;
+    if (to > from) box.insertBefore(dragRow, refRow ? refRow.nextSibling : null);
+    else box.insertBefore(dragRow, refRow);
+    // keep dataset.idx and ↑/↓ disabled-state in sync with the new positions
+    [...box.children].forEach((r, i) => {
+      r.dataset.idx = i;
+      const [up, down] = r.querySelectorAll('.mo-move');
+      if (up) up.disabled = i === 0;
+      if (down) down.disabled = i === box.children.length - 1;
+    });
+  }
+}
+function endMsDrag(e) {
+  if (msDrag && msDrag.grip) {
+    try { msDrag.grip.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+  }
+  msDrag = null;
+  renderMsOrder(); // clean rebuild to reattach fresh handlers and clear drag state
 }
 $('#btnMapSettings').addEventListener('click', openMapSettings);
 
@@ -3185,7 +3265,7 @@ async function openProfileMap(id) {
   profileMapId = id;
   profileMapName = (data.map && data.map.name) || '';
   profileCanEdit = !!data.canEdit;
-  profileMap.setMap(data.map);
+  profileMap.setMap(data.map, { fit: true }); // selecting a map frames the whole thing
   // if the owner granted us edit rights, offer to open it in the real editor
   $('#btnPEdit').hidden = !data.canEdit;
   profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };

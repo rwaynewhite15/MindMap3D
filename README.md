@@ -47,13 +47,14 @@ menu**.
 
 ### Multiple maps per account
 - Keep several independent maps (e.g. "Work", "Novel ideas", "Trip planning"). Switch
-  between them from the dropdown on the map screen; create one with **+ New**.
+  between them from the dropdown on the map screen; create one with **+ New**. Selecting a
+  map **frames the whole thing** in view automatically.
 - Each map has its **own name and its own privacy setting** — this is per-map, not a
   single account-wide toggle. Settings only sets the *default* privacy for new maps.
 - From **Map ▾** you can rename a map, delete it (you always keep at least one),
   **duplicate** it (an independent private copy of its contents — no shared editors,
-  chat, or likes carry over), and **reorder** your maps so the dropdown lists them the
-  way you want.
+  chat, or likes carry over), and **reorder** your maps — **drag** the ⠿ handle (or use
+  ↑ ↓) — so the dropdown lists them the way you want.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
