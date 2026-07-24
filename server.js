@@ -261,6 +261,13 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
+// A fixed decoy salt/hash used when a login names a nonexistent user, so we can
+// still spend the same scrypt time and do a same-length constant-time compare
+// (the compare always fails — `u` being null is the real gate). Same shapes as
+// real records: 16-byte salt (32 hex), 64-byte hash (128 hex).
+const DECOY_SALT = '00000000000000000000000000000000';
+const DECOY_HASH = hashPassword('\0invalid-login-decoy\0', DECOY_SALT);
+
 const MAX_MAPS = 20;
 const MAX_EDITORS = 20;
 
@@ -807,6 +814,49 @@ function tooMany(key, limit, windowMs) {
 /* ================================================================
    Request plumbing
 ================================================================ */
+// Defense-in-depth headers applied to every response. The CSP is deliberately
+// tight: everything the app loads is same-origin except a data:-URI favicon and
+// inline style attributes, so we only open those two doors. frame-ancestors
+// 'none' blocks clickjacking; nosniff blocks MIME-confusion attacks.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+function securityHeaders(res, req) {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // only advertise HSTS once we're actually on HTTPS, so local http dev is unaffected
+  if (isSecure(req)) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+}
+
+// Reject cross-site state-changing requests: a write whose Origin (or Referer
+// host) isn't us is almost certainly a CSRF attempt. Belt-and-suspenders atop
+// the SameSite=Lax session cookie. Same-origin and tool/no-Origin GETs pass.
+const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+function isSameOrigin(req) {
+  const host = req.headers.host;
+  if (!host) return false;
+  const origin = req.headers.origin;
+  if (origin) {
+    try { return new URL(origin).host === host; } catch { return false; }
+  }
+  // no Origin header (older browsers, some clients): fall back to Referer host
+  const referer = req.headers.referer;
+  if (referer) {
+    try { return new URL(referer).host === host; } catch { return false; }
+  }
+  return false; // a state-changing request with neither header is not trusted
+}
+
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -882,7 +932,14 @@ async function handleApi(req, res, pathname) {
     const body = await readBody(req);
     const u = await store.getUserByUsername(body.username);
     const password = String(body.password || '');
-    if (!u || hashPassword(password, u.salt) !== u.passHash) {
+    // Always run scrypt (against a decoy salt when the user is missing) and
+    // compare in constant time, so response timing doesn't reveal whether a
+    // username exists or where the hashes first differ.
+    const salt = u ? u.salt : DECOY_SALT;
+    const expected = u ? u.passHash : DECOY_HASH;
+    const got = hashPassword(password, salt);
+    const ok = !!u && crypto.timingSafeEqual(Buffer.from(got, 'hex'), Buffer.from(expected, 'hex'));
+    if (!ok) {
       return sendJSON(res, 401, { error: 'Wrong username or password.' });
     }
     attempts.delete('login:' + ip);
@@ -1309,9 +1366,15 @@ function serveStatic(req, res, pathname) {
 ================================================================ */
 const server = http.createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  securityHeaders(res, req);
   try {
-    if (pathname.startsWith('/api/')) await handleApi(req, res, pathname);
-    else serveStatic(req, res, pathname);
+    if (pathname.startsWith('/api/')) {
+      // CSRF guard: cross-site writes are rejected before any handler runs
+      if (WRITE_METHODS.has(req.method) && !isSameOrigin(req)) {
+        return sendJSON(res, 403, { error: 'Cross-site request blocked.' });
+      }
+      await handleApi(req, res, pathname);
+    } else serveStatic(req, res, pathname);
   } catch (err) {
     if (err.message === 'too large') return sendJSON(res, 413, { error: 'Request too large.' });
     if (err.message === 'bad json') return sendJSON(res, 400, { error: 'Bad request.' });
