@@ -1046,9 +1046,21 @@ button.primary {
   gap: 8px;
   background: var(--line);
   border-radius: 10px;
-  padding: 6px 8px 6px 12px;
+  padding: 6px 8px 6px 8px;
 }
 .map-order-row.current { outline: 1px solid var(--accent); }
+.map-order-row.dragging { opacity: 0.9; background: #2a3550; box-shadow: 0 4px 14px #0006; }
+.map-order-row .mo-grip {
+  flex: none;
+  cursor: grab;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  touch-action: none;          /* let the grip drive the drag, not page scroll */
+  user-select: none;
+}
+.map-order-row .mo-grip:active { cursor: grabbing; }
 .map-order-row .mo-name {
   flex: 1;
   min-width: 0;
