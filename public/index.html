@@ -12,6 +12,9 @@
 
 <header id="topbar" hidden>
   <div id="logo">MindMap<span>Share</span> <em>Social Mind Maps</em></div>
+  <button id="navToggle" class="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mainNav" hidden>
+    <span></span><span></span><span></span>
+  </button>
   <nav id="mainNav">
     <a href="#/home" data-nav="home" data-auth>Home</a>
     <a href="#/map" data-nav="map" data-auth>My Maps</a>
@@ -63,6 +66,7 @@
       <select id="mapSelect" aria-label="Choose map" title="Switch between your maps"></select>
       <button id="btnNewMap" class="tb" title="Create a new map">+ New</button>
       <button id="btnMapSettings" class="tb" title="Rename, set visibility, manage editors, or delete this map">Map ▾</button>
+      <button id="btnPreview" class="tb" title="Preview your maps the way visitors see them (view-only)">👁 View</button>
       <button id="btnChat" class="tb" title="Open chat &amp; activity log">💬<span id="chatBadge" class="badge" hidden></span></button>
       <span id="presencePill" class="presence-pill" hidden></span>
     </div>
@@ -72,14 +76,13 @@
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
-      <button id="btnAI" class="tb" hidden title="Generate a mind map from a prompt with AI">✨ AI</button>
       <button id="btnOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
-      <button id="btnArrange" class="tb" title="Tidy: spread all bubbles and groups out evenly">✨ Tidy</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
       <button id="btnNote" class="tb" disabled title="Add or edit a note on the selected bubble (N)">📝 Note</button>
       <button id="btnColor" class="tb" title="Choose bubble colors">🎨 Color</button>
       <button id="btnGroupMenu" class="tb" disabled title="Move the selected bubble into or out of a group">Group ▾</button>
+      <button id="btnAI" class="tb" hidden title="Generate a mind map from a prompt with AI">✨ AI</button>
       <button id="btnDelete" class="tb danger" disabled title="Delete the selected item (Delete)">Delete</button>
       <span class="tb-sep"></span>
       <button id="btnWeights" class="tb icon" title="Show/hide connection weight numbers">①</button>
