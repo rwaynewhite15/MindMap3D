@@ -2077,7 +2077,6 @@ function exportOutlinePDF() {
     + '<div class="sub">Mind map exported from MindMapShare</div>'
     + '<div class="map">' + buildMapSVG() + '</div>'
     + '<h2>Outline</h2>' + buildOutlineHTML()
-    + '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);};<\/script>'
     + '</body></html>';
 
   const win = window.open('', '_blank');
@@ -2085,6 +2084,14 @@ function exportOutlinePDF() {
   win.document.open();
   win.document.write(doc);
   win.document.close();
+  // Drive the print dialog from *this* window rather than an inline <script>
+  // inside the popup: the page's tight CSP (script-src 'self') blocks inline
+  // scripts, so an in-popup script would silently never run. The SVG/outline
+  // are fully inline (no external resources), so a short delay to let the
+  // document paint is all we need before printing.
+  const print = () => { try { win.focus(); win.print(); } catch (_) {} };
+  if (win.document.readyState === 'complete') setTimeout(print, 150);
+  else win.addEventListener('load', () => setTimeout(print, 150));
   setHint('Opening the print dialog — choose “Save as PDF”.', false);
 }
 
