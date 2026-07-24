@@ -1248,9 +1248,13 @@ const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settin
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
-  if (name !== 'map' && outlineOpen) toggleOutline(false); // outline belongs to the editor
+  // the outline serves both the editor and the profile viewer; close it only when
+  // leaving both (the rebuild for the new map happens after visibility flips below)
+  if (name !== 'map' && name !== 'profile' && outlineOpen) toggleOutline(false);
   $('#btnAI').hidden = !(me && me.aiEnabled); // AI button only when the server enables it
   for (const s of sections) $('#view-' + s).hidden = s !== name;
+  // now that the active section is set, rebuild the outline against its map
+  if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
   // hide the top bar (and its hamburger) only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
   $('#navToggle').hidden = name === 'auth';
@@ -1687,10 +1691,17 @@ function refreshToolbar() {
 let outlineOpen = false;
 const outlineCollapsed = new Set(); // group ids currently collapsed
 
+// The map the outline/export act on: the read-only profile viewer when it's the
+// active section, otherwise the editor. Lets the Outline panel and every export
+// serve both the editor and view mode from one code path.
+function onProfileView() { return !$('#view-profile').hidden; }
+function activeMap() { return (onProfileView() && profileMap) ? profileMap : myMap; }
+
 function toggleOutline(force) {
   outlineOpen = force === undefined ? !outlineOpen : force;
   $('#outlinePanel').hidden = !outlineOpen;
   $('#btnOutline').classList.toggle('active', outlineOpen);
+  $('#btnPOutline').classList.toggle('active', outlineOpen);
   if (outlineOpen) buildOutline();
 }
 function refreshOutlineIfOpen() { if (outlineOpen) buildOutline(); }
@@ -1739,22 +1750,30 @@ function makeOutlineRow(n, depth, childrenOf) {
     row.appendChild(note);
   }
 
-  // single click focuses the node on the canvas; double-click opens the editor
-  row.addEventListener('click', () => { myMap.focusNode(n.id); refreshToolbar(); });
-  row.addEventListener('dblclick', () => openRename(n.id));
+  // single click focuses the node on the canvas; double-click opens the rename
+  // editor (editor only — the profile viewer is read-only)
+  const inEditor = activeMap() === myMap;
+  row.addEventListener('click', () => {
+    const m = activeMap();
+    if (inEditor) { m.focusNode(n.id); refreshToolbar(); }
+    else if (m.centerOnNode) m.centerOnNode(n.id); // read-only viewer centers instead
+  });
+  if (inEditor) row.addEventListener('dblclick', () => openRename(n.id));
   return row;
 }
 
 function buildOutline() {
   const body = $('#outlineBody');
   body.innerHTML = '';
-  const map = myMap.getMap();
+  const src = activeMap();
+  if (!src) return;
+  const map = src.getMap();
   const byId = map.nodes || {};
   const nodes = Object.values(byId);
   if (!nodes.length) {
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = 'Empty map — add a bubble to get started.';
+    d.textContent = activeMap() === myMap ? 'Empty map — add a bubble to get started.' : 'This map is empty.';
     body.appendChild(d);
     return;
   }
@@ -1772,8 +1791,15 @@ function buildOutline() {
   for (const b of loose) addRow(b, 0);
 }
 
-// The name of the currently open map (from the switcher), for export titles/filenames.
+// The name of the currently open map, for export titles/filenames. In view mode
+// it comes from the active profile tab (or the map itself); in the editor from
+// the map switcher.
 function currentMapName() {
+  if (onProfileView()) {
+    const tab = $('#profileTabs') && $('#profileTabs').querySelector('.map-tab.active');
+    if (tab && tab.textContent.trim()) return tab.textContent.trim();
+    return profileMapName || 'Mind map';
+  }
   const sel = $('#mapSelect');
   const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
   const raw = (opt ? opt.textContent : '') || '';
@@ -1783,7 +1809,7 @@ function currentMapName() {
 // The ordered outline structure: top-level groups (with their children) and
 // then loose bubbles — the same shape the Outline panel renders.
 function outlineStructure() {
-  const map = myMap.getMap();
+  const map = activeMap().getMap();
   const byId = map.nodes || {};
   const nodes = Object.values(byId);
   const childrenOf = id => nodes.filter(n => n.parentId === id);
@@ -1868,7 +1894,7 @@ function buildOutlineOPML() {
 // cropped to a tight bounding box. Used by the PDF export (and self-contained,
 // so it renders anywhere the SVG markup is dropped in).
 function buildMapSVG() {
-  const map = myMap.getMap();
+  const map = activeMap().getMap();
   const nodes = Object.values(map.nodes || {});
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1954,7 +1980,7 @@ function buildOutlineHTML() {
 // below) and hand it to the browser's "Save as PDF". No external libraries —
 // the SVG is inline and vector-crisp at any zoom.
 function exportOutlinePDF() {
-  if (!myMap) return;
+  if (!activeMap()) return;
   const title = currentMapName();
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const doc = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>'
@@ -1993,7 +2019,7 @@ const EXPORT_FORMATS = {
 };
 
 function downloadOutline(format) {
-  if (!myMap) return;
+  if (!activeMap()) return;
   const f = EXPORT_FORMATS[format] || EXPORT_FORMATS.md;
   const safe = currentMapName().replace(/[^\w\- ]+/g, '').trim() || 'mindmap';
   const blob = new Blob([f.build()], { type: f.mime });
@@ -3149,6 +3175,7 @@ function renderProfileTabs(maps) {
 }
 
 let profileMapId = null;    // map currently previewed on a profile
+let profileMapName = '';    // its name, for outline export titles/filenames
 let profileCanEdit = false; // whether that previewed map is editable by me
 let profileLike = { count: 0, liked: false }; // like state of the previewed map
 
@@ -3156,12 +3183,14 @@ async function openProfileMap(id) {
   for (const b of $('#profileTabs').children) b.classList.toggle('active', b.dataset.id === id);
   const data = await api('/api/maps/' + id);
   profileMapId = id;
+  profileMapName = (data.map && data.map.name) || '';
   profileCanEdit = !!data.canEdit;
   profileMap.setMap(data.map);
   // if the owner granted us edit rights, offer to open it in the real editor
   $('#btnPEdit').hidden = !data.canEdit;
   profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };
   renderProfileLike(!!data.isOwner);
+  refreshOutlineIfOpen(); // keep an open outline in sync when switching map tabs
 }
 
 function renderProfileLike(isOwner) {
@@ -3296,6 +3325,7 @@ function initProfileViewer() {
     isSheetOpen: () => !$('#pickMenu').hidden,
   });
   $('#noteViewerClose').addEventListener('click', hideNoteViewer);
+  $('#btnPOutline').addEventListener('click', () => toggleOutline());
   $('#btnPCenter').addEventListener('click', () => profileMap.resetCamera());
   $('#btnPZoomIn').addEventListener('click', () => profileMap.zoom(0.85));
   $('#btnPZoomOut').addEventListener('click', () => profileMap.zoom(1.18));
