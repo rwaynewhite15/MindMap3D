@@ -56,7 +56,7 @@
       </form>
 
       <a href="#/browse" id="browseGuest" class="auth-guest">or browse public maps without an account →</a>
-      <p class="auth-legal">By signing up you agree to our <a href="#/privacy">Privacy Policy</a>.</p>
+      <p class="auth-legal">By signing up you agree to our <a href="#/terms">Terms of Service</a> and <a href="#/privacy">Privacy Policy</a>.</p>
     </div>
   </section>
 
@@ -215,11 +215,123 @@
     </div>
   </section>
 
-  <!-- ============ PRIVACY POLICY ============ -->
+  <!-- ============ PRIVACY POLICY (the real one) ============ -->
   <section id="view-privacy" hidden>
     <div class="page narrow legal-doc">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Last updated: the moment you started reading this. Effective: retroactively, across all timelines.</p>
+      <p class="legal-meta">Last updated: 23 July 2026</p>
+
+      <p class="legal-intro">This Privacy Policy explains what information MindMapShare ("we," "us," or "the Service") collects, how we use it, and the choices you have. We aim to collect as little as possible and to be plain about it. If anything here is unclear, contact us (Section 10).</p>
+
+      <h2>1. Information We Collect</h2>
+      <p>We collect only what the Service needs to work:</p>
+      <ul>
+        <li><strong>Account information</strong> — your username, an optional display name, and your password. Passwords are never stored in plain text; we keep only a salted <em>scrypt</em> hash and cannot recover your original password.</li>
+        <li><strong>Content you create</strong> — the mind maps you build: bubble labels, notes, links, task states, groups, connections, and each map's name and visibility setting. Optional profile fields (a short bio) are included here.</li>
+        <li><strong>Social data</strong> — your friend requests and friendships, who you follow and who follows you, the maps you like, and chat messages you send on maps you collaborate on.</li>
+        <li><strong>A session cookie</strong> — one <code>HttpOnly</code> cookie that keeps you signed in. It holds a random session identifier, not your personal data.</li>
+        <li><strong>Basic technical data</strong> — like most web servers, we may briefly process your IP address to rate-limit sign-ups and log-ins and to keep the Service secure. We do not use third-party advertising or analytics trackers.</li>
+      </ul>
+
+      <h2>2. How We Use Your Information</h2>
+      <p>We use your information to operate the Service: to authenticate you, store and display your maps, power real-time collaboration and chat, run the social features (friends, follows, feed, likes), and protect the Service from abuse. We do not sell your personal information, and we do not use it for advertising.</p>
+
+      <h2>3. Who Can See Your Maps</h2>
+      <p>Visibility is per-map and you control it:</p>
+      <ul>
+        <li><strong>Private</strong> — visible only to you (and anyone you explicitly grant edit access).</li>
+        <li><strong>Friends only</strong> — visible to you and your accepted friends. It is not listed on your profile to others, not counted in public totals, and cannot be opened by URL by non-friends.</li>
+        <li><strong>Public</strong> — viewable (read-only) by anyone, including signed-out visitors, and eligible to appear in the discovery feed.</li>
+      </ul>
+      <p>Your username, and your display name if you choose to share it publicly, are visible to others when you interact socially or make maps public.</p>
+
+      <h2>4. AI Map Generation</h2>
+      <p>If the operator of this instance has enabled the optional AI feature, using "✨ AI" sends the text prompt you type to <a href="https://www.anthropic.com/" rel="noopener noreferrer" target="_blank">Anthropic</a>, our AI provider, which generates a starting map and returns it. Your prompt is processed under Anthropic's terms and privacy practices. Don't put anything you consider sensitive into an AI prompt. If the feature is not enabled on this instance, no data is sent to any AI provider.</p>
+
+      <h2>5. Third Parties &amp; Hosting</h2>
+      <p>We use standard infrastructure providers to run the Service — for example a cloud host and a managed PostgreSQL database — which process your data solely to store and serve it on our behalf. Aside from the AI provider described above (only if enabled), we do not share your personal information with third parties except where required by law or to protect the rights and safety of our users and the Service.</p>
+
+      <h2>6. Data Retention</h2>
+      <p>We keep your account and content for as long as your account exists. When you delete a map, it is removed from our active database. When you delete your account, we delete your account record, your maps, and your sessions. Residual copies may persist briefly in encrypted backups before being overwritten in the ordinary course.</p>
+
+      <h2>7. Your Rights &amp; Choices</h2>
+      <ul>
+        <li><strong>Access &amp; portability</strong> — you can export your maps at any time (Outline export, including PDF/Markdown/plain text/OPML), and you can request a copy of your account data.</li>
+        <li><strong>Correction</strong> — you can edit your display name, bio, maps, and per-map privacy in the app.</li>
+        <li><strong>Deletion</strong> — you can delete individual maps, and you can delete your entire account from Settings.</li>
+      </ul>
+      <p>Depending on where you live (e.g. the EEA, UK, or California), you may have additional rights over your personal data; contact us to exercise them.</p>
+
+      <h2>8. Cookies</h2>
+      <p>We use a single, strictly necessary session cookie to keep you signed in. We do not use advertising or cross-site tracking cookies.</p>
+
+      <h2>9. Children's Privacy</h2>
+      <p>The Service is not directed to children under 13, and we do not knowingly collect personal information from them. If you believe a child has provided us information, contact us and we will delete it.</p>
+
+      <h2>10. Contact</h2>
+      <p>Questions about this Policy or your data? Email <a href="mailto:privacy@mindmapshare.com">privacy@mindmapshare.com</a>.</p>
+
+      <h2>11. Changes to This Policy</h2>
+      <p>We may update this Policy from time to time. Material changes will be reflected by a new "Last updated" date at the top of this page, and where appropriate we will provide additional notice.</p>
+
+      <p class="legal-nav">See also our <a href="#/terms">Terms of Service</a>. <span class="legal-egg">There is also an <a href="#/soul" title="Not the real policy">older draft</a> we decided not to use.</span></p>
+      <p><a href="#/signin" class="tb">← Back to sign in</a></p>
+    </div>
+  </section>
+
+  <!-- ============ TERMS OF SERVICE ============ -->
+  <section id="view-terms" hidden>
+    <div class="page narrow legal-doc">
+      <h1>Terms of Service</h1>
+      <p class="legal-meta">Last updated: 23 July 2026</p>
+
+      <p class="legal-intro">These Terms govern your use of MindMapShare (the "Service"). By creating an account or using the Service, you agree to these Terms. If you don't agree, please don't use the Service.</p>
+
+      <h2>1. Your Account</h2>
+      <p>You must be at least 13 years old to use the Service. You are responsible for keeping your password secure and for activity under your account. Choose a username that isn't misleading or impersonating; we may reclaim usernames that infringe others' rights.</p>
+
+      <h2>2. Your Content</h2>
+      <p>You keep ownership of the maps and other content you create. You grant us only the limited licence needed to host, store, back up, and display your content to the people you've chosen to share it with, and to operate features like real-time collaboration and the public feed. When you make a map public, you allow other users to view it; when you grant edit access, you allow those users to change it.</p>
+
+      <h2>3. Acceptable Use</h2>
+      <p>You agree not to use the Service to:</p>
+      <ul>
+        <li>break the law, or infringe anyone's intellectual property or privacy;</li>
+        <li>post content that is unlawful, harassing, hateful, or that sexualizes minors;</li>
+        <li>upload malware, attempt to breach security, scrape at scale, or disrupt the Service or other users;</li>
+        <li>impersonate others or misrepresent your affiliation; or</li>
+        <li>abuse collaboration or messaging features to spam or harass.</li>
+      </ul>
+      <p>We may remove content or suspend accounts that violate these Terms.</p>
+
+      <h2>4. AI Features</h2>
+      <p>Where enabled, AI-generated map content is provided as-is and may be inaccurate; review it before relying on it. Your use of the AI feature is also subject to the AI provider's terms, as described in our <a href="#/privacy">Privacy Policy</a>.</p>
+
+      <h2>5. Service Availability</h2>
+      <p>The Service is provided on an "as is" and "as available" basis, without warranties of any kind. We may change, suspend, or discontinue features, and we don't guarantee the Service will be uninterrupted or error-free. Keep your own copies of anything important — the Outline/PDF export is there for exactly this.</p>
+
+      <h2>6. Limitation of Liability</h2>
+      <p>To the fullest extent permitted by law, we are not liable for any indirect, incidental, or consequential damages, or for any loss of data, arising from your use of the Service. Some jurisdictions don't allow certain limitations, so some of these may not apply to you.</p>
+
+      <h2>7. Termination</h2>
+      <p>You may stop using the Service and delete your account at any time from Settings. We may suspend or terminate access if you materially violate these Terms or if required to protect the Service or its users.</p>
+
+      <h2>8. Changes to These Terms</h2>
+      <p>We may update these Terms; the "Last updated" date will change and, for material changes, we'll provide additional notice where appropriate. Continuing to use the Service after changes take effect means you accept the updated Terms.</p>
+
+      <h2>9. Contact</h2>
+      <p>Questions about these Terms? Email <a href="mailto:support@mindmapshare.com">support@mindmapshare.com</a>.</p>
+
+      <p class="legal-nav">See also our <a href="#/privacy">Privacy Policy</a>.</p>
+      <p><a href="#/signin" class="tb">← Back to sign in</a></p>
+    </div>
+  </section>
+
+  <!-- ============ THE "OLD DRAFT" (satire — easter egg) ============ -->
+  <section id="view-soul" hidden>
+    <div class="page narrow legal-doc">
+      <h1>Privacy Policy <span class="legal-draft">(rejected first draft)</span></h1>
+      <p class="legal-meta">Last updated: the moment you started reading this. Effective: retroactively, across all timelines. <strong>This is not our actual policy</strong> — see the <a href="#/privacy">real one</a>.</p>
 
       <p class="legal-intro">Welcome to <strong>MindMapShare</strong> ("we," "us," "the Custodians of Your Essence"). We take your privacy extremely seriously, which is why we have written it down in a document you will not read before clicking "I agree." This Privacy Policy explains what we collect, why we collect it, and the several ethereal planes to which we will eventually upload you.</p>
 
@@ -264,7 +376,7 @@
 
       <p class="legal-outro muted">By continuing to use MindMapShare, you consent to everything above and several things we have tastefully omitted. Thank you for sharing your mind with us. We'll take excellent care of it.</p>
 
-      <p><a href="#/signin" class="tb">← Back to sign in</a></p>
+      <p class="legal-nav">Back to the <a href="#/privacy">real Privacy Policy</a> · <a href="#/signin" class="tb">Sign in</a></p>
     </div>
   </section>
 

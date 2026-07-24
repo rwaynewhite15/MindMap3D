@@ -1311,7 +1311,7 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy'];
+const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
@@ -1341,8 +1341,8 @@ function route() {
   closeNavMenu(); // any navigation closes the mobile hamburger menu
   const h = location.hash.replace(/^#\/?/, '') || (me ? 'home' : 'browse');
 
-  // the privacy policy is public — reachable signed in or not
-  if (h === 'privacy') { show('privacy'); window.scrollTo(0, 0); return; }
+  // legal pages are public — reachable signed in or not (soul = the joke draft)
+  if (h === 'privacy' || h === 'terms' || h === 'soul') { show(h); window.scrollTo(0, 0); return; }
 
   if (!me) {
     // anonymous visitors may browse public maps and view public profiles;
