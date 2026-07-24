@@ -113,17 +113,6 @@
       <div id="chatResize" class="chat-resize" title="Drag to resize" aria-hidden="true"></div>
     </aside>
 
-    <!-- outline: the map as a collapsible text tree -->
-    <aside id="outlinePanel" class="outline-panel" hidden>
-      <div class="outline-head">
-        <div class="outline-title">Outline</div>
-        <div class="outline-head-btns">
-          <button id="btnOutlineExport" class="tb icon" title="Export outline as Markdown" aria-label="Export outline">⤓</button>
-          <button id="btnOutlineClose" class="tb icon" title="Close outline" aria-label="Close outline">✕</button>
-        </div>
-      </div>
-      <div id="outlineBody" class="outline-body"></div>
-    </aside>
   </section>
 
   <!-- ============ HOME FEED ============ -->
@@ -181,12 +170,26 @@
     <div class="edit-toolbar" id="profileToolbar">
       <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
       <button id="btnPLike" class="tb" title="Like this map">♡ Like</button>
+      <button id="btnPOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <span class="tb-sep"></span>
       <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
       <button id="btnPZoomOut" class="tb icon" title="Zoom out">−</button>
       <button id="btnPZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
   </section>
+
+  <!-- outline: the active map as a collapsible text tree (shared by the editor
+       and the read-only profile viewer) -->
+  <aside id="outlinePanel" class="outline-panel" hidden>
+    <div class="outline-head">
+      <div class="outline-title">Outline</div>
+      <div class="outline-head-btns">
+        <button id="btnOutlineExport" class="tb icon" title="Export outline" aria-label="Export outline">⤓</button>
+        <button id="btnOutlineClose" class="tb icon" title="Close outline" aria-label="Close outline">✕</button>
+      </div>
+    </div>
+    <div id="outlineBody" class="outline-body"></div>
+  </aside>
 
   <!-- ============ SETTINGS ============ -->
   <section id="view-settings" hidden>

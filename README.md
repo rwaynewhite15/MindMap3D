@@ -80,7 +80,9 @@ menu**.
   fits it to the screen.
 - **☰ Outline** — view the map as a collapsible text tree (groups with their children,
   then loose bubbles), with note/link/done markers. Click a row to focus that node on the
-  canvas; double-click to edit. Notes show inline beneath their bubble. **Export** the
+  canvas; double-click to edit. Notes show inline beneath their bubble. Available both
+  while editing and when **viewing** a map read-only (on someone's profile or your own
+  preview), where clicking a row centers the view on that bubble. **Export** the
   outline with the ⤓ button as **PDF** (a vector picture of the map plus the full
   outline, via the browser's Save-as-PDF), **Markdown**, **plain text**, or **OPML** (for
   other outliners).
