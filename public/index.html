@@ -234,6 +234,7 @@
   <div class="sheet-title">Export outline</div>
   <div class="muted" style="margin-bottom:8px">Download the map's groups, bubbles, and notes as an outline file.</div>
   <div class="group-options">
+    <button id="exportPdf" class="tb">PDF (.pdf) — outline with a picture of the map</button>
     <button id="exportMd" class="tb">Markdown (.md)</button>
     <button id="exportTxt" class="tb">Plain text (.txt)</button>
     <button id="exportOpml" class="tb">OPML (.opml) — for other outliners</button>
@@ -329,9 +330,12 @@
     <select id="msFriendPick" aria-label="Pick a friend"></select>
     <button id="msAddEditor" class="tb">Grant edit</button>
   </div>
+  <label class="field-title">Order of your maps</label>
+  <div id="msOrder" class="map-order"></div>
   <div class="form-error" id="msError"></div>
   <div class="sheet-row">
     <button id="msDeleteMap" class="tb danger">Delete map</button>
+    <button id="msDuplicate" class="tb">Duplicate map</button>
     <button id="msDone" class="tb primary-tb">Save</button>
   </div>
 </div>

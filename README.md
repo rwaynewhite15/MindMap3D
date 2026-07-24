@@ -28,7 +28,9 @@ an environment variable (see below); their libraries install with `npm install`.
 
 Start the server on your PC, then on a phone connected to the **same Wi-Fi**, open the
 `http://192.168.x.x:3000` address the server prints at startup. (If it doesn't load,
-allow Node.js through Windows Firewall on private networks.)
+allow Node.js through Windows Firewall on private networks.) The layout is
+mobile-friendly: on small screens the top navigation collapses into a **☰ hamburger
+menu**.
 
 ## What you can do
 
@@ -48,7 +50,10 @@ allow Node.js through Windows Firewall on private networks.)
   between them from the dropdown on the map screen; create one with **+ New**.
 - Each map has its **own name and its own privacy setting** — this is per-map, not a
   single account-wide toggle. Settings only sets the *default* privacy for new maps.
-- Rename or delete a map (you always keep at least one) from **Map ▾**.
+- From **Map ▾** you can rename a map, delete it (you always keep at least one),
+  **duplicate** it (an independent private copy of its contents — no shared editors,
+  chat, or likes carry over), and **reorder** your maps so the dropdown lists them the
+  way you want.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
@@ -75,7 +80,10 @@ allow Node.js through Windows Firewall on private networks.)
   fits it to the screen.
 - **☰ Outline** — view the map as a collapsible text tree (groups with their children,
   then loose bubbles), with note/link/done markers. Click a row to focus that node on the
-  canvas; double-click to edit.
+  canvas; double-click to edit. Notes show inline beneath their bubble. **Export** the
+  outline with the ⤓ button as **PDF** (a vector picture of the map plus the full
+  outline, via the browser's Save-as-PDF), **Markdown**, **plain text**, or **OPML** (for
+  other outliners).
 - **✨ AI** *(when enabled)* — describe a topic and AI generates a starting map of grouped,
   connected ideas for you to refine. The button appears only when the server has an
   Anthropic API key configured (see below).
@@ -88,6 +96,8 @@ allow Node.js through Windows Firewall on private networks.)
   with you appear in your map dropdown under **Shared with me**.
 - **Only the owner** can rename a map, change its privacy, manage editors, or delete it.
   Editors change contents but not settings — all enforced on the server.
+- **Preview** your own map as visitors see it — the read-only view a stranger or follower
+  gets — without leaving the editor.
 - **Live updates** — when two people have the same map open, edits (including notes,
   links, and task toggles) appear on everyone's screen within a moment, without disturbing
   their pan, zoom, or the bubble they're dragging. A small "**\_\_\_ others here**"
