@@ -742,6 +742,7 @@ button.primary {
 .outline-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 6px 8px;
   border-radius: 8px;
@@ -776,6 +777,18 @@ button.primary {
   white-space: nowrap;
 }
 .outline-meta { flex: none; font-size: 12px; color: var(--dim); }
+.outline-note {
+  flex-basis: 100%;
+  margin: 2px 0 0 22px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.outline-row.group > .outline-note { margin-left: 22px; }
 
 /* ---------------- home feed (social) ---------------- */
 .feed-head { margin-bottom: 14px; }
@@ -1025,6 +1038,36 @@ button.primary {
 .editor-add select:focus { border-color: var(--accent); }
 .group-options { display: flex; flex-direction: column; gap: 8px; max-height: 40dvh; overflow-y: auto; }
 .group-options .tb { text-align: left; }
+
+.map-order { display: flex; flex-direction: column; gap: 6px; max-height: 34dvh; overflow-y: auto; margin-bottom: 4px; }
+.map-order-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--line);
+  border-radius: 10px;
+  padding: 6px 8px 6px 12px;
+}
+.map-order-row.current { outline: 1px solid var(--accent); }
+.map-order-row .mo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.map-order-row .mo-move {
+  border: none;
+  background: #10141D66;
+  color: var(--ink);
+  border-radius: 8px;
+  width: 26px; height: 26px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+}
+.map-order-row .mo-move:disabled { opacity: 0.35; cursor: default; }
 
 /* ---------------- small screens ---------------- */
 @media (max-width: 560px) {

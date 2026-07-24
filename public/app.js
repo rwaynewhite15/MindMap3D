@@ -1725,11 +1725,19 @@ function makeOutlineRow(n, depth, childrenOf) {
   const meta = document.createElement('span');
   meta.className = 'outline-meta';
   const bits = [];
-  if (n.note && n.note.trim()) bits.push('📝');
   if (n.link) bits.push('🔗');
   if (n.done) bits.push('✓');
   meta.textContent = bits.join(' ');
   row.appendChild(meta);
+
+  // the note itself renders on its own full-width line beneath the label, so
+  // the outline reads like an annotated document rather than just flagging 📝
+  if (n.note && n.note.trim()) {
+    const note = document.createElement('div');
+    note.className = 'outline-note';
+    note.textContent = n.note.trim();
+    row.appendChild(note);
+  }
 
   // single click focuses the node on the canvas; double-click opens the editor
   row.addEventListener('click', () => { myMap.focusNode(n.id); refreshToolbar(); });
@@ -1855,6 +1863,129 @@ function buildOutlineOPML() {
     + '  <body>\n' + body + '  </body>\n</opml>\n';
 }
 
+// A standalone SVG picture of the map — the same bubbles, groups, weighted
+// connections, and colours as the canvas, laid out in map coordinates and
+// cropped to a tight bounding box. Used by the PDF export (and self-contained,
+// so it renders anywhere the SVG markup is dropped in).
+function buildMapSVG() {
+  const map = myMap.getMap();
+  const nodes = Object.values(map.nodes || {});
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  if (!nodes.length) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">'
+      + '<text x="100" y="34" text-anchor="middle" font-family="sans-serif" '
+      + 'font-size="14" fill="#7C8598">(empty map)</text></svg>';
+  }
+
+  // bounding box over every bubble/group, padded by a margin
+  const M = 40;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.pos[0] - n.r); maxX = Math.max(maxX, n.pos[0] + n.r);
+    minY = Math.min(minY, n.pos[1] - n.r); maxY = Math.max(maxY, n.pos[1] + n.r);
+  }
+  const w = (maxX - minX) + M * 2, h = (maxY - minY) + M * 2;
+  const X = x => (x - minX + M).toFixed(1), Y = y => (y - minY + M).toFixed(1);
+
+  const parts = [];
+  // connections first, so bubbles sit on top; thickness = weight, like the canvas
+  for (const e of map.edges || []) {
+    const a = map.nodes[e.a], b = map.nodes[e.b];
+    if (!a || !b) continue;
+    parts.push('<line x1="' + X(a.pos[0]) + '" y1="' + Y(a.pos[1]) + '" x2="'
+      + X(b.pos[0]) + '" y2="' + Y(b.pos[1]) + '" stroke="' + hueOf(a).main
+      + '" stroke-width="' + (e.w || 1) + '" stroke-linecap="round" opacity="0.85"/>');
+  }
+  // groups (behind), then bubbles (in front) — matching the canvas layering
+  const draw = n => {
+    const col = hueOf(n);
+    const isGroup = n.kind === 'container';
+    const op = n.done ? 0.4 : 1;
+    parts.push('<circle cx="' + X(n.pos[0]) + '" cy="' + Y(n.pos[1]) + '" r="' + n.r
+      + '" fill="' + (isGroup ? 'none' : col.dark) + '" stroke="' + col.main
+      + '" stroke-width="' + (isGroup ? 2 : 3) + '"'
+      + (isGroup ? ' stroke-dasharray="6 5"' : '') + ' opacity="' + op + '"/>');
+    if (!isGroup) {
+      const fs = Math.max(10, Math.min(20, n.r * 0.5));
+      let lbl = (n.label || '').trim() || 'Untitled';
+      if (lbl.length > 22) lbl = lbl.slice(0, 21) + '…';
+      parts.push('<text x="' + X(n.pos[0]) + '" y="' + Y(n.pos[1]) + '" text-anchor="middle" '
+        + 'dominant-baseline="central" font-family="sans-serif" font-size="' + fs.toFixed(0)
+        + '" fill="' + col.lite + '"' + (n.done ? ' text-decoration="line-through"' : '')
+        + ' opacity="' + op + '">' + esc(lbl) + '</text>');
+    } else {
+      // group name sits at the top edge of its circle
+      parts.push('<text x="' + X(n.pos[0]) + '" y="' + (Y(n.pos[1] - n.r) - 6).toFixed(1)
+        + '" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="700" fill="'
+        + col.main + '">' + esc((n.label || 'Group').trim() || 'Group') + '</text>');
+    }
+  };
+  for (const n of nodes) if (n.kind === 'container') draw(n);
+  for (const n of nodes) if (n.kind !== 'container') draw(n);
+
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w.toFixed(0) + ' '
+    + h.toFixed(0) + '" font-family="sans-serif">' + parts.join('') + '</svg>';
+}
+
+// The outline as printable HTML (groups → children, notes beneath), reusing the
+// same structure the Outline panel and text exports share.
+function buildOutlineHTML() {
+  const { nodes, childrenOf, groups, loose } = outlineStructure();
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const item = n => {
+    let lbl = esc((n.label || 'Untitled').trim() || 'Untitled');
+    if (n.done) lbl = '<s>' + lbl + '</s> ✓';
+    if (n.link) lbl += ' <a href="' + esc(n.link) + '">🔗</a>';
+    let s = '<li>' + lbl;
+    if (n.note && n.note.trim()) s += '<div class="note">' + esc(n.note.trim()) + '</div>';
+    const kids = childrenOf(n.id);
+    if (n.kind === 'container' && kids.length) {
+      s += '<ul>' + kids.map(item).join('') + '</ul>';
+    }
+    return s + '</li>';
+  };
+  if (!nodes.length) return '<p><em>(empty map)</em></p>';
+  return '<ul class="outline">' + groups.map(item).join('') + loose.map(item).join('') + '</ul>';
+}
+
+// PDF export: open a print-ready document (the map picture on top, the outline
+// below) and hand it to the browser's "Save as PDF". No external libraries —
+// the SVG is inline and vector-crisp at any zoom.
+function exportOutlinePDF() {
+  if (!myMap) return;
+  const title = currentMapName();
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const doc = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>'
+    + '<style>'
+    + '@page { margin: 18mm; }'
+    + 'body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; color: #1b1f27; }'
+    + 'h1 { font-size: 22px; margin: 0 0 4px; }'
+    + '.sub { color: #6b7280; font-size: 12px; margin-bottom: 16px; }'
+    + '.map { text-align: center; margin: 0 0 22px; page-break-inside: avoid; }'
+    + '.map svg { max-width: 100%; height: auto; max-height: 150mm; }'
+    + 'h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #e5e7eb; padding-bottom: 3px; }'
+    + 'ul.outline, ul.outline ul { margin: 4px 0; padding-left: 22px; }'
+    + 'ul.outline li { margin: 3px 0; }'
+    + '.note { color: #4b5563; font-size: 12px; border-left: 2px solid #d1d5db; padding-left: 8px; margin: 3px 0 6px; white-space: pre-wrap; }'
+    + 'a { color: inherit; text-decoration: none; }'
+    + '</style></head><body>'
+    + '<h1>' + esc(title) + '</h1>'
+    + '<div class="sub">Mind map exported from MindMapShare</div>'
+    + '<div class="map">' + buildMapSVG() + '</div>'
+    + '<h2>Outline</h2>' + buildOutlineHTML()
+    + '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);};<\/script>'
+    + '</body></html>';
+
+  const win = window.open('', '_blank');
+  if (!win) { setHint('Allow pop-ups to export as PDF.', true); return; }
+  win.document.open();
+  win.document.write(doc);
+  win.document.close();
+  setHint('Opening the print dialog — choose “Save as PDF”.', false);
+}
+
 const EXPORT_FORMATS = {
   md: { build: buildOutlineMarkdown, mime: 'text/markdown;charset=utf-8', ext: 'md', name: 'Markdown' },
   txt: { build: buildOutlineText, mime: 'text/plain;charset=utf-8', ext: 'txt', name: 'plain text' },
@@ -1878,6 +2009,7 @@ function downloadOutline(format) {
 }
 
 $('#btnOutlineExport').addEventListener('click', () => openSheet('#sheetExport'));
+$('#exportPdf').addEventListener('click', () => { closeSheets(); exportOutlinePDF(); });
 $('#exportMd').addEventListener('click', () => { downloadOutline('md'); closeSheets(); });
 $('#exportTxt').addEventListener('click', () => { downloadOutline('txt'); closeSheets(); });
 $('#exportOpml').addEventListener('click', () => { downloadOutline('opml'); closeSheets(); });
@@ -2140,8 +2272,9 @@ $('#newMapName').addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSheets();
 });
 
-/* ---------- map settings sheet (rename, visibility, editors, delete) ---------- */
+/* ---------- map settings sheet (rename, visibility, editors, order, delete) ---------- */
 let msEditors = []; // [{ username, name }] for the map being configured
+let msOrder = [];   // working copy of my maps' order: [{ id, name }]
 
 function openMapSettings() {
   const meta = mapsMine.find(m => m.id === currentMapId);
@@ -2151,8 +2284,47 @@ function openMapSettings() {
   for (const r of document.querySelectorAll('input[name=msVis]')) r.checked = r.value === meta.visibility;
   $('#msError').textContent = '';
   msEditors = meta.editors || [];
+  msOrder = mapsMine.map(m => ({ id: m.id, name: m.name }));
   renderMsEditors();
+  renderMsOrder();
   fillFriendPick();
+}
+
+function renderMsOrder() {
+  const box = $('#msOrder');
+  box.innerHTML = '';
+  msOrder.forEach((m, i) => {
+    const row = document.createElement('div');
+    row.className = 'map-order-row' + (m.id === currentMapId ? ' current' : '');
+
+    const up = document.createElement('button');
+    up.className = 'mo-move';
+    up.textContent = '↑';
+    up.title = 'Move up';
+    up.disabled = i === 0;
+    up.addEventListener('click', () => moveMsOrder(i, -1));
+
+    const down = document.createElement('button');
+    down.className = 'mo-move';
+    down.textContent = '↓';
+    down.title = 'Move down';
+    down.disabled = i === msOrder.length - 1;
+    down.addEventListener('click', () => moveMsOrder(i, 1));
+
+    const name = document.createElement('span');
+    name.className = 'mo-name';
+    name.textContent = m.name;
+
+    row.append(name, up, down);
+    box.appendChild(row);
+  });
+}
+
+function moveMsOrder(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= msOrder.length) return;
+  [msOrder[i], msOrder[j]] = [msOrder[j], msOrder[i]];
+  renderMsOrder();
 }
 $('#btnMapSettings').addEventListener('click', openMapSettings);
 
@@ -2235,8 +2407,24 @@ $('#msDone').addEventListener('click', async () => {
       name: $('#msName').value.trim(),
       visibility: visEl ? visEl.value : 'public',
     });
+    // persist the map order if it changed from what the server has
+    const current = mapsMine.map(m => m.id);
+    const wanted = msOrder.map(m => m.id);
+    if (wanted.join(',') !== current.join(',')) {
+      await api('/api/maps/reorder', 'POST', { order: wanted });
+    }
     closeSheets();
     await loadMaps(currentMapId);
+  } catch (err) {
+    $('#msError').textContent = err.message;
+  }
+});
+
+$('#msDuplicate').addEventListener('click', async () => {
+  try {
+    const data = await api(`/api/maps/${currentMapId}/duplicate`, 'POST');
+    closeSheets();
+    await loadMaps(data.map.id);
   } catch (err) {
     $('#msError').textContent = err.message;
   }

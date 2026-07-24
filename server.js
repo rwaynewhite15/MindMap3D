@@ -990,7 +990,27 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { map: mapMeta(m, { editors: [] }) });
   }
 
-  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate))?$/);
+  // Reorder my maps: body { order: [id, id, …] }. Sorts user.maps to match.
+  if (route === 'POST /api/maps/reorder') {
+    const body = await readBody(req);
+    const order = Array.isArray(body.order) ? body.order.map(String) : null;
+    if (!order) return sendJSON(res, 400, { error: 'Invalid order.' });
+    const rank = new Map(order.map((id, i) => [id, i]));
+    // stable sort: ids named in `order` come first in that order; any not
+    // listed keep their existing relative position at the end.
+    user.maps = user.maps
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => {
+        const ra = rank.has(a.m.id) ? rank.get(a.m.id) : order.length + a.i;
+        const rb = rank.has(b.m.id) ? rank.get(b.m.id) : order.length + b.i;
+        return ra - rb;
+      })
+      .map(x => x.m);
+    await store.saveUser(user);
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate|duplicate))?$/);
   if (mapMatch) {
     const mapId = mapMatch[1], sub = mapMatch[2];
     const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
@@ -1062,6 +1082,31 @@ async function handleApi(req, res, pathname) {
       if (liked) m.likes.push(user.id); else m.likes.splice(i, 1);
       await store.saveUser(owner);
       return sendJSON(res, 200, { likeCount: m.likes.length, likedByMe: liked });
+    }
+    // Duplicate a map I own. The copy is a private clone of the content only:
+    // fresh id, no shared editors, no chat/likes, inserted right after the
+    // original. Visibility is carried over so it looks like the source.
+    if (sub === 'duplicate' && req.method === 'POST') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can duplicate a map.' });
+      if (user.maps.length >= MAX_MAPS) return sendJSON(res, 400, { error: `You can have up to ${MAX_MAPS} maps.` });
+      const now = Date.now();
+      const copy = {
+        id: newId(),
+        name: (m.name + ' (copy)').slice(0, 60),
+        visibility: m.visibility,
+        editors: [],
+        nodes: JSON.parse(JSON.stringify(m.nodes || {})),
+        edges: JSON.parse(JSON.stringify(m.edges || [])),
+        anchorId: m.anchorId,
+        chat: [],
+        likes: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const idx = user.maps.findIndex(x => x.id === mapId);
+      user.maps.splice(idx + 1, 0, copy);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { map: mapMeta(copy, { editors: [] }) });
     }
     if (!sub && req.method === 'DELETE') {
       if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a map.' });
