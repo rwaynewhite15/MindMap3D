@@ -568,17 +568,16 @@ button.primary {
     0 2px 8px rgba(0, 0, 0, 0.30);
 }
 .bubble .label {
-  font-size: 17px;
+  /* font-size is set inline per-bubble (fitBubbleFont) so text always fits */
+  font-size: 17px; /* fallback for the group label, which keeps this size */
   font-weight: 700;
   color: #0e1118;
   line-height: 1.2;
-  padding: 8%;
+  padding: 6%;
   max-width: 100%;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
   word-break: break-word;
+  overflow-wrap: anywhere;
   text-shadow: 0 1px 0 rgba(255,255,255,0.35);
   pointer-events: none;
 }
