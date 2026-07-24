@@ -68,12 +68,24 @@ menu**.
 - **2D bubbles** — a flat, pannable canvas. Tap a bubble to select it, tap again to
   rename, drag to move. Drag the background to pan, pinch or scroll to zoom, and use
   **⌖** to fit the whole map on screen.
+- **Manual resize** — select a bubble or group and drag the round handle on its
+  lower-right edge to make it any size (groups never shrink below the space their
+  contents need).
+- **🔓 Lock** — pin the selected bubble or group so it can't be accidentally moved or
+  resized (shortcut **L**). A 🔒 badge marks locked items; tap **Lock** again to release.
+- **📍 Set** — *tap* to snap the selected item back to a saved size & position; *press and
+  hold* to save the current size & position as that "home". Handy alongside Lock for
+  keeping a layout put.
 - **Notes, links & tasks** — every bubble (and group) can carry a free-text **note**, an
-  optional **link** (a web address), and a **✓ done** flag for tracking tasks. Notes and
-  links show as small badges; done bubbles are dimmed with a struck-through label.
+  optional **link** (a web address), and a **✓ done** flag for tracking tasks. Links show
+  as a small badge and notes surface in the **Outline** (and beneath the bubble there);
+  done bubbles are dimmed with a struck-through label.
 - **Weighted connections** — select a bubble, tap **+ Connection**, then tap another.
   New links start at weight 1 (a thin line); tap a line (or its numbered dot) for a
-  slider to make it thicker (1–10 — the weight *is* the thickness) or remove it.
+  slider to make it thicker (1–10 — the weight *is* the thickness) or remove it. From the
+  same panel you can turn a connection into a **directional arrow** (with **⇄ Reverse** to
+  flip it) and pick its **color** — a chosen hue, or **A** to default to the first
+  bubble's color.
 - **Groups** — **+ Group** creates a container bubble. Add bubbles inside it (select the
   group, then **+ Bubble**), or move bubbles in and out with **Group ▾**. Grouped
   bubbles can still link to bubbles outside the group.

@@ -112,6 +112,12 @@ function createMapView(host, opts = {}) {
   host.appendChild(groupLayer);
   host.appendChild(svg);
   host.appendChild(layer);
+  // a draggable grip on the selected node's edge, for manual resizing (editor only)
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'resize-handle';
+  resizeHandle.style.display = 'none';
+  host.appendChild(resizeHandle);
+  let gripPos = null; // { x, y, cx, cy, scale, id } for the live resize grip
 
   let map = { nodes: {}, edges: [] };
   let idCounter = 1;
@@ -192,6 +198,17 @@ function createMapView(host, opts = {}) {
   const childrenOf = id => Object.values(map.nodes).filter(n => n.parentId === id);
   const containers = () => Object.values(map.nodes).filter(n => n.kind === 'container');
   const edgesOf = id => map.edges.filter(e => e.a === id || e.b === id);
+  // A connection's stroke color: the user's chosen hue, else the first bubble's.
+  const edgeColor = e => {
+    if (e.color !== null && e.color !== undefined && HUES[e.color]) return HUES[e.color].main;
+    const na = map.nodes[e.a];
+    return na ? hueOf(na).main : '#8A93A6';
+  };
+  // normalize a stored home preset ({ pos, r }) coming in from a map payload
+  const readHome = h => (h && Array.isArray(h.pos))
+    ? { pos: [h.pos[0] || 0, h.pos[1] || 0, h.pos[2] || 0], r: h.r || 62 }
+    : null;
+  const readColor = c => (c === null || c === undefined) ? null : c;
 
   function clampInside(n) {
     const c = n.parentId && map.nodes[n.parentId];
@@ -246,10 +263,19 @@ function createMapView(host, opts = {}) {
     for (const e of map.edges) {
       const na = map.nodes[e.a], nb = map.nodes[e.b];
       if (!na || !nb) continue;
+      const col = edgeColor(e);
       const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('stroke', hueOf(na).main);
+      line.setAttribute('stroke', col);
       line.setAttribute('stroke-linecap', 'round');
       svg.appendChild(line);
+
+      // optional directional arrowhead (a → b), positioned each frame
+      let arrow = null;
+      if (e.arrow) {
+        arrow = document.createElementNS(SVG_NS, 'polygon');
+        arrow.setAttribute('fill', col);
+        svg.appendChild(arrow);
+      }
 
       let handle = null;
       if (editable) {
@@ -258,7 +284,7 @@ function createMapView(host, opts = {}) {
         const circ = document.createElementNS(SVG_NS, 'circle');
         circ.setAttribute('r', 12);
         circ.setAttribute('fill', '#141926');
-        circ.setAttribute('stroke', hueOf(na).main);
+        circ.setAttribute('stroke', col);
         circ.setAttribute('stroke-width', 1.5);
         const txt = document.createElementNS(SVG_NS, 'text');
         txt.setAttribute('text-anchor', 'middle');
@@ -271,7 +297,7 @@ function createMapView(host, opts = {}) {
         handle.appendChild(txt);
         svg.appendChild(handle);
       }
-      edgeEls.set(e.id, { line, handle });
+      edgeEls.set(e.id, { line, handle, arrow });
     }
 
     for (const n of Object.values(map.nodes)) {
@@ -290,10 +316,11 @@ function createMapView(host, opts = {}) {
       // sit outside the circle (see CSS) and keep the default size + ellipsis
       if (n.kind !== 'container') label.style.fontSize = fitBubbleFont(n.label, n.r).toFixed(1) + 'px';
       el.appendChild(label);
-      // small badges mark bubbles that carry a note and/or a link
+      // small badges mark bubbles that carry a link and/or are locked
+      // (the note symbol was intentionally removed — notes surface in the outline)
       const badges = [];
-      if (n.note && n.note.trim()) badges.push(['📝', 'Has a note']);
       if (n.link) badges.push(['🔗', 'Has a link']);
+      if (n.locked) badges.push(['🔒', 'Locked — cannot be moved or resized']);
       if (badges.length) {
         const wrap = document.createElement('div');
         wrap.className = 'node-badges';
@@ -305,7 +332,7 @@ function createMapView(host, opts = {}) {
         }
         el.appendChild(wrap);
       }
-      el.classList.toggle('has-note', !!(n.note && n.note.trim()));
+      el.classList.toggle('locked', !!n.locked);
       el.classList.toggle('done', !!n.done); // completed task: dimmed + struck through
       // group circles go in the bottom layer (behind the connection lines);
       // bubbles go in the top layer (in front of the lines)
@@ -370,6 +397,7 @@ function createMapView(host, opts = {}) {
       if (!a || !b || a.behind || b.behind) {
         els.line.style.display = 'none';
         if (els.handle) els.handle.style.display = 'none';
+        if (els.arrow) els.arrow.style.display = 'none';
         continue;
       }
       els.line.style.display = '';
@@ -392,13 +420,44 @@ function createMapView(host, opts = {}) {
       let op = Math.max(0.5, Math.min(0.95, depth * 0.9));
       if (hov) op = Math.min(1, op + 0.3);
       if (hi) op = 1;
+      const sw = Math.max(1.6, (0.6 + e.w) * depth) + (hi ? 1.5 : hov ? 1 : 0);
       els.line.setAttribute('stroke-opacity', op);
-      els.line.setAttribute('stroke-width', Math.max(1.6, (0.6 + e.w) * depth) + (hi ? 1.5 : hov ? 1 : 0));
+      els.line.setAttribute('stroke-width', sw);
+      if (els.arrow) {
+        // a filled triangle at the b end, pointing along the connection (a → b)
+        els.arrow.style.display = '';
+        els.arrow.setAttribute('fill-opacity', op);
+        const ah = 7 + sw * 1.4;             // arrowhead length
+        const aw = 4 + sw * 0.9;             // arrowhead half-width
+        const bx = x2 - ux * ah, by = y2 - uy * ah;
+        const nx = -uy, ny = ux;             // perpendicular to the line
+        els.arrow.setAttribute('points',
+          `${x2.toFixed(1)},${y2.toFixed(1)} ` +
+          `${(bx + nx * aw).toFixed(1)},${(by + ny * aw).toFixed(1)} ` +
+          `${(bx - nx * aw).toFixed(1)},${(by - ny * aw).toFixed(1)}`);
+      }
       if (els.handle) {
         els.handle.style.display = showWeights ? '' : 'none';
         // sit the weight badge at the midpoint of the visible (trimmed) segment
         els.handle.setAttribute('transform', `translate(${(x1 + x2) / 2}, ${(y1 + y2) / 2}) scale(${Math.max(0.7, Math.min(1.2, depth))})`);
       }
+    }
+
+    // place the resize grip on the selected node's lower-right edge (editor only;
+    // hidden for locked nodes, which are pinned against resizing)
+    if (editable && selectedId && map.nodes[selectedId] && !map.nodes[selectedId].locked
+        && proj[selectedId] && !proj[selectedId].behind && !(drag && drag.type === 'pan')) {
+      const n = map.nodes[selectedId], p = proj[selectedId];
+      const R = n.r * p.scale;
+      const ang = Math.PI / 4;
+      const gx = p.x + Math.cos(ang) * R, gy = p.y + Math.sin(ang) * R;
+      resizeHandle.style.display = '';
+      resizeHandle.style.left = gx + 'px';
+      resizeHandle.style.top = gy + 'px';
+      gripPos = { x: gx, y: gy, cx: p.x, cy: p.y, scale: p.scale, id: selectedId };
+    } else {
+      resizeHandle.style.display = 'none';
+      gripPos = null;
     }
 
     // keep the hover highlight honest while the scene moves under a still cursor
@@ -494,6 +553,18 @@ function createMapView(host, opts = {}) {
     if (drag) return;
 
     const pt = tapPoint(e);
+
+    // grabbing the resize grip on the selected node starts a resize drag — checked
+    // before node hit-testing so the grip always wins over the bubble beneath it
+    if (editable && gripPos && Math.hypot(pt.x - gripPos.x, pt.y - gripPos.y) <= 18) {
+      const n = map.nodes[gripPos.id];
+      if (n && !n.locked) {
+        drag = { type: 'resize', id: gripPos.id, cx: gripPos.cx, cy: gripPos.cy, scale: gripPos.scale, moved: false };
+        host.classList.add('dragging');
+        return;
+      }
+    }
+
     // editable views hit-test for selection/editing; read-only views hit-test
     // too so a tap can pick the center of rotation
     const hits = (editable || opts.tapToCenter) ? hitTest(pt.x, pt.y) : [];
@@ -661,7 +732,36 @@ function createMapView(host, opts = {}) {
       const { right, up } = cameraBasis();
       const wpp = camDist / FOCAL; // world units per screen pixel at the view plane
       pivot = sub(drag.startPivot, add3(mul(right, dx * wpp), mul(up, dy * wpp)));
+    } else if (drag.type === 'resize' && editable) {
+      const n = map.nodes[drag.id];
+      if (!n) return;
+      drag.moved = true;
+      const rect = host.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      // radius = on-screen distance from the node center to the pointer, back to world units
+      let newR = Math.hypot(mx - drag.cx, my - drag.cy) / (drag.scale || 1);
+      // groups never shrink below the space their children need
+      let minR = 30;
+      if (n.kind === 'container') {
+        minR = GROUP_MIN_R;
+        for (const ch of childrenOf(n.id)) minR = Math.max(minR, len(sub(ch.pos, n.pos)) + ch.r + GROUP_PAD);
+      }
+      n.r = Math.max(minR, Math.min(400, newR));
+      if (n.kind !== 'container' && n.parentId && map.nodes[n.parentId]) {
+        clampInside(n);
+        growContainer(map.nodes[n.parentId]);
+      }
+      // reflect the new size live without a full rebuild
+      const el = nodeEls.get(drag.id);
+      if (el) {
+        el.style.width = n.r * 2 + 'px';
+        el.style.height = n.r * 2 + 'px';
+        const lbl = el.querySelector('.label');
+        if (lbl && n.kind !== 'container') lbl.style.fontSize = fitBubbleFont(n.label, n.r).toFixed(1) + 'px';
+      }
     } else if (drag.type === 'node' && editable) {
+      const n0 = map.nodes[drag.id];
+      if (n0 && n0.locked) return; // locked: can't be dragged (still selects on tap)
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
       if (!drag.moved) return;
@@ -700,7 +800,10 @@ function createMapView(host, opts = {}) {
   window.addEventListener('pointerup', e => {
     const had = pointers.delete(e.pointerId);
     if (had && drag) {
-      if (drag.type === 'node') {
+      if (drag.type === 'resize') {
+        buildDOM(); // rebuild so label sizing / group fit settle cleanly
+        if (opts.onChange) opts.onChange();
+      } else if (drag.type === 'node') {
         if (drag.moved) {
           if (opts.onChange) opts.onChange();
         } else {
@@ -739,7 +842,7 @@ function createMapView(host, opts = {}) {
     const existing = map.edges.find(e =>
       (e.a === aId && e.b === bId) || (e.a === bId && e.b === aId));
     if (existing) return existing;
-    const edge = { id: 'e' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), a: aId, b: bId, w: 1 };
+    const edge = { id: 'e' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), a: aId, b: bId, w: 1, arrow: false, color: null };
     map.edges.push(edge);
     changed();
     return edge;
@@ -751,7 +854,7 @@ function createMapView(host, opts = {}) {
     const n = {
       id, label: '', note: '', link: '', done: false, pos: [0, 0, 0], r: 62,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
-      parentId: null, kind: 'bubble',
+      parentId: null, kind: 'bubble', locked: false, home: null,
     };
 
     if (sel && sel.kind === 'container') {
@@ -767,7 +870,7 @@ function createMapView(host, opts = {}) {
       map.nodes[id] = n;
       clampInside(n);
       if (n.parentId) growContainer(map.nodes[n.parentId]);
-      map.edges.push({ id: 'e' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), a: sel.id, b: id, w: 1 });
+      map.edges.push({ id: 'e' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), a: sel.id, b: id, w: 1, arrow: false, color: null });
     } else {
       n.pos = mul(randUnit(), 160 + Math.random() * 160);
       map.nodes[id] = n;
@@ -787,7 +890,7 @@ function createMapView(host, opts = {}) {
     const n = {
       id, label: '', note: '', link: '', done: false, kind: 'container', r: 150,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
-      parentId: null,
+      parentId: null, locked: false, home: null,
       pos: sel ? add3(base, mul(randUnit(), offset)) : mul(randUnit(), offset),
     };
     map.nodes[id] = n;
@@ -876,9 +979,10 @@ function createMapView(host, opts = {}) {
         pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0],
         r: n.r || 62, hue: n.hue || 0, parentId: n.parentId || null,
         kind: n.kind === 'container' ? 'container' : 'bubble',
+        locked: !!n.locked, home: readHome(n.home),
       };
     }
-    map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+    map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3, arrow: !!e.arrow, color: readColor(e.color) }));
     selectedId = null; connectFrom = null; highlightedEdge = null;
     hueCounter = Object.keys(map.nodes).length;
     buildDOM();
@@ -1141,9 +1245,11 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          locked: !!n.locked,
+          home: readHome(n.home),
         };
       }
-      map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+      map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3, arrow: !!e.arrow, color: readColor(e.color) }));
       idCounter = 1;
       hueCounter = Object.keys(map.nodes).length;
       selectedId = null;
@@ -1191,9 +1297,11 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          locked: !!n.locked,
+          home: readHome(n.home),
         };
       }
-      map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+      map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3, arrow: !!e.arrow, color: readColor(e.color) }));
       hueCounter = Object.keys(map.nodes).length;
       selectedId = map.nodes[keepSel] ? keepSel : null;
       connectFrom = map.nodes[keepConnect] ? keepConnect : null;
@@ -1215,6 +1323,55 @@ function createMapView(host, opts = {}) {
     addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setLink, setDone, loadGenerated,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
+    // lock: pin a node so it can't be accidentally dragged or resized
+    toggleLock(id) {
+      const n = map.nodes[id];
+      if (!n) return;
+      n.locked = !n.locked;
+      changed();
+    },
+    isLocked: id => { const n = map.nodes[id]; return !!(n && n.locked); },
+    // home: a saved size + position a node can be snapped back to
+    setHome(id) {
+      const n = map.nodes[id];
+      if (!n) return;
+      n.home = { pos: [n.pos[0], n.pos[1], n.pos[2] || 0], r: n.r };
+      changed();
+    },
+    hasHome: id => { const n = map.nodes[id]; return !!(n && n.home); },
+    resetToHome(id) {
+      const n = map.nodes[id];
+      if (!n || !n.home) return false;
+      n.pos = [n.home.pos[0] || 0, n.home.pos[1] || 0, n.home.pos[2] || 0];
+      n.r = n.home.r || n.r;
+      if (n.kind === 'container') {
+        for (const ch of childrenOf(n.id)) clampInside(ch);
+      } else if (n.parentId && map.nodes[n.parentId]) {
+        clampInside(n);
+        fitContainer(map.nodes[n.parentId]);
+      }
+      changed();
+      return true;
+    },
+    // connections: direction arrow + color
+    setEdgeArrow(id, on) {
+      const e = map.edges.find(x => x.id === id);
+      if (!e) return;
+      e.arrow = !!on;
+      changed();
+    },
+    reverseEdge(id) {
+      const e = map.edges.find(x => x.id === id);
+      if (!e) return;
+      [e.a, e.b] = [e.b, e.a];
+      changed();
+    },
+    setEdgeColor(id, c) {
+      const e = map.edges.find(x => x.id === id);
+      if (!e) return;
+      e.color = (c === null || c === undefined) ? null : Math.max(0, Math.min(HUES.length - 1, Math.floor(c)));
+      changed();
+    },
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
       const n = map.nodes[id];
@@ -1463,7 +1620,7 @@ $('#linkInput').addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSheets();
 });
 
-/* ---------- edge (weight) sheet ---------- */
+/* ---------- edge (weight / direction / color) sheet ---------- */
 let edgeTarget = null;
 function openEdgeSheet(edgeId) {
   const e = myMap.getEdge(edgeId);
@@ -1471,15 +1628,58 @@ function openEdgeSheet(edgeId) {
   edgeTarget = edgeId;
   openSheet('#sheetEdge');
   myMap.setHighlightedEdge(edgeId);
+  refreshEdgeSheet();
+}
+// (re)render the edge sheet's ends, weight, direction and color from the target
+function refreshEdgeSheet() {
+  const e = edgeTarget && myMap.getEdge(edgeTarget);
+  if (!e) return;
   const na = myMap.getNode(e.a), nb = myMap.getNode(e.b);
-  $('#edgeEnds').textContent = `${na ? na.label || 'Untitled' : '?'}  ↔  ${nb ? nb.label || 'Untitled' : '?'}`;
+  const arrow = !!e.arrow;
+  $('#edgeEnds').textContent =
+    `${na ? na.label || 'Untitled' : '?'}  ${arrow ? '→' : '↔'}  ${nb ? nb.label || 'Untitled' : '?'}`;
   $('#weightSlider').value = e.w;
   $('#weightValue').textContent = e.w;
+  $('#edgeArrowToggle').textContent = arrow ? '➤ Arrow: on' : '➤ Arrow: off';
+  $('#edgeArrowToggle').classList.toggle('active', arrow);
+  // Reverse flips the arrow's direction and the "first bubble" used for the
+  // default color, so it stays useful even before an arrow is turned on.
+  renderEdgeSwatches(e, na);
+}
+// color row: an "auto" chip (first bubble's color) plus the palette
+function renderEdgeSwatches(e, na) {
+  const row = $('#edgeSwatch');
+  row.innerHTML = '';
+  const isAuto = e.color === null || e.color === undefined;
+  const auto = document.createElement('button');
+  auto.className = 'swatch auto-swatch' + (isAuto ? ' sel' : '');
+  const autoHue = na ? HUES[(na.hue || 0) % HUES.length] : HUES[0];
+  auto.style.background = `radial-gradient(circle at 32% 28%, ${autoHue.lite}, ${autoHue.main} 60%, ${autoHue.dark} 130%)`;
+  auto.title = 'Default — match the first bubble in the connection';
+  auto.textContent = 'A';
+  auto.addEventListener('click', () => { myMap.setEdgeColor(edgeTarget, null); refreshEdgeSheet(); });
+  row.appendChild(auto);
+  for (let i = 0; i < HUES.length; i++) {
+    row.appendChild(swatchButton(i, e.color === i, pick => {
+      myMap.setEdgeColor(edgeTarget, pick);
+      refreshEdgeSheet();
+    }));
+  }
 }
 $('#weightSlider').addEventListener('input', () => {
   const w = +$('#weightSlider').value;
   $('#weightValue').textContent = w;
   if (edgeTarget) myMap.setWeight(edgeTarget, w);
+});
+$('#edgeArrowToggle').addEventListener('click', () => {
+  const e = edgeTarget && myMap.getEdge(edgeTarget);
+  if (!e) return;
+  myMap.setEdgeArrow(edgeTarget, !e.arrow);
+  refreshEdgeSheet();
+});
+$('#edgeReverse').addEventListener('click', () => {
+  if (edgeTarget) myMap.reverseEdge(edgeTarget);
+  refreshEdgeSheet(); // ends + default color source flip with the direction
 });
 $('#edgeDelete').addEventListener('click', () => {
   if (edgeTarget) myMap.deleteEdge(edgeTarget);
@@ -1601,9 +1801,11 @@ function describeHit(view, hit) {
   const e = view.getEdge(hit.id);
   if (!e) return null;
   const na = view.getNode(e.a), nb = view.getNode(e.b);
+  const col = (e.color !== null && e.color !== undefined && HUES[e.color])
+    ? HUES[e.color].main : (na ? hueOf(na).main : '#8A93A6');
   return {
-    color: na ? hueOf(na).main : '#8A93A6',
-    label: `${na ? na.label || 'Untitled' : '?'} ↔ ${nb ? nb.label || 'Untitled' : '?'}`,
+    color: col,
+    label: `${na ? na.label || 'Untitled' : '?'} ${e.arrow ? '→' : '↔'} ${nb ? nb.label || 'Untitled' : '?'}`,
     tag: 'weight ' + e.w,
     isLine: true,
   };
@@ -1753,6 +1955,18 @@ function refreshToolbar() {
   $('#btnDelete').disabled = !sel;
   $('#btnGroupMenu').disabled = !sel || sel.kind === 'container';
   $('#btnAddBubble').textContent = sel && sel.kind === 'container' ? '+ Bubble in group' : '+ Bubble';
+
+  const lockBtn = $('#btnLock');
+  lockBtn.disabled = !sel;
+  const locked = !!(sel && sel.locked);
+  lockBtn.classList.toggle('active', locked);
+  lockBtn.textContent = locked ? '🔒 Locked' : '🔓 Lock';
+
+  const setBtn = $('#btnSet');
+  setBtn.disabled = !sel;
+  const hasHome = !!(sel && sel.home);
+  setBtn.classList.toggle('active', hasHome);
+  setBtn.textContent = hasHome ? '📍 Set ✓' : '📍 Set';
 }
 
 /* ================================================================
@@ -1986,12 +2200,28 @@ function buildMapSVG() {
 
   const parts = [];
   // connections first, so bubbles sit on top; thickness = weight, like the canvas
+  const edgeCol = e => (e.color !== null && e.color !== undefined && HUES[e.color])
+    ? HUES[e.color].main : (map.nodes[e.a] ? hueOf(map.nodes[e.a]).main : '#8A93A6');
   for (const e of map.edges || []) {
     const a = map.nodes[e.a], b = map.nodes[e.b];
     if (!a || !b) continue;
+    const col = edgeCol(e);
+    const sw = e.w || 1;
+    // trim the line at bubble b's edge so an arrowhead sits on the rim, not the center
+    const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1];
+    const dl = Math.hypot(dx, dy) || 1;
+    const ux = dx / dl, uy = dy / dl;
+    const ex = b.pos[0] - ux * (e.arrow ? b.r : 0), ey = b.pos[1] - uy * (e.arrow ? b.r : 0);
     parts.push('<line x1="' + X(a.pos[0]) + '" y1="' + Y(a.pos[1]) + '" x2="'
-      + X(b.pos[0]) + '" y2="' + Y(b.pos[1]) + '" stroke="' + hueOf(a).main
-      + '" stroke-width="' + (e.w || 1) + '" stroke-linecap="round" opacity="0.85"/>');
+      + X(ex) + '" y2="' + Y(ey) + '" stroke="' + col
+      + '" stroke-width="' + sw + '" stroke-linecap="round" opacity="0.85"/>');
+    if (e.arrow) {
+      const ah = 7 + sw * 1.4, aw = 4 + sw * 0.9, nx = -uy, ny = ux;
+      const bx = ex - ux * ah, by = ey - uy * ah;
+      parts.push('<polygon points="' + X(ex) + ',' + Y(ey) + ' '
+        + X(bx + nx * aw) + ',' + Y(by + ny * aw) + ' '
+        + X(bx - nx * aw) + ',' + Y(by - ny * aw) + '" fill="' + col + '" opacity="0.85"/>');
+    }
   }
   // groups (behind), then bubbles (in front) — matching the canvas layering
   const draw = n => {
@@ -2230,6 +2460,47 @@ function initEditor() {
   $('#btnDelete').addEventListener('click', () => { myMap.deleteSelected(); refreshToolbar(); });
   $('#btnGroupMenu').addEventListener('click', openGroupSheet);
 
+  // lock: pin the selected item against accidental moves/resizes
+  $('#btnLock').addEventListener('click', () => {
+    const sel = myMap.getSelected();
+    if (!sel) return;
+    myMap.toggleLock(sel.id);
+    refreshToolbar();
+    setHint(myMap.isLocked(sel.id) ? 'Locked — this item can’t be moved or resized' : 'Unlocked', false);
+  });
+
+  // set: tap snaps the item back to its saved size & position; hold saves the
+  // current size & position as that home (long-press works on touch and mouse)
+  const btnSet = $('#btnSet');
+  let setHoldTimer = null, setHeld = false;
+  const cancelSetHold = () => { clearTimeout(setHoldTimer); setHoldTimer = null; };
+  btnSet.addEventListener('pointerdown', () => {
+    if (btnSet.disabled) return;
+    setHeld = false;
+    setHoldTimer = setTimeout(() => {
+      setHeld = true;
+      const sel = myMap.getSelected();
+      if (sel) { myMap.setHome(sel.id); refreshToolbar(); setHint('Saved this size & position as home', true); }
+    }, 500);
+  });
+  btnSet.addEventListener('pointerup', cancelSetHold);
+  btnSet.addEventListener('pointerleave', cancelSetHold);
+  btnSet.addEventListener('pointercancel', cancelSetHold);
+  btnSet.addEventListener('click', () => {
+    if (setHeld) { setHeld = false; return; } // the long-press already saved
+    const sel = myMap.getSelected();
+    if (!sel) return;
+    if (myMap.hasHome(sel.id)) {
+      myMap.resetToHome(sel.id);
+      refreshToolbar();
+      setHint('Reset to the saved size & position', false);
+    } else {
+      myMap.setHome(sel.id);
+      refreshToolbar();
+      setHint('Saved home — tap Set again to snap back here later', true);
+    }
+  });
+
   // connection weight numbers: on by default, choice remembered
   const btnWeights = $('#btnWeights');
   const savedWeights = localStorage.getItem('mms:showWeights');
@@ -2261,6 +2532,14 @@ function initEditor() {
     } else if (e.key === 'n' || e.key === 'N') {
       const sel = myMap.getSelected();
       if (sel) { e.preventDefault(); openRename(sel.id, 'note'); }
+    } else if (e.key === 'l' || e.key === 'L') {
+      const sel = myMap.getSelected();
+      if (sel) {
+        e.preventDefault();
+        myMap.toggleLock(sel.id);
+        refreshToolbar();
+        setHint(myMap.isLocked(sel.id) ? 'Locked — this item can’t be moved or resized' : 'Unlocked', false);
+      }
     } else if (e.key === 'Escape' && myMap.isConnecting()) {
       myMap.cancelConnect();
       $('#btnConnect').classList.remove('active');

@@ -82,6 +82,8 @@
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
       <button id="btnNote" class="tb" disabled title="Add or edit a note on the selected bubble (N)">📝 Note</button>
       <button id="btnColor" class="tb" title="Choose bubble colors">🎨 Color</button>
+      <button id="btnLock" class="tb" disabled title="Lock the selected item so it can't be accidentally moved or resized (L)">🔓 Lock</button>
+      <button id="btnSet" class="tb" disabled title="Tap: snap the selected item back to its saved size &amp; position · Hold: save the current size &amp; position">📍 Set</button>
       <button id="btnGroupMenu" class="tb" disabled title="Move the selected bubble into or out of a group">Group ▾</button>
       <button id="btnAI" class="tb" hidden title="Generate a mind map from a prompt with AI">✨ AI</button>
       <button id="btnDelete" class="tb danger" disabled title="Delete the selected item (Delete)">Delete</button>
@@ -445,12 +447,20 @@
 </div>
 
 <div id="sheetEdge" class="sheet" hidden>
-  <div class="sheet-title">Connection strength</div>
+  <div class="sheet-title">Connection</div>
   <div id="edgeEnds" class="muted"></div>
+  <label class="field-title">Strength</label>
   <div class="weight-row">
     <input id="weightSlider" type="range" min="1" max="10" step="1" value="1">
     <div id="weightValue" class="weight-num">1</div>
   </div>
+  <label class="field-title">Direction</label>
+  <div class="sheet-row-inline">
+    <button id="edgeArrowToggle" class="tb">➤ Arrow: off</button>
+    <button id="edgeReverse" class="tb">⇄ Reverse</button>
+  </div>
+  <label class="field-title">Color</label>
+  <div id="edgeSwatch" class="swatch-row"></div>
   <div class="sheet-row">
     <button id="edgeDelete" class="tb danger">Remove connection</button>
     <button id="edgeDone" class="tb primary-tb">Done</button>

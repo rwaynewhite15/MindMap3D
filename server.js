@@ -642,6 +642,13 @@ function sanitizeMap(input) {
       hue: Math.max(0, Math.min(11, Math.floor(num(n.hue)))),
       parentId: n.parentId ? String(n.parentId).slice(0, 24) : null,
       kind: n.kind === 'container' ? 'container' : 'bubble',
+      // locked: pinned against accidental moves/resizes
+      locked: !!n.locked,
+      // home: a saved size + position this node can be snapped back to
+      home: (n.home && typeof n.home === 'object' && Array.isArray(n.home.pos))
+        ? { pos: [num(n.home.pos[0]), num(n.home.pos[1]), num(n.home.pos[2])],
+            r: Math.max(20, Math.min(400, num(n.home.r) || 62)) }
+        : null,
     };
   }
   // drop parent references to nodes that don't exist / aren't containers
@@ -663,6 +670,11 @@ function sanitizeMap(input) {
       id: String(e.id || newId()).slice(0, 24),
       a, b,
       w: Math.max(1, Math.min(10, Math.round(num(e.w) || 1))),
+      // arrow: draw a direction arrowhead pointing from a → b
+      arrow: !!e.arrow,
+      // color: chosen hue index, or null to inherit the first bubble's color
+      color: (e.color === null || e.color === undefined)
+        ? null : Math.max(0, Math.min(11, Math.floor(num(e.color)))),
     });
   }
   // anchor: the node the view resets to; keep only if it points at a real node
