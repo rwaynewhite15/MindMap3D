@@ -1393,7 +1393,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI', '#sheetExport'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
 
 function openSheet(sel) {
   closeSheets();
@@ -3525,6 +3525,49 @@ $('#btnLogout').addEventListener('click', async () => {
   currentMapInfo = null;
   location.hash = '';
   show('auth');
+});
+
+// Export my data: the endpoint replies with a JSON attachment, so a plain
+// navigation to it triggers the browser's download (cookie is sent along).
+$('#btnExportData').addEventListener('click', () => {
+  flushSave(); // make sure the current map's latest edits are included
+  const a = document.createElement('a');
+  a.href = '/api/me/export';
+  a.download = ''; // filename comes from Content-Disposition
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+
+// Delete account: confirm in a sheet, require the password, then wipe + sign out
+$('#btnDeleteAccount').addEventListener('click', () => {
+  openSheet('#sheetDeleteAccount');
+  $('#deleteAcctPassword').value = '';
+  $('#deleteAcctError').textContent = '';
+  requestAnimationFrame(() => $('#deleteAcctPassword').focus());
+});
+$('#deleteAcctCancel').addEventListener('click', () => closeSheets());
+$('#deleteAcctPassword').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') $('#deleteAcctConfirm').click();
+  if (e.key === 'Escape') closeSheets();
+});
+$('#deleteAcctConfirm').addEventListener('click', async () => {
+  const password = $('#deleteAcctPassword').value;
+  if (!password) { $('#deleteAcctError').textContent = 'Enter your password to confirm.'; return; }
+  $('#deleteAcctConfirm').disabled = true;
+  try {
+    await api('/api/me', 'DELETE', { password });
+    // fully reset client state, exactly like sign-out
+    flushSave(); stopLive(); closeChat(); closeSheets();
+    me = null; mapsMine = []; mapsShared = [];
+    currentMapId = null; currentMapInfo = null;
+    location.hash = '';
+    show('auth');
+  } catch (err) {
+    $('#deleteAcctError').textContent = err.message;
+    $('#deleteAcctConfirm').disabled = false;
+  }
 });
 
 /* ================================================================
