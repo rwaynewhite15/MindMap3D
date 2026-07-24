@@ -36,6 +36,63 @@ const HUES = [
 const hueOf = n => HUES[(n.hue || 0) % HUES.length];
 
 /* ================================================================
+   Fit-to-bubble text sizing
+================================================================ */
+// Shared offscreen canvas for measuring text without touching layout.
+const _measureCtx = document.createElement('canvas').getContext('2d');
+
+const _bubbleFont = '-apple-system, "Segoe UI", Roboto, system-ui, sans-serif';
+
+// Word-wrap `label` to fit width `boxW` at font size `fs`, hard-breaking any word
+// too long to fit on its own line. Returns the array of lines.
+function wrapLabelLines(label, boxW, fs) {
+  _measureCtx.font = '700 ' + fs + 'px ' + _bubbleFont;
+  const w = s => _measureCtx.measureText(s).width;
+  const lines = [];
+  let line = '';
+  for (let word of label.split(/\s+/)) {
+    // hard-break an over-long word by characters
+    while (w(word) > boxW && word.length > 1) {
+      let i = 1;
+      while (i < word.length && w(word.slice(0, i + 1)) <= boxW) i++;
+      if (line) { lines.push(line); line = ''; }
+      lines.push(word.slice(0, i));
+      word = word.slice(i);
+    }
+    if (!word) continue;
+    const trial = line ? line + ' ' + word : word;
+    if (w(trial) <= boxW) line = trial;
+    else { if (line) lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Largest font size (px) at which `text` wraps to fit inside a circle of the
+// given radius. Bubbles are round, so we fit the label into the circle's
+// inscribed square (side ≈ r·√2) minus a little padding. Returns a size clamped
+// to a readable range so text always fits without getting oversized on short
+// labels. The `box` used for measuring is exposed via bubbleTextBox(r).
+function bubbleTextBox(r) { return r * Math.SQRT2 * 0.9; }
+function fitBubbleFont(text, r) {
+  const label = (text || 'Untitled').trim() || 'Untitled';
+  const box = bubbleTextBox(r);
+  const MAX = Math.min(20, r * 0.55);    // cap so a lone word isn't oversized
+  const MIN = 6;
+  const fits = fs => {
+    const lines = wrapLabelLines(label, box, fs);
+    return lines.length * fs * 1.2 <= box;
+  };
+  let lo = MIN, hi = MAX, best = MIN;
+  if (fits(hi)) return hi;
+  for (let i = 0; i < 12 && hi - lo > 0.5; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) { best = mid; lo = mid; } else { hi = mid; }
+  }
+  return Math.max(MIN, best);
+}
+
+/* ================================================================
    3D map view (spheres, weighted edges, container spheres)
 ================================================================ */
 function createMapView(host, opts = {}) {
@@ -229,6 +286,9 @@ function createMapView(host, opts = {}) {
       const label = document.createElement('div');
       label.className = 'label';
       label.textContent = n.label || 'Untitled';
+      // shrink the label so it always fits inside a normal bubble; group labels
+      // sit outside the circle (see CSS) and keep the default size + ellipsis
+      if (n.kind !== 'container') label.style.fontSize = fitBubbleFont(n.label, n.r).toFixed(1) + 'px';
       el.appendChild(label);
       // small badges mark bubbles that carry a note and/or a link
       const badges = [];
@@ -1940,13 +2000,19 @@ function buildMapSVG() {
       + '" stroke-width="' + (isGroup ? 2 : 3) + '"'
       + (isGroup ? ' stroke-dasharray="6 5"' : '') + ' opacity="' + op + '"/>');
     if (!isGroup) {
-      const fs = Math.max(10, Math.min(20, n.r * 0.5));
-      let lbl = (n.label || '').trim() || 'Untitled';
-      if (lbl.length > 22) lbl = lbl.slice(0, 21) + '…';
-      parts.push('<text x="' + X(n.pos[0]) + '" y="' + Y(n.pos[1]) + '" text-anchor="middle" '
-        + 'dominant-baseline="central" font-family="sans-serif" font-size="' + fs.toFixed(0)
+      // fit + wrap the label just like the live bubble, so nothing is clipped
+      const lbl = (n.label || '').trim() || 'Untitled';
+      const fs = fitBubbleFont(lbl, n.r);
+      const lines = wrapLabelLines(lbl, bubbleTextBox(n.r), fs);
+      const lineH = fs * 1.2;
+      const y0 = n.pos[1] - (lines.length - 1) * lineH / 2; // vertically centre the block
+      const tspans = lines.map((ln, i) =>
+        '<tspan x="' + X(n.pos[0]) + '" y="' + (Y(y0) + i * lineH).toFixed(1) + '">' + esc(ln) + '</tspan>'
+      ).join('');
+      parts.push('<text text-anchor="middle" dominant-baseline="central" '
+        + 'font-family="sans-serif" font-weight="700" font-size="' + fs.toFixed(1)
         + '" fill="' + col.lite + '"' + (n.done ? ' text-decoration="line-through"' : '')
-        + ' opacity="' + op + '">' + esc(lbl) + '</text>');
+        + ' opacity="' + op + '">' + tspans + '</text>');
     } else {
       // group name sits at the top edge of its circle
       parts.push('<text x="' + X(n.pos[0]) + '" y="' + (Y(n.pos[1] - n.r) - 6).toFixed(1)
