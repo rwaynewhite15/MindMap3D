@@ -893,6 +893,23 @@ button.primary {
 }
 .like-btn:hover { color: #F07A8F; border-color: #F07A8F; }
 .like-btn.liked { color: #F07A8F; border-color: #F07A8F; background: color-mix(in srgb, #F07A8F 14%, transparent); }
+
+/* comment count on a feed card — sits next to the like pill, same shape */
+.comment-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.comment-count:hover { color: var(--accent); border-color: var(--accent); }
 .tb.liked { color: #F07A8F; border-color: #F07A8F; }
 
 /* ---------------- profile view ---------------- */

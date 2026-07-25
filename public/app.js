@@ -3083,6 +3083,7 @@ function timeAgo(ts) {
 }
 
 let pendingProfileMapId = null; // a specific map a feed card asked to open next
+let pendingOpenComments = false; // a feed card asked to open that map's comments
 
 function feedCard(item) {
   const owner = item.owner || {};
@@ -3136,11 +3137,25 @@ function feedCard(item) {
     } catch (err) { alert(err.message); }
     like.disabled = false;
   });
+  // comment count, shown right beside the likes; tapping opens the map with its
+  // comment panel already open (signed-in only — comments are a signed-in feature)
+  const comments = document.createElement('button');
+  comments.className = 'comment-count';
+  comments.title = 'Comments';
+  comments.innerHTML = '💬 <span>' + (item.commentCount || 0) + '</span>';
+  comments.addEventListener('click', e => {
+    e.stopPropagation();
+    pendingProfileMapId = item.id;
+    pendingOpenComments = true;
+    location.hash = '#/u/' + owner.username;
+  });
   const open = document.createElement('button');
   open.className = 'tb';
   open.textContent = 'Open map →';
   open.addEventListener('click', openMap);
-  foot.appendChild(like); foot.appendChild(open);
+  foot.appendChild(like);
+  if (me) foot.appendChild(comments); // anonymous visitors can't see/post comments
+  foot.appendChild(open);
 
   card.appendChild(head); card.appendChild(body); card.appendChild(foot);
   return card;
@@ -3284,7 +3299,11 @@ async function openProfile(username) {
       pendingProfileMapId = null;
       await openProfileMap(wanted);
       profileMap.start();
+      // a feed card's comment count asks to open the comment panel straight away
+      if (pendingOpenComments) openComments();
+      pendingOpenComments = false;
     } else {
+      pendingOpenComments = false;
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
       $('#profileHint').hidden = true;

@@ -463,6 +463,7 @@ function mapMeta(m, extra) {
     nodeCount: Object.keys(m.nodes || {}).length,
     updatedAt: m.updatedAt || 0,
     likeCount: (m.likes || []).length,
+    commentCount: (m.comments || []).length,
   }, extra || {});
 }
 
