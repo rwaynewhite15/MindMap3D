@@ -537,6 +537,41 @@ button.primary {
 .chat-compose input:disabled { opacity: 0.5; }
 .chat-compose .tb { flex: none; }
 
+/* ---------------- comment section (read-only map viewer) ---------------- */
+/* Reuses the chat-panel shell (docked right, full height) with its own item
+   layout: every comment is a titled card, newest at the bottom. */
+.comments-panel { animation: chat-in 0.18s ease-out; }
+.comment-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 11px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.comment-item.mine { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.comment-head .who { color: var(--accent); font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-head time { color: var(--dim); font-size: 11px; white-space: nowrap; flex: none; }
+.comment-head .del {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.comment-head .del:hover { color: var(--danger); }
+.comment-item .body { color: var(--ink); word-break: break-word; white-space: pre-wrap; }
+
 .hint {
   position: absolute;
   top: 58px;

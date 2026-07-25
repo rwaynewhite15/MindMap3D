@@ -44,6 +44,9 @@ menu**.
 - **Home feed** — your landing screen shows recent maps from people you follow (and your
   friends), newest first, with a **Discover public maps** section when your feed is thin.
 - **Likes** — like any map you can view, from the feed or the read-only map view.
+- **Comments** — any signed-in viewer can leave comments on a map from the read-only view
+  (the 💬 Comments panel), the owner included. You can delete your own comments; the map
+  owner can moderate any of them. Distinct from the editor-only collaboration chat.
 
 ### Multiple maps per account
 - Keep several independent maps (e.g. "Work", "Novel ideas", "Trip planning"). Switch
