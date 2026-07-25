@@ -128,6 +128,7 @@ present, so production deployment is configuration, not code:
    - Environment variables:
      - `DATABASE_URL` = your Neon connection string (enables Postgres persistence)
      - `ANTHROPIC_API_KEY` = an Anthropic API key *(optional — enables the ✨ AI button)*
+     - `ADMIN_PASSWORD` = a long random secret *(optional — enables the admin console at `/admin`)*
 4. **Custom domain** (e.g. `MindMapShare.com`): in the Render service → Settings → Custom
    Domains, add your domain and set the DNS records Render shows. HTTPS is automatic.
 
@@ -146,6 +147,17 @@ Setting `ANTHROPIC_API_KEY` turns on the **✨ AI** button. Generation calls the
 `claude-opus-4-8`) to turn a prompt into groups, nodes, and weighted edges, which load
 into the current map. Without the key the app runs normally and the button stays hidden.
 Requests are rate-limited per user.
+
+### Admin console
+
+Setting `ADMIN_PASSWORD` turns on an admin dashboard at **`/admin`**, separate from
+normal user accounts. Sign in with the password to see site-wide stats (total users,
+maps, and nodes, plus recent sign-ups), browse and filter every account, and delete
+users (which scrubs all their friend/follow links and shared-map grants). The admin
+session is a short-lived, HttpOnly signed cookie — the signature is keyed by
+`ADMIN_PASSWORD` itself, so rotating the password immediately invalidates every open
+admin session and nothing is stored server-side. Sign-in attempts are rate-limited per
+IP. Leave `ADMIN_PASSWORD` unset and both the page and its API stay disabled.
 
 ### Live collaboration behind a proxy
 

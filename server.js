@@ -22,6 +22,10 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_BODY = 2 * 1024 * 1024; // 2 MB
 const DATABASE_URL = process.env.DATABASE_URL;
+// Admin console: a single password held in the ADMIN_PASSWORD env var (set in
+// the Render dashboard). Unset → the admin page and its API are disabled.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
 const newId = () => crypto.randomBytes(12).toString('hex');
 
@@ -117,6 +121,10 @@ function pgStore() {
       const { rows } = await pool.query('SELECT * FROM users WHERE id = ANY($1)', [ids]);
       const byId = new Map(rows.map(r => [r.id, rowToUser(r)]));
       return ids.map(id => byId.get(id)).filter(Boolean);
+    },
+    async allUsers() {
+      const { rows } = await pool.query('SELECT * FROM users ORDER BY created_at DESC LIMIT 1000');
+      return rows.map(rowToUser);
     },
     async getUserByUsername(username) {
       const { rows } = await pool.query('SELECT * FROM users WHERE username = $1',
@@ -262,6 +270,9 @@ function fileStore() {
     async init() {},
     async getUserById(id) { return db.users[id] || null; },
     async getUsersByIds(ids) { return (ids || []).map(id => db.users[id]).filter(Boolean); },
+    async allUsers() {
+      return Object.values(db.users).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1000);
+    },
     async getUserByUsername(username) {
       const uname = String(username || '').toLowerCase();
       return Object.values(db.users).find(u => u.username === uname) || null;
@@ -862,6 +873,44 @@ function clientIp(req) {
   return xf ? String(xf).split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
 }
 
+/* ================================================================
+   Admin auth — a single ADMIN_PASSWORD env var, no user account.
+   The session is a stateless signed cookie: an issued-at timestamp plus
+   an HMAC keyed by the admin password itself. Nothing is stored server-side,
+   and rotating ADMIN_PASSWORD instantly invalidates every admin session.
+================================================================ */
+function adminConfigured() { return ADMIN_PASSWORD.length > 0; }
+
+function signAdmin(ts) {
+  return crypto.createHmac('sha256', ADMIN_PASSWORD).update('admin:' + ts).digest('hex');
+}
+function makeAdminToken() {
+  const ts = Date.now();
+  return ts + '.' + signAdmin(ts);
+}
+function verifyAdminToken(token) {
+  if (!adminConfigured() || !token) return false;
+  const dot = token.indexOf('.');
+  if (dot < 0) return false;
+  const ts = Number(token.slice(0, dot));
+  if (!Number.isFinite(ts) || Date.now() - ts > ADMIN_TTL) return false;
+  const got = Buffer.from(token.slice(dot + 1));
+  const expected = Buffer.from(signAdmin(ts));
+  return got.length === expected.length && crypto.timingSafeEqual(got, expected);
+}
+function isAdmin(req) {
+  return verifyAdminToken(parseCookies(req).admin);
+}
+// Compare a submitted password to ADMIN_PASSWORD in constant time. Both sides
+// are SHA-256'd first so timingSafeEqual always sees equal-length buffers and
+// the comparison can't leak the password's length.
+function checkAdminPassword(pw) {
+  if (!adminConfigured()) return false;
+  const a = crypto.createHash('sha256').update(String(pw)).digest();
+  const b = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 const attempts = new Map(); // key → { n, t }
 function tooMany(key, limit, windowMs) {
   const now = Date.now();
@@ -1064,6 +1113,83 @@ async function handleApi(req, res, pathname) {
       likedByMe: !!user && (m.likes || []).includes(user.id),
       present: presenceList(m.id),
     });
+  }
+
+  // --- admin console (separate auth: ADMIN_PASSWORD env var, not a user account) ---
+  if (pathname === '/api/admin/login' && req.method === 'POST') {
+    const ip = clientIp(req);
+    if (tooMany('admin:' + ip, 10, 15 * 60 * 1000)) {
+      return sendJSON(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+    }
+    if (!adminConfigured()) {
+      return sendJSON(res, 503, { error: 'Admin access is not configured on this server. Set the ADMIN_PASSWORD environment variable to enable it.' });
+    }
+    const body = await readBody(req);
+    if (!checkAdminPassword(body.password)) {
+      return sendJSON(res, 401, { error: 'Wrong admin password.' });
+    }
+    attempts.delete('admin:' + ip);
+    res.setHeader('Set-Cookie',
+      `admin=${makeAdminToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ADMIN_TTL / 1000}` +
+      (isSecure(req) ? '; Secure' : ''));
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/admin/logout' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', 'admin=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/admin/session' && req.method === 'GET') {
+    return sendJSON(res, 200, { authed: isAdmin(req), configured: adminConfigured() });
+  }
+
+  // Every other /api/admin/ route requires a valid admin cookie.
+  if (pathname.startsWith('/api/admin/')) {
+    if (!isAdmin(req)) return sendJSON(res, 401, { error: 'Admin sign-in required.' });
+
+    if (pathname === '/api/admin/stats' && req.method === 'GET') {
+      const users = await store.allUsers();
+      const now = Date.now();
+      const dayAgo = now - 24 * 60 * 60 * 1000;
+      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+      let totalMaps = 0, totalNodes = 0, newToday = 0, newWeek = 0;
+      const list = users.map(u => {
+        const maps = u.maps || [];
+        const nodes = maps.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0);
+        totalMaps += maps.length;
+        totalNodes += nodes;
+        if (u.createdAt >= dayAgo) newToday++;
+        if (u.createdAt >= weekAgo) newWeek++;
+        return {
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName || '',
+          visibility: u.visibility,
+          createdAt: u.createdAt,
+          mapCount: maps.length,
+          nodeCount: nodes,
+          friendCount: (u.friends || []).length,
+          followerCount: (u.followers || []).length,
+        };
+      });
+      return sendJSON(res, 200, {
+        storage: store.kind,
+        aiEnabled: aiConfigured(),
+        totals: { users: users.length, maps: totalMaps, nodes: totalNodes, newToday, newWeek },
+        users: list,
+      });
+    }
+
+    const delMatch = pathname.match(/^\/api\/admin\/users\/([a-f0-9]{1,40})$/);
+    if (delMatch && req.method === 'DELETE') {
+      const target = await store.getUserById(delMatch[1]);
+      if (!target) return sendJSON(res, 404, { error: 'No such user.' });
+      await store.deleteUser(target.id);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    return sendJSON(res, 404, { error: 'Not found.' });
   }
 
   // --- everything below requires sign-in ---
@@ -1461,6 +1587,7 @@ const MIME = {
 
 function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
+  if (rel === '/admin') rel = '/admin.html'; // friendly URL for the admin console
   const filePath = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
   fs.readFile(filePath, (err, buf) => {
