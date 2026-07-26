@@ -763,7 +763,25 @@ const AI_SCHEMA = {
 
 function aiConfigured() { return !!process.env.ANTHROPIC_API_KEY; }
 
-async function generateMapFromPrompt(prompt) {
+// Compact view of an existing map handed to the model when expanding it: just
+// group and node ids + labels, so it can reference existing nodes in new edges
+// without us shipping positions/notes/etc. Capped to keep the prompt small.
+function existingContext(existing) {
+  const nodes = (existing && existing.nodes) || {};
+  const groups = [], bubbles = [];
+  for (const n of Object.values(nodes)) {
+    if (!n) continue;
+    if (n.kind === 'container') groups.push({ id: n.id, label: String(n.label || '') });
+    else bubbles.push({ id: n.id, label: String(n.label || ''), group: n.parentId || '' });
+  }
+  return { groups: groups.slice(0, 60), nodes: bubbles.slice(0, 200) };
+}
+
+// Generate a map from a prompt. When `existing` (a {nodes, edges}) is passed we
+// run in "add" mode: the model sees the current map and returns only additions,
+// which are merged in beside it (existing content untouched). Otherwise it's a
+// fresh map that replaces whatever was there.
+async function generateMapFromPrompt(prompt, existing) {
   if (!process.env.ANTHROPIC_API_KEY) {
     const e = new Error('AI map generation isn’t configured on this server. Set ANTHROPIC_API_KEY to enable it.');
     e.status = 503; throw e;
@@ -772,18 +790,31 @@ async function generateMapFromPrompt(prompt) {
   try { Anthropic = require('@anthropic-ai/sdk'); }
   catch { const e = new Error('AI map generation is unavailable (the Anthropic SDK is not installed).'); e.status = 503; throw e; }
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
-  const system =
-    'You design clear, well-organized mind maps. Given a topic, break it into a central set of ' +
-    'ideas with short labels, cluster closely related ones into a few named groups, and connect ' +
-    'ideas that relate with weighted edges (heavier = more strongly related). Aim for 12–30 nodes. ' +
-    'Keep labels to a few words; put any extra detail in the optional note. Use only ids you define.';
+  const adding = !!existing;
+  const base =
+    'You design clear, well-organized mind maps. Use short labels (a few words); put any ' +
+    'extra detail in the optional note. Connect related ideas with weighted edges (heavier = ' +
+    'more strongly related). For new items, use ids you define.';
+  const system = adding
+    ? base + ' You are EXPANDING an existing map based on the user’s request. Return ONLY new ' +
+      'groups, nodes, and edges to ADD — never repeat or restate nodes that already exist. New ' +
+      'edges may connect new nodes to each other, or connect a new node to an existing node by ' +
+      'using that existing node’s id shown in the map. Add a focused, relevant set (roughly ' +
+      '6–15 new nodes) unless the request clearly calls for more.'
+    : base + ' Given a topic, break it into a central set of ideas, cluster closely related ones ' +
+      'into a few named groups, and aim for 12–30 nodes.';
+  const userContent = adding
+    ? 'Here is the existing mind map (group and node ids are given so you can connect to them):\n' +
+      JSON.stringify(existingContext(existing)) +
+      '\n\nExpand it based on this request — return only the additions:\n\n' + prompt
+    : 'Create a mind map for this topic:\n\n' + prompt;
   const response = await client.messages.create({
     model: AI_MODEL,
     max_tokens: 8000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
     system,
-    messages: [{ role: 'user', content: 'Create a mind map for this topic:\n\n' + prompt }],
+    messages: [{ role: 'user', content: userContent }],
   });
   if (response.stop_reason === 'refusal') {
     const e = new Error('The AI declined to generate a map for that prompt.'); e.status = 422; throw e;
@@ -792,7 +823,7 @@ async function generateMapFromPrompt(prompt) {
   let data;
   try { data = JSON.parse(textBlock ? textBlock.text : '{}'); }
   catch { const e = new Error('The AI returned an unexpected response. Please try again.'); e.status = 502; throw e; }
-  return buildMapFromAI(data);
+  return adding ? mergeAIIntoMap(data, existing) : buildMapFromAI(data);
 }
 
 // Turn the model's {groups, nodes, edges} into a sanitized map (nodes+edges),
@@ -826,23 +857,7 @@ function buildMapFromAI(data) {
     nodes[id] = { id, kind: 'bubble', label: String(nd.label || 'Idea'), note: String(nd.note || ''), link: '', done: false, r: 62, hue, parentId, pos: [0, 0, 0] };
   });
 
-  // radial layout: top-level items on a big circle, children around their group
-  const top = Object.values(nodes).filter(n => !n.parentId);
-  const R = Math.max(320, top.length * 70);
-  top.forEach((n, i) => {
-    const a = (i / Math.max(1, top.length)) * Math.PI * 2;
-    n.pos = [Math.cos(a) * R, Math.sin(a) * R, 0];
-  });
-  for (const g of Object.values(nodes)) {
-    if (g.kind !== 'container') continue;
-    const kids = Object.values(nodes).filter(n => n.parentId === g.id);
-    const kr = Math.max(90, kids.length * 26);
-    kids.forEach((k, i) => {
-      const a = (i / Math.max(1, kids.length)) * Math.PI * 2;
-      k.pos = [g.pos[0] + Math.cos(a) * kr, g.pos[1] + Math.sin(a) * kr, 0];
-    });
-    g.r = Math.max(150, kr + 80);
-  }
+  layoutRadial(nodes, 0, 0);
 
   const edges = [];
   const seen = new Set();
@@ -856,6 +871,101 @@ function buildMapFromAI(data) {
     edges.push({ id: 'e' + edges.length, a, b, w: Math.max(1, Math.min(10, Math.round(Number(e.weight) || 3))) });
   }
   return sanitizeMap({ nodes, edges });
+}
+
+// Radial layout of a set of nodes around (cx, cy): top-level items on a big
+// circle, each group's children around it. Mutates node.pos (and group r).
+function layoutRadial(nodes, cx, cy) {
+  const top = Object.values(nodes).filter(n => !n.parentId);
+  const R = Math.max(320, top.length * 70);
+  top.forEach((n, i) => {
+    const a = (i / Math.max(1, top.length)) * Math.PI * 2;
+    n.pos = [cx + Math.cos(a) * R, cy + Math.sin(a) * R, 0];
+  });
+  for (const g of Object.values(nodes)) {
+    if (g.kind !== 'container') continue;
+    const kids = Object.values(nodes).filter(n => n.parentId === g.id);
+    const kr = Math.max(90, kids.length * 26);
+    kids.forEach((k, i) => {
+      const a = (i / Math.max(1, kids.length)) * Math.PI * 2;
+      k.pos = [g.pos[0] + Math.cos(a) * kr, g.pos[1] + Math.sin(a) * kr, 0];
+    });
+    g.r = Math.max(150, kr + 80);
+  }
+}
+
+// Merge the model's additions into an existing map. Existing nodes/edges are
+// kept exactly as-is; new groups/nodes get fresh non-colliding ids and are laid
+// out in empty space to the right of the current content. New edges may link
+// new nodes together or to existing nodes (referenced by their real ids).
+function mergeAIIntoMap(data, existing) {
+  const out = { nodes: {}, edges: [] };
+  for (const [id, n] of Object.entries((existing && existing.nodes) || {})) {
+    out.nodes[id] = JSON.parse(JSON.stringify(n));
+  }
+  for (const e of (existing && existing.edges) || []) out.edges.push(JSON.parse(JSON.stringify(e)));
+
+  const groupsIn = Array.isArray(data.groups) ? data.groups.slice(0, 8) : [];
+  const nodesIn = Array.isArray(data.nodes) ? data.nodes.slice(0, 40) : [];
+  const edgesIn = Array.isArray(data.edges) ? data.edges.slice(0, 80) : [];
+  const HUES_N = 6;
+  const idMap = new Map();       // AI temp id → fresh real id (new content only)
+  const groupNewId = new Map();
+  const added = {};              // just the new nodes, for isolated layout
+  const freshId = () => { let id; do { id = newId(); } while (out.nodes[id] || added[id]); return id; };
+
+  groupsIn.forEach((g, i) => {
+    if (!g || typeof g !== 'object') return;
+    const id = freshId();
+    const aiId = String(g.id != null ? g.id : 'g' + i);
+    idMap.set(aiId, id); groupNewId.set(aiId, id);
+    added[id] = { id, kind: 'container', label: String(g.label || 'Group'), note: '', link: '', done: false, r: 150, hue: i % HUES_N, parentId: null, pos: [0, 0, 0], mapRef: '' };
+  });
+  nodesIn.forEach((nd, i) => {
+    if (!nd || typeof nd !== 'object') return;
+    const id = freshId();
+    const aiId = String(nd.id != null ? nd.id : 'x' + i);
+    idMap.set(aiId, id);
+    const parentAi = nd.group ? String(nd.group) : '';
+    const parentId = parentAi && groupNewId.has(parentAi) ? groupNewId.get(parentAi) : null;
+    const hue = parentId ? added[parentId].hue : i % HUES_N;
+    added[id] = { id, kind: 'bubble', label: String(nd.label || 'Idea'), note: String(nd.note || ''), link: '', done: false, r: 62, hue, parentId, pos: [0, 0, 0], mapRef: '' };
+  });
+
+  // place the new cluster clear of the existing content (to its right)
+  const [ox, oy] = openSpotRightOf(out.nodes, added);
+  layoutRadial(added, ox, oy);
+  Object.assign(out.nodes, added);
+
+  const seen = new Set();
+  for (const e of out.edges) seen.add(e.a < e.b ? e.a + '|' + e.b : e.b + '|' + e.a);
+  const ref = r => (idMap.has(r) ? idMap.get(r) : (out.nodes[r] ? r : null)); // new temp id or existing real id
+  for (const e of edgesIn) {
+    if (!e || typeof e !== 'object') continue;
+    const a = ref(String(e.from)), b = ref(String(e.to));
+    if (!a || !b || a === b) continue;
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.edges.push({ id: newId(), a, b, w: Math.max(1, Math.min(10, Math.round(Number(e.weight) || 3))) });
+  }
+  return sanitizeMap(out);
+}
+
+// Pick an origin for the new cluster: centered vertically on the existing
+// content and offset to its right, sized so the cluster clears it.
+function openSpotRightOf(existingNodes, added) {
+  const ex = Object.values(existingNodes);
+  if (!ex.length) return [0, 0];
+  let maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of ex) {
+    maxX = Math.max(maxX, n.pos[0] + n.r);
+    minY = Math.min(minY, n.pos[1] - n.r);
+    maxY = Math.max(maxY, n.pos[1] + n.r);
+  }
+  const tops = Object.values(added).filter(n => !n.parentId).length;
+  const R = Math.max(320, tops * 70);
+  return [maxX + 220 + R, (minY + maxY) / 2];
 }
 
 /* ================================================================
@@ -1402,8 +1512,11 @@ async function handleApi(req, res, pathname) {
       const body = await readBody(req);
       const prompt = String(body.prompt || '').trim().slice(0, 600);
       if (prompt.length < 3) return sendJSON(res, 400, { error: 'Describe the map you want in a few words.' });
+      // 'add' expands the current map (existing content kept); anything else
+      // generates a fresh map that replaces it.
+      const existing = body.mode === 'add' ? { nodes: m.nodes, edges: m.edges } : null;
       try {
-        const result = await generateMapFromPrompt(prompt);
+        const result = await generateMapFromPrompt(prompt, existing);
         return sendJSON(res, 200, { map: { nodes: result.nodes, edges: result.edges } });
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
