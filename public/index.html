@@ -77,6 +77,7 @@
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
+      <button id="btnAddMapLink" class="tb" title="Insert one of your other maps as a linked bubble">🗺️ Map</button>
       <button id="btnOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
@@ -171,12 +172,35 @@
     <div class="edit-toolbar" id="profileToolbar">
       <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
       <button id="btnPLike" class="tb" title="Like this map">♡ Like</button>
+      <button id="btnPClone" class="tb" hidden title="Save your own editable copy of this map">⎘ Save a copy</button>
+      <button id="btnPComments" class="tb" title="Comments" hidden>💬 Comments</button>
       <button id="btnPOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <span class="tb-sep"></span>
       <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
       <button id="btnPZoomOut" class="tb icon" title="Zoom out">−</button>
       <button id="btnPZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
+
+    <!-- comment section: any signed-in viewer can read + post -->
+    <aside id="commentsPanel" class="chat-panel comments-panel" hidden>
+      <div class="chat-head">
+        <div class="chat-head-text">
+          <div class="chat-title">Comments</div>
+          <div id="commentsCount" class="chat-presence muted"></div>
+        </div>
+        <div class="chat-head-btns">
+          <button id="btnCommentsClose" class="tb icon" title="Close" aria-label="Close comments">✕</button>
+        </div>
+      </div>
+      <div class="chat-body">
+        <div id="commentsLog" class="chat-log"></div>
+        <form id="commentsForm" class="chat-compose">
+          <input id="commentsInput" maxlength="1000" placeholder="Add a comment…" autocomplete="off">
+          <button type="submit" class="tb primary-tb">Post</button>
+        </form>
+        <a id="commentsSignin" class="comments-signin" href="#/signin" hidden>Sign in to join the conversation →</a>
+      </div>
+    </aside>
   </section>
 
   <!-- outline: the active map as a collapsible text tree (shared by the editor
@@ -434,13 +458,14 @@
 </div>
 
 <div id="sheetAI" class="sheet" hidden>
-  <div class="sheet-title">✨ Generate a mind map</div>
-  <div class="muted" style="margin-bottom:8px">Describe a topic and AI will build a starting map. This replaces the current map's contents.</div>
+  <div class="sheet-title">✨ Mind map with AI</div>
+  <div class="muted" style="margin-bottom:8px">Describe what you want. <b>Add to map</b> keeps everything already on this map and expands it with new, connected ideas. <b>Begin new map</b> replaces the current map's contents.</div>
   <textarea id="aiPrompt" maxlength="600" rows="3" placeholder="e.g. A launch plan for a coffee subscription startup"></textarea>
   <div class="form-error" id="aiError"></div>
   <div class="sheet-row">
     <button id="aiCancel" class="tb">Cancel</button>
-    <button id="aiGenerate" class="tb primary-tb">Generate</button>
+    <button id="aiReplace" class="tb">✨ Begin new map</button>
+    <button id="aiAdd" class="tb primary-tb">➕ Add to map</button>
   </div>
 </div>
 
@@ -467,6 +492,7 @@
   </div>
   <div id="noteViewerBody" class="note-viewer-body"></div>
   <a id="noteViewerLink" class="note-viewer-link" target="_blank" rel="noopener noreferrer" hidden></a>
+  <button id="noteViewerMapLink" class="tb primary-tb note-viewer-maplink" hidden>🗺️ Open linked map →</button>
 </div>
 
 <div id="sheetGroup" class="sheet" hidden>
@@ -503,6 +529,15 @@
   <div class="sheet-row">
     <button id="newMapCancel" class="tb">Cancel</button>
     <button id="newMapCreate" class="tb primary-tb">Create map</button>
+  </div>
+</div>
+
+<div id="sheetMapLink" class="sheet" hidden>
+  <div class="sheet-title">Insert a map as a bubble</div>
+  <div class="muted" style="margin-bottom:8px">Pick one of your maps, or a map from someone you follow. A bubble linking to it is added here; tapping that bubble in the view opens the linked map.</div>
+  <div id="mapLinkList" class="group-options"></div>
+  <div class="sheet-row">
+    <button id="mapLinkCancel" class="tb">Cancel</button>
   </div>
 </div>
 

@@ -43,22 +43,16 @@ const _measureCtx = document.createElement('canvas').getContext('2d');
 
 const _bubbleFont = '-apple-system, "Segoe UI", Roboto, system-ui, sans-serif';
 
-// Word-wrap `label` to fit width `boxW` at font size `fs`, hard-breaking any word
-// too long to fit on its own line. Returns the array of lines.
+// Word-wrap `label` to fit width `boxW` at font size `fs`. Words are only ever
+// broken *between* each other, never mid-word — a single word too wide for the
+// box stays on its own (over-wide) line, and fitBubbleFont shrinks the font
+// until even that word fits. Returns the array of lines.
 function wrapLabelLines(label, boxW, fs) {
   _measureCtx.font = '700 ' + fs + 'px ' + _bubbleFont;
   const w = s => _measureCtx.measureText(s).width;
   const lines = [];
   let line = '';
-  for (let word of label.split(/\s+/)) {
-    // hard-break an over-long word by characters
-    while (w(word) > boxW && word.length > 1) {
-      let i = 1;
-      while (i < word.length && w(word.slice(0, i + 1)) <= boxW) i++;
-      if (line) { lines.push(line); line = ''; }
-      lines.push(word.slice(0, i));
-      word = word.slice(i);
-    }
+  for (const word of label.split(/\s+/)) {
     if (!word) continue;
     const trial = line ? line + ' ' + word : word;
     if (w(trial) <= boxW) line = trial;
@@ -78,14 +72,24 @@ function fitBubbleFont(text, r) {
   const label = (text || 'Untitled').trim() || 'Untitled';
   const box = bubbleTextBox(r);
   const MAX = Math.min(20, r * 0.55);    // cap so a lone word isn't oversized
-  const MIN = 6;
+  // low floor: since words are never broken, a long single word has to shrink
+  // a lot to fit on one line — we let it, rather than clip or break the word
+  const MIN = 3;
   const fits = fs => {
     const lines = wrapLabelLines(label, box, fs);
-    return lines.length * fs * 1.2 <= box;
+    // vertical: every line, stacked, fits within the box height
+    if (lines.length * fs * 1.2 > box) return false;
+    // horizontal: no line overflows — this is what forces the font down until
+    // an unbreakable long word fits on its single line
+    _measureCtx.font = '700 ' + fs + 'px ' + _bubbleFont;
+    for (const line of lines) {
+      if (_measureCtx.measureText(line).width > box) return false;
+    }
+    return true;
   };
   let lo = MIN, hi = MAX, best = MIN;
   if (fits(hi)) return hi;
-  for (let i = 0; i < 12 && hi - lo > 0.5; i++) {
+  for (let i = 0; i < 16 && hi - lo > 0.25; i++) {
     const mid = (lo + hi) / 2;
     if (fits(mid)) { best = mid; lo = mid; } else { hi = mid; }
   }
@@ -277,7 +281,7 @@ function createMapView(host, opts = {}) {
     for (const n of Object.values(map.nodes)) {
       const col = hueOf(n);
       const el = document.createElement('div');
-      el.className = 'bubble' + (n.kind === 'container' ? ' container' : '');
+      el.className = 'bubble' + (n.kind === 'container' ? ' container' : '') + (n.mapRef ? ' map-link' : '');
       el.style.setProperty('--main', col.main);
       el.style.setProperty('--lite', col.lite);
       el.style.setProperty('--dark', col.dark);
@@ -292,6 +296,7 @@ function createMapView(host, opts = {}) {
       el.appendChild(label);
       // small badges mark bubbles that carry a note and/or a link
       const badges = [];
+      if (n.mapRef) badges.push(['🗺️', 'Links to a map']);
       if (n.note && n.note.trim()) badges.push(['📝', 'Has a note']);
       if (n.link) badges.push(['🔗', 'Has a link']);
       if (badges.length) {
@@ -751,7 +756,7 @@ function createMapView(host, opts = {}) {
     const n = {
       id, label: '', note: '', link: '', done: false, pos: [0, 0, 0], r: 62,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
-      parentId: null, kind: 'bubble',
+      parentId: null, kind: 'bubble', mapRef: '',
     };
 
     if (sel && sel.kind === 'container') {
@@ -776,6 +781,20 @@ function createMapView(host, opts = {}) {
     selectedId = id;
     changed();
     if (opts.onSelect) opts.onSelect(id);
+    return id;
+  }
+
+  // Insert a bubble that links to another map. Positioned like addBubble, but
+  // carries a mapRef and a label seeded from the target map's name. Viewers who
+  // tap it are taken to that map (see the read-only viewer's onCenter).
+  function addMapLinkBubble(mapId, label) {
+    const id = addBubble();
+    const n = map.nodes[id];
+    n.mapRef = String(mapId || '');
+    n.label = String(label || 'Map').slice(0, 80);
+    changed();
+    buildDOM(); // reflect the new label/badge immediately
+    updateSelectionClasses();
     return id;
   }
 
@@ -875,7 +894,7 @@ function createMapView(host, opts = {}) {
         id, label: n.label || '', note: n.note || '', link: n.link || '', done: !!n.done,
         pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0],
         r: n.r || 62, hue: n.hue || 0, parentId: n.parentId || null,
-        kind: n.kind === 'container' ? 'container' : 'bubble',
+        kind: n.kind === 'container' ? 'container' : 'bubble', mapRef: n.mapRef || '',
       };
     }
     map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1141,6 +1160,7 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1191,6 +1211,7 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1212,7 +1233,7 @@ function createMapView(host, opts = {}) {
     containers,
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
-    addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
+    addBubble, addMapLinkBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setLink, setDone, loadGenerated,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
     // colors: recolor an existing node / pick the color for future bubbles
@@ -1333,6 +1354,7 @@ function show(name) {
   }
   if (myMap) { name === 'map' ? myMap.start() : myMap.stop(); }
   if (profileMap) { name === 'profile' ? profileMap.start() : profileMap.stop(); }
+  if (name !== 'profile') closeComments(); // the comment panel belongs to the profile viewer
 }
 
 function route() {
@@ -1393,7 +1415,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1808,6 +1830,7 @@ function makeOutlineRow(n, depth, childrenOf) {
   const meta = document.createElement('span');
   meta.className = 'outline-meta';
   const bits = [];
+  if (n.mapRef) bits.push('🗺️');
   if (n.link) bits.push('🔗');
   if (n.done) bits.push('✓');
   meta.textContent = bits.join(' ');
@@ -2175,30 +2198,51 @@ function openAISheet() {
   const ta = $('#aiPrompt');
   requestAnimationFrame(() => ta.focus());
 }
-async function runAIGenerate() {
+// mode: 'add' expands the current map (nothing removed); 'replace' overwrites it.
+async function runAIGenerate(mode) {
   const prompt = $('#aiPrompt').value.trim();
   const err = $('#aiError');
   if (prompt.length < 3) { err.textContent = 'Describe the map you want in a few words.'; return; }
   if (!currentMapId) return;
-  const btn = $('#aiGenerate');
-  btn.disabled = true; btn.textContent = 'Generating…'; err.textContent = '';
+  // guard the destructive path: replacing a map that already has content
+  if (mode === 'replace') {
+    const hasContent = Object.keys(myMap.getMap().nodes || {}).length > 0;
+    if (hasContent && !confirm('Begin a new map? This replaces everything currently on this map.')) return;
+  }
+  const addBtn = $('#aiAdd'), repBtn = $('#aiReplace');
+  const active = mode === 'add' ? addBtn : repBtn;
+  const label = active.textContent;
+  addBtn.disabled = repBtn.disabled = true;
+  active.textContent = mode === 'add' ? 'Adding…' : 'Generating…';
+  err.textContent = '';
   try {
-    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt });
-    myMap.loadGenerated(data.map); // replaces contents, fits the view, and saves
+    if (mode === 'add') {
+      // make sure the server has our latest edits before it reads the map to expand
+      clearTimeout(saveTimer);
+      mapDirty = false;
+      await api('/api/maps/' + currentMapId, 'PUT', { map: myMap.getMap() });
+    }
+    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt, mode });
+    myMap.loadGenerated(data.map); // loads the (merged, for add) map, fits the view, and saves
     refreshToolbar();
     refreshOutlineIfOpen();
     closeSheets();
-    setHint('Generated a map ✨ — edit away, it saves automatically', false);
+    setHint(mode === 'add'
+      ? 'Added to your map ✨ — edit away, it saves automatically'
+      : 'Generated a map ✨ — edit away, it saves automatically', false);
   } catch (e) {
     err.textContent = e.message || 'Generation failed.';
   }
-  btn.disabled = false; btn.textContent = 'Generate';
+  addBtn.disabled = repBtn.disabled = false;
+  active.textContent = label;
 }
 $('#aiCancel').addEventListener('click', () => closeSheets());
-$('#aiGenerate').addEventListener('click', runAIGenerate);
+$('#aiAdd').addEventListener('click', () => runAIGenerate('add'));
+$('#aiReplace').addEventListener('click', () => runAIGenerate('replace'));
 $('#aiPrompt').addEventListener('keydown', e => {
   e.stopPropagation();
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate();
+  // Cmd/Ctrl+Enter runs the safe, non-destructive "add" action
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate('add');
   if (e.key === 'Escape') closeSheets();
 });
 
@@ -2253,6 +2297,7 @@ function initEditor() {
     refreshToolbar();
     openRename(id);
   });
+  $('#btnAddMapLink').addEventListener('click', openMapLinkSheet);
   $('#btnOutline').addEventListener('click', () => toggleOutline());
   $('#btnAI').addEventListener('click', openAISheet);
   $('#btnConnect').addEventListener('click', () => {
@@ -2420,6 +2465,59 @@ $('#newMapName').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('#newMapCreate').click();
   if (e.key === 'Escape') closeSheets();
 });
+
+/* ---------- insert-a-map-as-bubble sheet ---------- */
+// Lists my other maps and maps from people I follow; picking one drops a bubble
+// that links to it into the map I'm editing. Tapping that bubble in the read-only
+// view opens the linked map.
+async function openMapLinkSheet() {
+  const list = $('#mapLinkList');
+  list.innerHTML = '<div class="muted">Loading…</div>';
+  openSheet('#sheetMapLink');
+  // maps from people I follow (best-effort — the picker still works without them)
+  let followed = [];
+  try { const d = await api('/api/following/maps'); followed = d.maps || []; } catch { /* ignore */ }
+
+  const pick = (mapId, name) => {
+    myMap.addMapLinkBubble(mapId, name || 'Map'); // its changed() triggers the save
+    closeSheets();
+    refreshToolbar();
+  };
+  const addRow = (label, sub) => {
+    const b = document.createElement('button');
+    b.className = 'tb';
+    b.innerHTML = escapeHtml(label) + (sub ? ' <span class="muted">' + escapeHtml(sub) + '</span>' : '');
+    list.appendChild(b);
+    return b;
+  };
+  const section = title => {
+    const h = document.createElement('div');
+    h.className = 'section-title';
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
+  list.innerHTML = '';
+  const mine = mapsMine.filter(m => m.id !== currentMapId);
+  if (mine.length) {
+    section('Your maps');
+    for (const m of mine) addRow(m.name || 'Untitled map').addEventListener('click', () => pick(m.id, m.name || 'Map'));
+  }
+  if (followed.length) {
+    section('Maps you follow');
+    for (const m of followed) {
+      addRow(m.name || 'Untitled map', '@' + m.owner.username)
+        .addEventListener('click', () => pick(m.id, m.name || 'Map'));
+    }
+  }
+  if (!mine.length && !followed.length) {
+    const p = document.createElement('div');
+    p.className = 'muted';
+    p.textContent = 'No other maps yet — create another map, or follow people to link to their maps.';
+    list.appendChild(p);
+  }
+}
+$('#mapLinkCancel').addEventListener('click', () => closeSheets());
 
 /* ---------- map settings sheet (rename, visibility, editors, order, delete) ---------- */
 let msEditors = []; // [{ username, name }] for the map being configured
@@ -3129,6 +3227,7 @@ function timeAgo(ts) {
 }
 
 let pendingProfileMapId = null; // a specific map a feed card asked to open next
+let pendingOpenComments = false; // a feed card asked to open that map's comments
 
 function feedCard(item) {
   const owner = item.owner || {};
@@ -3182,11 +3281,25 @@ function feedCard(item) {
     } catch (err) { alert(err.message); }
     like.disabled = false;
   });
+  // comment count, shown right beside the likes; tapping opens the map with its
+  // comment panel already open (signed-in only — comments are a signed-in feature)
+  const comments = document.createElement('button');
+  comments.className = 'comment-count';
+  comments.title = 'Comments';
+  comments.innerHTML = '💬 <span>' + (item.commentCount || 0) + '</span>';
+  comments.addEventListener('click', e => {
+    e.stopPropagation();
+    pendingProfileMapId = item.id;
+    pendingOpenComments = true;
+    location.hash = '#/u/' + owner.username;
+  });
   const open = document.createElement('button');
   open.className = 'tb';
   open.textContent = 'Open map →';
   open.addEventListener('click', openMap);
-  foot.appendChild(like); foot.appendChild(open);
+  foot.appendChild(like);
+  if (me) foot.appendChild(comments); // anonymous visitors can't see/post comments
+  foot.appendChild(open);
 
   card.appendChild(head); card.appendChild(body); card.appendChild(foot);
   return card;
@@ -3306,6 +3419,7 @@ let viewingSelf = false;
 async function openProfile(username) {
   viewingSelf = !!(me && username === me.username);
   show('profile');
+  closeComments(); // start each profile with the comment panel reset
   try {
     const data = await api('/api/users/' + username);
     currentProfile = data;
@@ -3329,7 +3443,11 @@ async function openProfile(username) {
       pendingProfileMapId = null;
       await openProfileMap(wanted);
       profileMap.start();
+      // a feed card's comment count asks to open the comment panel straight away
+      if (pendingOpenComments) openComments();
+      pendingOpenComments = false;
     } else {
+      pendingOpenComments = false;
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
       $('#profileHint').hidden = true;
@@ -3386,19 +3504,26 @@ async function openProfileMap(id) {
   $('#btnPEdit').hidden = !data.canEdit;
   profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };
   renderProfileLike(!!data.isOwner);
+  // any signed-in user can save their own editable copy of a map they can view
+  $('#btnPClone').hidden = !me;
+  updateCommentsButton(data.commentCount || 0);
+  if (commentsOpen) loadComments(); // switching map tabs reloads the open panel
   refreshOutlineIfOpen(); // keep an open outline in sync when switching map tabs
 }
 
 function renderProfileLike(isOwner) {
   const btn = $('#btnPLike');
-  // you can't like your own map, and anonymous visitors can't like at all
-  if (isOwner || !me) { btn.hidden = true; return; }
+  if (isOwner) { btn.hidden = true; return; } // you don't like your own map
   btn.hidden = false;
   btn.classList.toggle('liked', profileLike.liked);
   btn.textContent = (profileLike.liked ? '♥ ' : '♡ ') + profileLike.count;
+  // guests see the like count but can't toggle it
+  btn.classList.toggle('readonly', !me);
+  btn.title = me ? 'Like this map' : 'Sign in to like this map';
 }
 $('#btnPLike').addEventListener('click', async () => {
   if (!profileMapId) return;
+  if (!me) { location.hash = '#/signin'; return; } // guests: prompt sign-in
   $('#btnPLike').disabled = true;
   try {
     const r = await api('/api/maps/' + profileMapId + '/like', 'POST');
@@ -3406,6 +3531,157 @@ $('#btnPLike').addEventListener('click', async () => {
     renderProfileLike(false);
   } catch (err) { alert(err.message); }
   $('#btnPLike').disabled = false;
+});
+
+// Save a copy: clone the previewed map into my own maps, then open it in the
+// editor. Works for any map I can view — my own or someone else's.
+$('#btnPClone').addEventListener('click', async () => {
+  if (!profileMapId || !me) return;
+  const btn = $('#btnPClone');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Saving…';
+  try {
+    const r = await api('/api/maps/' + profileMapId + '/clone', 'POST');
+    await loadMaps(r.map.id); // pull the new map into my list and select it
+    location.hash = '#/map';
+    await openMyMap(r.map.id);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+});
+
+/* ---------- comments (read-only map viewer) ----------
+   A public comment section on the previewed map. Any signed-in viewer can read
+   and post — including the owner viewing their own map. Authors can delete their
+   own comments; the owner can moderate any. Loaded on demand when the panel is
+   opened, and after switching map tabs while it's open. */
+let commentItems = [];
+let commentsCanModerate = false;
+let commentsOpen = false;
+let commentsReqMapId = null; // guards against out-of-order responses when switching maps
+
+function updateCommentsButton(count) {
+  const btn = $('#btnPComments');
+  // everyone (guests included) can read comments; only signed-in users can post
+  btn.hidden = false;
+  btn.textContent = '💬 Comments' + (count ? ' ' + count : '');
+}
+
+// Show the compose box only to signed-in users; guests get a sign-in prompt.
+function applyCommentCompose() {
+  const canPost = !!me;
+  $('#commentsForm').hidden = !canPost;
+  $('#commentsSignin').hidden = canPost;
+}
+
+function commentEl(c) {
+  const who = c.actor ? (c.actor.name || '@' + c.actor.username) : 'Someone';
+  const wrap = document.createElement('div');
+  wrap.className = 'comment-item' + (c.mine ? ' mine' : '');
+  wrap.dataset.id = c.id;
+  const head = document.createElement('div');
+  head.className = 'comment-head';
+  head.innerHTML = `<span class="who">${escapeHtml(c.mine ? 'You' : who)}</span>` +
+    `<time>${fmtTime(c.ts)}</time>`;
+  if (c.mine || commentsCanModerate) {
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.title = 'Delete comment';
+    del.setAttribute('aria-label', 'Delete comment');
+    del.textContent = '✕';
+    del.addEventListener('click', () => deleteComment(c.id));
+    head.appendChild(del);
+  }
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = c.text;
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function renderComments() {
+  const log = $('#commentsLog');
+  log.innerHTML = '';
+  $('#commentsCount').textContent = commentItems.length
+    ? commentItems.length + (commentItems.length === 1 ? ' comment' : ' comments') : '';
+  if (!commentItems.length) {
+    const d = document.createElement('div');
+    d.className = 'chat-empty';
+    d.textContent = 'No comments yet. Be the first to say something.';
+    log.appendChild(d);
+    return;
+  }
+  for (const c of commentItems) log.appendChild(commentEl(c));
+  log.scrollTop = log.scrollHeight;
+}
+
+async function loadComments() {
+  if (!profileMapId) return;
+  commentsReqMapId = profileMapId;
+  $('#commentsLog').innerHTML = '<div class="chat-empty">Loading…</div>';
+  try {
+    const data = await api('/api/maps/' + profileMapId + '/comments');
+    if (commentsReqMapId !== profileMapId) return; // a newer map was opened meanwhile
+    commentItems = data.comments || [];
+    commentsCanModerate = !!data.canModerate;
+    renderComments();
+    updateCommentsButton(commentItems.length);
+  } catch (err) {
+    $('#commentsLog').innerHTML = '<div class="chat-empty">' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+function openComments() {
+  if (!profileMapId) return; // guests can read, signed-in users can also post
+  commentsOpen = true;
+  $('#commentsPanel').hidden = false;
+  $('#btnPComments').classList.add('active');
+  applyCommentCompose();
+  loadComments();
+  if (me) setTimeout(() => $('#commentsInput').focus(), 50);
+}
+
+function closeComments() {
+  commentsOpen = false;
+  $('#commentsPanel').hidden = true;
+  $('#btnPComments').classList.remove('active');
+}
+
+async function deleteComment(id) {
+  if (!profileMapId) return;
+  try {
+    await api('/api/maps/' + profileMapId + '/comments/' + id, 'DELETE');
+    commentItems = commentItems.filter(c => c.id !== id);
+    renderComments();
+    updateCommentsButton(commentItems.length);
+  } catch (err) { alert(err.message); }
+}
+
+$('#btnPComments').addEventListener('click', () => { commentsOpen ? closeComments() : openComments(); });
+$('#btnCommentsClose').addEventListener('click', closeComments);
+$('#commentsForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!me) { location.hash = '#/signin'; return; }
+  const input = $('#commentsInput');
+  const text = input.value.trim();
+  if (!text || !profileMapId) return;
+  input.disabled = true;
+  try {
+    const r = await api('/api/maps/' + profileMapId + '/comments', 'POST', { text });
+    input.value = '';
+    if (r.entry && !commentItems.some(c => c.id === r.entry.id)) {
+      commentItems.push(r.entry);
+      renderComments();
+      updateCommentsButton(commentItems.length);
+    }
+  } catch (err) { alert(err.message); }
+  input.disabled = false;
+  input.focus();
 });
 
 // jump from the read-only profile preview into the full editor
@@ -3499,9 +3775,40 @@ function showNoteViewer(n) {
   } else {
     link.hidden = true;
   }
+  // a map bubble carries a mapRef: offer a button that opens the linked map
+  const mapBtn = $('#noteViewerMapLink');
+  if (n.mapRef) {
+    mapBtn.hidden = false;
+    mapBtn.onclick = () => { hideNoteViewer(); openLinkedMap(n.mapRef); };
+  } else {
+    mapBtn.hidden = true;
+    mapBtn.onclick = null;
+  }
   $('#noteViewer').hidden = false;
 }
 function hideNoteViewer() { $('#noteViewer').hidden = true; }
+
+// Open a map referenced by a "map bubble". The reference is just a map id, so
+// resolve its owner (and confirm we can view it) via the map endpoint, then land
+// in the read-only viewer on that map. Handles deleted / no-longer-visible maps.
+async function openLinkedMap(mapId) {
+  if (!mapId) return;
+  try {
+    const data = await api('/api/maps/' + mapId);
+    const targetHash = '#/u/' + data.owner.username;
+    // If that owner's profile is already open, the hash won't change (so no
+    // hashchange/route fires) — switch the previewed map directly. Otherwise
+    // navigate and let openProfile pick up the requested map.
+    if (onProfileView() && location.hash === targetHash) {
+      await openProfileMap(mapId);
+    } else {
+      pendingProfileMapId = mapId;
+      location.hash = targetHash;
+    }
+  } catch (err) {
+    alert(err.status === 404 ? "That map isn't available (it may be private or deleted)." : err.message);
+  }
+}
 
 function initProfileViewer() {
   // read-only; a tap on a bubble focuses it (and pops its note if it has one);
@@ -3514,8 +3821,8 @@ function initProfileViewer() {
       if (id === null) { hideNoteViewer(); setProfileHint('Drag to pan · tap a bubble to focus it'); return; }
       const n = profileMap.getNode(id);
       if (!n) return;
-      // tapping a bubble that carries a note or link pops it open to read
-      if ((n.note && n.note.trim()) || n.link) showNoteViewer(n);
+      // tapping a bubble that carries a note, link, or map reference pops it open
+      if ((n.note && n.note.trim()) || n.link || n.mapRef) showNoteViewer(n);
       else { hideNoteViewer(); setProfileHint(`"${n.label || 'Untitled'}" · drag to pan`); }
     },
     isSheetOpen: () => !$('#pickMenu').hidden,

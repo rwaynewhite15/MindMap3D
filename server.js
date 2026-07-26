@@ -22,6 +22,10 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_BODY = 2 * 1024 * 1024; // 2 MB
 const DATABASE_URL = process.env.DATABASE_URL;
+// Admin console: a single password held in the ADMIN_PASSWORD env var (set in
+// the Render dashboard). Unset → the admin page and its API are disabled.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
 const newId = () => crypto.randomBytes(12).toString('hex');
 
@@ -117,6 +121,10 @@ function pgStore() {
       const { rows } = await pool.query('SELECT * FROM users WHERE id = ANY($1)', [ids]);
       const byId = new Map(rows.map(r => [r.id, rowToUser(r)]));
       return ids.map(id => byId.get(id)).filter(Boolean);
+    },
+    async allUsers() {
+      const { rows } = await pool.query('SELECT * FROM users ORDER BY created_at DESC LIMIT 1000');
+      return rows.map(rowToUser);
     },
     async getUserByUsername(username) {
       const { rows } = await pool.query('SELECT * FROM users WHERE username = $1',
@@ -262,6 +270,9 @@ function fileStore() {
     async init() {},
     async getUserById(id) { return db.users[id] || null; },
     async getUsersByIds(ids) { return (ids || []).map(id => db.users[id]).filter(Boolean); },
+    async allUsers() {
+      return Object.values(db.users).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1000);
+    },
     async getUserByUsername(username) {
       const uname = String(username || '').toLowerCase();
       return Object.values(db.users).find(u => u.username === uname) || null;
@@ -344,12 +355,14 @@ function makeMap(name, visibility, seedLabel) {
     nodes: { n1: { id: 'n1', label: seedLabel || 'Me', pos: [0, 0, 0], r: 62, hue: 0, parentId: null, kind: 'bubble' } },
     edges: [],
     chat: [],
+    comments: [],
     createdAt: now,
     updatedAt: now,
   };
 }
 
 const MAX_CHAT = 400; // per map; oldest entries roll off
+const MAX_COMMENTS = 500; // per map; oldest entries roll off
 
 // Legacy users carry a single `map`; wrap it into the multi-map shape in place.
 function normalizeUser(u) {
@@ -372,6 +385,7 @@ function normalizeUser(u) {
     if (!m.nodes || typeof m.nodes !== 'object') m.nodes = {};
     if (!Array.isArray(m.edges)) m.edges = [];
     if (!Array.isArray(m.chat)) m.chat = [];
+    if (!Array.isArray(m.comments)) m.comments = []; // viewer comments (any signed-in viewer)
     if (!Array.isArray(m.likes)) m.likes = []; // user ids who liked this map
   }
   delete u.map;
@@ -412,6 +426,19 @@ function actorRef(u) {
   return { username: u.username, name: selfName(u) };
 }
 
+// A comment as sent to a client. The stored record keeps an authorId so we can
+// authorize deletes server-side; we never expose that id — instead we tell each
+// viewer whether the comment is theirs (`mine`), which is all the UI needs.
+function commentOut(c, viewer) {
+  return {
+    id: c.id,
+    actor: c.actor,
+    text: c.text,
+    ts: c.ts,
+    mine: !!viewer && c.authorId === viewer.id,
+  };
+}
+
 function canViewMapObj(m, owner, viewer) {
   const rel = relationTo(viewer, owner);
   if (rel === 'self') return true;
@@ -436,6 +463,7 @@ function mapMeta(m, extra) {
     nodeCount: Object.keys(m.nodes || {}).length,
     updatedAt: m.updatedAt || 0,
     likeCount: (m.likes || []).length,
+    commentCount: (m.comments || []).length,
   }, extra || {});
 }
 
@@ -621,6 +649,14 @@ function cleanLink(v) {
   return /^https?:\/\//i.test(s) ? s : '';
 }
 
+// A map-bubble reference: the id of another map. Only shape is validated here
+// (same charset the map routes accept); whether it exists / is viewable is
+// resolved at navigation time, not stored.
+function cleanMapRef(v) {
+  const s = String(v || '').trim();
+  return /^[A-Za-z0-9]{1,40}$/.test(s) ? s : '';
+}
+
 function sanitizeMap(input) {
   if (!input || typeof input !== 'object') return null;
   const out = { nodes: {}, edges: [] };
@@ -642,6 +678,9 @@ function sanitizeMap(input) {
       hue: Math.max(0, Math.min(11, Math.floor(num(n.hue)))),
       parentId: n.parentId ? String(n.parentId).slice(0, 24) : null,
       kind: n.kind === 'container' ? 'container' : 'bubble',
+      // optional: this bubble links to another map (a "map bubble"). Stored as a
+      // map id; empty/invalid → no link. Navigation resolves + access-checks it.
+      mapRef: cleanMapRef(n.mapRef),
     };
   }
   // drop parent references to nodes that don't exist / aren't containers
@@ -724,7 +763,25 @@ const AI_SCHEMA = {
 
 function aiConfigured() { return !!process.env.ANTHROPIC_API_KEY; }
 
-async function generateMapFromPrompt(prompt) {
+// Compact view of an existing map handed to the model when expanding it: just
+// group and node ids + labels, so it can reference existing nodes in new edges
+// without us shipping positions/notes/etc. Capped to keep the prompt small.
+function existingContext(existing) {
+  const nodes = (existing && existing.nodes) || {};
+  const groups = [], bubbles = [];
+  for (const n of Object.values(nodes)) {
+    if (!n) continue;
+    if (n.kind === 'container') groups.push({ id: n.id, label: String(n.label || '') });
+    else bubbles.push({ id: n.id, label: String(n.label || ''), group: n.parentId || '' });
+  }
+  return { groups: groups.slice(0, 60), nodes: bubbles.slice(0, 200) };
+}
+
+// Generate a map from a prompt. When `existing` (a {nodes, edges}) is passed we
+// run in "add" mode: the model sees the current map and returns only additions,
+// which are merged in beside it (existing content untouched). Otherwise it's a
+// fresh map that replaces whatever was there.
+async function generateMapFromPrompt(prompt, existing) {
   if (!process.env.ANTHROPIC_API_KEY) {
     const e = new Error('AI map generation isn’t configured on this server. Set ANTHROPIC_API_KEY to enable it.');
     e.status = 503; throw e;
@@ -733,18 +790,31 @@ async function generateMapFromPrompt(prompt) {
   try { Anthropic = require('@anthropic-ai/sdk'); }
   catch { const e = new Error('AI map generation is unavailable (the Anthropic SDK is not installed).'); e.status = 503; throw e; }
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
-  const system =
-    'You design clear, well-organized mind maps. Given a topic, break it into a central set of ' +
-    'ideas with short labels, cluster closely related ones into a few named groups, and connect ' +
-    'ideas that relate with weighted edges (heavier = more strongly related). Aim for 12–30 nodes. ' +
-    'Keep labels to a few words; put any extra detail in the optional note. Use only ids you define.';
+  const adding = !!existing;
+  const base =
+    'You design clear, well-organized mind maps. Use short labels (a few words); put any ' +
+    'extra detail in the optional note. Connect related ideas with weighted edges (heavier = ' +
+    'more strongly related). For new items, use ids you define.';
+  const system = adding
+    ? base + ' You are EXPANDING an existing map based on the user’s request. Return ONLY new ' +
+      'groups, nodes, and edges to ADD — never repeat or restate nodes that already exist. New ' +
+      'edges may connect new nodes to each other, or connect a new node to an existing node by ' +
+      'using that existing node’s id shown in the map. Add a focused, relevant set (roughly ' +
+      '6–15 new nodes) unless the request clearly calls for more.'
+    : base + ' Given a topic, break it into a central set of ideas, cluster closely related ones ' +
+      'into a few named groups, and aim for 12–30 nodes.';
+  const userContent = adding
+    ? 'Here is the existing mind map (group and node ids are given so you can connect to them):\n' +
+      JSON.stringify(existingContext(existing)) +
+      '\n\nExpand it based on this request — return only the additions:\n\n' + prompt
+    : 'Create a mind map for this topic:\n\n' + prompt;
   const response = await client.messages.create({
     model: AI_MODEL,
     max_tokens: 8000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
     system,
-    messages: [{ role: 'user', content: 'Create a mind map for this topic:\n\n' + prompt }],
+    messages: [{ role: 'user', content: userContent }],
   });
   if (response.stop_reason === 'refusal') {
     const e = new Error('The AI declined to generate a map for that prompt.'); e.status = 422; throw e;
@@ -753,7 +823,7 @@ async function generateMapFromPrompt(prompt) {
   let data;
   try { data = JSON.parse(textBlock ? textBlock.text : '{}'); }
   catch { const e = new Error('The AI returned an unexpected response. Please try again.'); e.status = 502; throw e; }
-  return buildMapFromAI(data);
+  return adding ? mergeAIIntoMap(data, existing) : buildMapFromAI(data);
 }
 
 // Turn the model's {groups, nodes, edges} into a sanitized map (nodes+edges),
@@ -787,23 +857,7 @@ function buildMapFromAI(data) {
     nodes[id] = { id, kind: 'bubble', label: String(nd.label || 'Idea'), note: String(nd.note || ''), link: '', done: false, r: 62, hue, parentId, pos: [0, 0, 0] };
   });
 
-  // radial layout: top-level items on a big circle, children around their group
-  const top = Object.values(nodes).filter(n => !n.parentId);
-  const R = Math.max(320, top.length * 70);
-  top.forEach((n, i) => {
-    const a = (i / Math.max(1, top.length)) * Math.PI * 2;
-    n.pos = [Math.cos(a) * R, Math.sin(a) * R, 0];
-  });
-  for (const g of Object.values(nodes)) {
-    if (g.kind !== 'container') continue;
-    const kids = Object.values(nodes).filter(n => n.parentId === g.id);
-    const kr = Math.max(90, kids.length * 26);
-    kids.forEach((k, i) => {
-      const a = (i / Math.max(1, kids.length)) * Math.PI * 2;
-      k.pos = [g.pos[0] + Math.cos(a) * kr, g.pos[1] + Math.sin(a) * kr, 0];
-    });
-    g.r = Math.max(150, kr + 80);
-  }
+  layoutRadial(nodes, 0, 0);
 
   const edges = [];
   const seen = new Set();
@@ -817,6 +871,101 @@ function buildMapFromAI(data) {
     edges.push({ id: 'e' + edges.length, a, b, w: Math.max(1, Math.min(10, Math.round(Number(e.weight) || 3))) });
   }
   return sanitizeMap({ nodes, edges });
+}
+
+// Radial layout of a set of nodes around (cx, cy): top-level items on a big
+// circle, each group's children around it. Mutates node.pos (and group r).
+function layoutRadial(nodes, cx, cy) {
+  const top = Object.values(nodes).filter(n => !n.parentId);
+  const R = Math.max(320, top.length * 70);
+  top.forEach((n, i) => {
+    const a = (i / Math.max(1, top.length)) * Math.PI * 2;
+    n.pos = [cx + Math.cos(a) * R, cy + Math.sin(a) * R, 0];
+  });
+  for (const g of Object.values(nodes)) {
+    if (g.kind !== 'container') continue;
+    const kids = Object.values(nodes).filter(n => n.parentId === g.id);
+    const kr = Math.max(90, kids.length * 26);
+    kids.forEach((k, i) => {
+      const a = (i / Math.max(1, kids.length)) * Math.PI * 2;
+      k.pos = [g.pos[0] + Math.cos(a) * kr, g.pos[1] + Math.sin(a) * kr, 0];
+    });
+    g.r = Math.max(150, kr + 80);
+  }
+}
+
+// Merge the model's additions into an existing map. Existing nodes/edges are
+// kept exactly as-is; new groups/nodes get fresh non-colliding ids and are laid
+// out in empty space to the right of the current content. New edges may link
+// new nodes together or to existing nodes (referenced by their real ids).
+function mergeAIIntoMap(data, existing) {
+  const out = { nodes: {}, edges: [] };
+  for (const [id, n] of Object.entries((existing && existing.nodes) || {})) {
+    out.nodes[id] = JSON.parse(JSON.stringify(n));
+  }
+  for (const e of (existing && existing.edges) || []) out.edges.push(JSON.parse(JSON.stringify(e)));
+
+  const groupsIn = Array.isArray(data.groups) ? data.groups.slice(0, 8) : [];
+  const nodesIn = Array.isArray(data.nodes) ? data.nodes.slice(0, 40) : [];
+  const edgesIn = Array.isArray(data.edges) ? data.edges.slice(0, 80) : [];
+  const HUES_N = 6;
+  const idMap = new Map();       // AI temp id → fresh real id (new content only)
+  const groupNewId = new Map();
+  const added = {};              // just the new nodes, for isolated layout
+  const freshId = () => { let id; do { id = newId(); } while (out.nodes[id] || added[id]); return id; };
+
+  groupsIn.forEach((g, i) => {
+    if (!g || typeof g !== 'object') return;
+    const id = freshId();
+    const aiId = String(g.id != null ? g.id : 'g' + i);
+    idMap.set(aiId, id); groupNewId.set(aiId, id);
+    added[id] = { id, kind: 'container', label: String(g.label || 'Group'), note: '', link: '', done: false, r: 150, hue: i % HUES_N, parentId: null, pos: [0, 0, 0], mapRef: '' };
+  });
+  nodesIn.forEach((nd, i) => {
+    if (!nd || typeof nd !== 'object') return;
+    const id = freshId();
+    const aiId = String(nd.id != null ? nd.id : 'x' + i);
+    idMap.set(aiId, id);
+    const parentAi = nd.group ? String(nd.group) : '';
+    const parentId = parentAi && groupNewId.has(parentAi) ? groupNewId.get(parentAi) : null;
+    const hue = parentId ? added[parentId].hue : i % HUES_N;
+    added[id] = { id, kind: 'bubble', label: String(nd.label || 'Idea'), note: String(nd.note || ''), link: '', done: false, r: 62, hue, parentId, pos: [0, 0, 0], mapRef: '' };
+  });
+
+  // place the new cluster clear of the existing content (to its right)
+  const [ox, oy] = openSpotRightOf(out.nodes, added);
+  layoutRadial(added, ox, oy);
+  Object.assign(out.nodes, added);
+
+  const seen = new Set();
+  for (const e of out.edges) seen.add(e.a < e.b ? e.a + '|' + e.b : e.b + '|' + e.a);
+  const ref = r => (idMap.has(r) ? idMap.get(r) : (out.nodes[r] ? r : null)); // new temp id or existing real id
+  for (const e of edgesIn) {
+    if (!e || typeof e !== 'object') continue;
+    const a = ref(String(e.from)), b = ref(String(e.to));
+    if (!a || !b || a === b) continue;
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.edges.push({ id: newId(), a, b, w: Math.max(1, Math.min(10, Math.round(Number(e.weight) || 3))) });
+  }
+  return sanitizeMap(out);
+}
+
+// Pick an origin for the new cluster: centered vertically on the existing
+// content and offset to its right, sized so the cluster clears it.
+function openSpotRightOf(existingNodes, added) {
+  const ex = Object.values(existingNodes);
+  if (!ex.length) return [0, 0];
+  let maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of ex) {
+    maxX = Math.max(maxX, n.pos[0] + n.r);
+    minY = Math.min(minY, n.pos[1] - n.r);
+    maxY = Math.max(maxY, n.pos[1] + n.r);
+  }
+  const tops = Object.values(added).filter(n => !n.parentId).length;
+  const R = Math.max(320, tops * 70);
+  return [maxX + 220 + R, (minY + maxY) / 2];
 }
 
 /* ================================================================
@@ -860,6 +1009,44 @@ async function startSession(req, res, userId) {
 function clientIp(req) {
   const xf = req.headers['x-forwarded-for'];
   return xf ? String(xf).split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+}
+
+/* ================================================================
+   Admin auth — a single ADMIN_PASSWORD env var, no user account.
+   The session is a stateless signed cookie: an issued-at timestamp plus
+   an HMAC keyed by the admin password itself. Nothing is stored server-side,
+   and rotating ADMIN_PASSWORD instantly invalidates every admin session.
+================================================================ */
+function adminConfigured() { return ADMIN_PASSWORD.length > 0; }
+
+function signAdmin(ts) {
+  return crypto.createHmac('sha256', ADMIN_PASSWORD).update('admin:' + ts).digest('hex');
+}
+function makeAdminToken() {
+  const ts = Date.now();
+  return ts + '.' + signAdmin(ts);
+}
+function verifyAdminToken(token) {
+  if (!adminConfigured() || !token) return false;
+  const dot = token.indexOf('.');
+  if (dot < 0) return false;
+  const ts = Number(token.slice(0, dot));
+  if (!Number.isFinite(ts) || Date.now() - ts > ADMIN_TTL) return false;
+  const got = Buffer.from(token.slice(dot + 1));
+  const expected = Buffer.from(signAdmin(ts));
+  return got.length === expected.length && crypto.timingSafeEqual(got, expected);
+}
+function isAdmin(req) {
+  return verifyAdminToken(parseCookies(req).admin);
+}
+// Compare a submitted password to ADMIN_PASSWORD in constant time. Both sides
+// are SHA-256'd first so timingSafeEqual always sees equal-length buffers and
+// the comparison can't leak the password's length.
+function checkAdminPassword(pw) {
+  if (!adminConfigured()) return false;
+  const a = crypto.createHash('sha256').update(String(pw)).digest();
+  const b = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 const attempts = new Map(); // key → { n, t }
@@ -1062,8 +1249,102 @@ async function handleApi(req, res, pathname) {
       owner: ownerRef(owner, user), isOwner, canEdit,
       likeCount: (m.likes || []).length,
       likedByMe: !!user && (m.likes || []).includes(user.id),
+      commentCount: (m.comments || []).length,
       present: presenceList(m.id),
     });
+  }
+
+  // Read comments on a viewable map — allowed for anyone who can see the map,
+  // signed-out guests included. Posting and deleting still require sign-in and
+  // are handled in the authenticated comment routes below.
+  const pubCommentMatch = req.method === 'GET' && pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})\/comments$/);
+  if (pubCommentMatch) {
+    const mapId = pubCommentMatch[1];
+    const owner = user && user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    return sendJSON(res, 200, {
+      comments: (m.comments || []).map(c => commentOut(c, user)),
+      canPost: !!user, // guests can read but not post
+      canModerate: !!user && owner.id === user.id,
+    });
+  }
+
+  // --- admin console (separate auth: ADMIN_PASSWORD env var, not a user account) ---
+  if (pathname === '/api/admin/login' && req.method === 'POST') {
+    const ip = clientIp(req);
+    if (tooMany('admin:' + ip, 10, 15 * 60 * 1000)) {
+      return sendJSON(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+    }
+    if (!adminConfigured()) {
+      return sendJSON(res, 503, { error: 'Admin access is not configured on this server. Set the ADMIN_PASSWORD environment variable to enable it.' });
+    }
+    const body = await readBody(req);
+    if (!checkAdminPassword(body.password)) {
+      return sendJSON(res, 401, { error: 'Wrong admin password.' });
+    }
+    attempts.delete('admin:' + ip);
+    res.setHeader('Set-Cookie',
+      `admin=${makeAdminToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ADMIN_TTL / 1000}` +
+      (isSecure(req) ? '; Secure' : ''));
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/admin/logout' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', 'admin=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/admin/session' && req.method === 'GET') {
+    return sendJSON(res, 200, { authed: isAdmin(req), configured: adminConfigured() });
+  }
+
+  // Every other /api/admin/ route requires a valid admin cookie.
+  if (pathname.startsWith('/api/admin/')) {
+    if (!isAdmin(req)) return sendJSON(res, 401, { error: 'Admin sign-in required.' });
+
+    if (pathname === '/api/admin/stats' && req.method === 'GET') {
+      const users = await store.allUsers();
+      const now = Date.now();
+      const dayAgo = now - 24 * 60 * 60 * 1000;
+      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+      let totalMaps = 0, totalNodes = 0, newToday = 0, newWeek = 0;
+      const list = users.map(u => {
+        const maps = u.maps || [];
+        const nodes = maps.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0);
+        totalMaps += maps.length;
+        totalNodes += nodes;
+        if (u.createdAt >= dayAgo) newToday++;
+        if (u.createdAt >= weekAgo) newWeek++;
+        return {
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName || '',
+          visibility: u.visibility,
+          createdAt: u.createdAt,
+          mapCount: maps.length,
+          nodeCount: nodes,
+          friendCount: (u.friends || []).length,
+          followerCount: (u.followers || []).length,
+        };
+      });
+      return sendJSON(res, 200, {
+        storage: store.kind,
+        aiEnabled: aiConfigured(),
+        totals: { users: users.length, maps: totalMaps, nodes: totalNodes, newToday, newWeek },
+        users: list,
+      });
+    }
+
+    const delMatch = pathname.match(/^\/api\/admin\/users\/([a-f0-9]{1,40})$/);
+    if (delMatch && req.method === 'DELETE') {
+      const target = await store.getUserById(delMatch[1]);
+      if (!target) return sendJSON(res, 404, { error: 'No such user.' });
+      await store.deleteUser(target.id);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    return sendJSON(res, 404, { error: 'Not found.' });
   }
 
   // --- everything below requires sign-in ---
@@ -1191,7 +1472,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate|duplicate))?$/);
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate|duplicate|clone))?$/);
   if (mapMatch) {
     const mapId = mapMatch[1], sub = mapMatch[2];
     const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
@@ -1247,8 +1528,11 @@ async function handleApi(req, res, pathname) {
       const body = await readBody(req);
       const prompt = String(body.prompt || '').trim().slice(0, 600);
       if (prompt.length < 3) return sendJSON(res, 400, { error: 'Describe the map you want in a few words.' });
+      // 'add' expands the current map (existing content kept); anything else
+      // generates a fresh map that replaces it.
+      const existing = body.mode === 'add' ? { nodes: m.nodes, edges: m.edges } : null;
       try {
-        const result = await generateMapFromPrompt(prompt);
+        const result = await generateMapFromPrompt(prompt, existing);
         return sendJSON(res, 200, { map: { nodes: result.nodes, edges: result.edges } });
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
@@ -1280,12 +1564,39 @@ async function handleApi(req, res, pathname) {
         edges: JSON.parse(JSON.stringify(m.edges || [])),
         anchorId: m.anchorId,
         chat: [],
+        comments: [],
         likes: [],
         createdAt: now,
         updatedAt: now,
       };
       const idx = user.maps.findIndex(x => x.id === mapId);
       user.maps.splice(idx + 1, 0, copy);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { map: mapMeta(copy, { editors: [] }) });
+    }
+    // Clone a map ANYONE can view into the caller's own "my maps". Unlike
+    // duplicate (owner-only, sits beside the original), this copies the content
+    // into the viewer's account as a fresh, private, independent map — a "save a
+    // copy". canViewMapObj was already enforced above. The copy always lands on
+    // the caller (user), never the owner.
+    if (sub === 'clone' && req.method === 'POST') {
+      if (user.maps.length >= MAX_MAPS) return sendJSON(res, 400, { error: `You can have up to ${MAX_MAPS} maps.` });
+      const now = Date.now();
+      const copy = {
+        id: newId(),
+        name: (m.name + (isOwner ? ' (copy)' : ' — from @' + owner.username)).slice(0, 60),
+        visibility: 'private', // a saved copy starts private; the cloner can reshare
+        editors: [],
+        nodes: JSON.parse(JSON.stringify(m.nodes || {})),
+        edges: JSON.parse(JSON.stringify(m.edges || [])),
+        anchorId: m.anchorId,
+        chat: [],
+        comments: [],
+        likes: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      user.maps.push(copy);
       await store.saveUser(user);
       return sendJSON(res, 200, { map: mapMeta(copy, { editors: [] }) });
     }
@@ -1329,6 +1640,47 @@ async function handleApi(req, res, pathname) {
       }
       const eds = await store.getUsersByIds(m.editors);
       return sendJSON(res, 200, { editors: eds.map(e => ownerRef(e, user)) });
+    }
+    return sendJSON(res, 404, { error: 'Not found.' });
+  }
+
+  // --- comments: a public comment section on a map. Unlike the editor-only
+  //     chat/activity feed above, ANY signed-in viewer who can see the map may
+  //     read and post here — including the owner viewing their own map. Authors
+  //     can delete their own comments; the map owner can moderate any of them. ---
+  const commentMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})\/comments(?:\/([a-f0-9]{1,40}))?$/);
+  if (commentMatch) {
+    const mapId = commentMatch[1], commentId = commentMatch[2];
+    const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    if (!Array.isArray(m.comments)) m.comments = [];
+    const isOwner = owner.id === user.id;
+
+    // (Reading comments is handled by the public GET route above, which also
+    //  serves signed-out guests.)
+    if (!commentId && req.method === 'POST') {
+      const body = await readBody(req);
+      const text = String(body.text || '').trim().slice(0, 1000);
+      if (!text) return sendJSON(res, 400, { error: 'Say something first.' });
+      // roll the oldest off once we hit the cap
+      if (m.comments.length >= MAX_COMMENTS) m.comments.splice(0, m.comments.length - MAX_COMMENTS + 1);
+      const entry = { id: newId(), authorId: user.id, actor: actorRef(user), text, ts: Date.now() };
+      m.comments.push(entry);
+      await store.saveUser(owner);
+      broadcast(mapId, 'comment', commentOut(entry, null)); // live to any open viewers
+      return sendJSON(res, 200, { entry: commentOut(entry, user) });
+    }
+    if (commentId && req.method === 'DELETE') {
+      const i = m.comments.findIndex(c => c.id === commentId);
+      if (i < 0) return sendJSON(res, 404, { error: 'No such comment.' });
+      if (!isOwner && m.comments[i].authorId !== user.id) {
+        return sendJSON(res, 403, { error: 'You can only delete your own comments.' });
+      }
+      m.comments.splice(i, 1);
+      await store.saveUser(owner);
+      broadcast(mapId, 'comment-del', { id: commentId });
+      return sendJSON(res, 200, { ok: true });
     }
     return sendJSON(res, 404, { error: 'Not found.' });
   }
@@ -1405,6 +1757,19 @@ async function handleApi(req, res, pathname) {
 
   // --- home feed: recent maps from people you follow (and your friends),
   //     newest activity first, with like state for the current viewer ---
+  // Viewable maps from everyone the signed-in user follows — used by the editor's
+  // "insert a map as a bubble" picker so you can link to maps you follow.
+  if (route === 'GET /api/following/maps') {
+    const authors = await store.getUsersByIds(user.following || []);
+    const maps = [];
+    for (const author of authors) {
+      for (const m of visibleMapsOf(author, user)) {
+        maps.push({ id: m.id, name: m.name, owner: ownerRef(author, user) });
+      }
+    }
+    return sendJSON(res, 200, { maps });
+  }
+
   if (route === 'GET /api/feed') {
     const sourceIds = new Set([...(user.following || []), ...(user.friends || [])]);
     const authors = await store.getUsersByIds([...sourceIds]);
@@ -1461,6 +1826,7 @@ const MIME = {
 
 function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
+  if (rel === '/admin') rel = '/admin.html'; // friendly URL for the admin console
   const filePath = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
   fs.readFile(filePath, (err, buf) => {
