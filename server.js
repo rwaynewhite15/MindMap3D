@@ -1144,6 +1144,22 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  // Read comments on a viewable map — allowed for anyone who can see the map,
+  // signed-out guests included. Posting and deleting still require sign-in and
+  // are handled in the authenticated comment routes below.
+  const pubCommentMatch = req.method === 'GET' && pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})\/comments$/);
+  if (pubCommentMatch) {
+    const mapId = pubCommentMatch[1];
+    const owner = user && user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    return sendJSON(res, 200, {
+      comments: (m.comments || []).map(c => commentOut(c, user)),
+      canPost: !!user, // guests can read but not post
+      canModerate: !!user && owner.id === user.id,
+    });
+  }
+
   // --- admin console (separate auth: ADMIN_PASSWORD env var, not a user account) ---
   if (pathname === '/api/admin/login' && req.method === 'POST') {
     const ip = clientIp(req);
@@ -1528,13 +1544,8 @@ async function handleApi(req, res, pathname) {
     if (!Array.isArray(m.comments)) m.comments = [];
     const isOwner = owner.id === user.id;
 
-    if (!commentId && req.method === 'GET') {
-      return sendJSON(res, 200, {
-        comments: m.comments.map(c => commentOut(c, user)),
-        canPost: true,
-        canModerate: isOwner,
-      });
-    }
+    // (Reading comments is handled by the public GET route above, which also
+    //  serves signed-out guests.)
     if (!commentId && req.method === 'POST') {
       const body = await readBody(req);
       const text = String(body.text || '').trim().slice(0, 1000);
@@ -1633,6 +1644,19 @@ async function handleApi(req, res, pathname) {
 
   // --- home feed: recent maps from people you follow (and your friends),
   //     newest activity first, with like state for the current viewer ---
+  // Viewable maps from everyone the signed-in user follows — used by the editor's
+  // "insert a map as a bubble" picker so you can link to maps you follow.
+  if (route === 'GET /api/following/maps') {
+    const authors = await store.getUsersByIds(user.following || []);
+    const maps = [];
+    for (const author of authors) {
+      for (const m of visibleMapsOf(author, user)) {
+        maps.push({ id: m.id, name: m.name, owner: ownerRef(author, user) });
+      }
+    }
+    return sendJSON(res, 200, { maps });
+  }
+
   if (route === 'GET /api/feed') {
     const sourceIds = new Set([...(user.following || []), ...(user.friends || [])]);
     const authors = await store.getUsersByIds([...sourceIds]);
