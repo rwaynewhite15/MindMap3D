@@ -458,13 +458,14 @@
 </div>
 
 <div id="sheetAI" class="sheet" hidden>
-  <div class="sheet-title">✨ Generate a mind map</div>
-  <div class="muted" style="margin-bottom:8px">Describe a topic and AI will build a starting map. This replaces the current map's contents.</div>
+  <div class="sheet-title">✨ Mind map with AI</div>
+  <div class="muted" style="margin-bottom:8px">Describe what you want. <b>Add to map</b> keeps everything already on this map and expands it with new, connected ideas. <b>Begin new map</b> replaces the current map's contents.</div>
   <textarea id="aiPrompt" maxlength="600" rows="3" placeholder="e.g. A launch plan for a coffee subscription startup"></textarea>
   <div class="form-error" id="aiError"></div>
   <div class="sheet-row">
     <button id="aiCancel" class="tb">Cancel</button>
-    <button id="aiGenerate" class="tb primary-tb">Generate</button>
+    <button id="aiReplace" class="tb">✨ Begin new map</button>
+    <button id="aiAdd" class="tb primary-tb">➕ Add to map</button>
   </div>
 </div>
 

@@ -2151,30 +2151,51 @@ function openAISheet() {
   const ta = $('#aiPrompt');
   requestAnimationFrame(() => ta.focus());
 }
-async function runAIGenerate() {
+// mode: 'add' expands the current map (nothing removed); 'replace' overwrites it.
+async function runAIGenerate(mode) {
   const prompt = $('#aiPrompt').value.trim();
   const err = $('#aiError');
   if (prompt.length < 3) { err.textContent = 'Describe the map you want in a few words.'; return; }
   if (!currentMapId) return;
-  const btn = $('#aiGenerate');
-  btn.disabled = true; btn.textContent = 'Generating…'; err.textContent = '';
+  // guard the destructive path: replacing a map that already has content
+  if (mode === 'replace') {
+    const hasContent = Object.keys(myMap.getMap().nodes || {}).length > 0;
+    if (hasContent && !confirm('Begin a new map? This replaces everything currently on this map.')) return;
+  }
+  const addBtn = $('#aiAdd'), repBtn = $('#aiReplace');
+  const active = mode === 'add' ? addBtn : repBtn;
+  const label = active.textContent;
+  addBtn.disabled = repBtn.disabled = true;
+  active.textContent = mode === 'add' ? 'Adding…' : 'Generating…';
+  err.textContent = '';
   try {
-    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt });
-    myMap.loadGenerated(data.map); // replaces contents, fits the view, and saves
+    if (mode === 'add') {
+      // make sure the server has our latest edits before it reads the map to expand
+      clearTimeout(saveTimer);
+      mapDirty = false;
+      await api('/api/maps/' + currentMapId, 'PUT', { map: myMap.getMap() });
+    }
+    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt, mode });
+    myMap.loadGenerated(data.map); // loads the (merged, for add) map, fits the view, and saves
     refreshToolbar();
     refreshOutlineIfOpen();
     closeSheets();
-    setHint('Generated a map ✨ — edit away, it saves automatically', false);
+    setHint(mode === 'add'
+      ? 'Added to your map ✨ — edit away, it saves automatically'
+      : 'Generated a map ✨ — edit away, it saves automatically', false);
   } catch (e) {
     err.textContent = e.message || 'Generation failed.';
   }
-  btn.disabled = false; btn.textContent = 'Generate';
+  addBtn.disabled = repBtn.disabled = false;
+  active.textContent = label;
 }
 $('#aiCancel').addEventListener('click', () => closeSheets());
-$('#aiGenerate').addEventListener('click', runAIGenerate);
+$('#aiAdd').addEventListener('click', () => runAIGenerate('add'));
+$('#aiReplace').addEventListener('click', () => runAIGenerate('replace'));
 $('#aiPrompt').addEventListener('keydown', e => {
   e.stopPropagation();
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate();
+  // Cmd/Ctrl+Enter runs the safe, non-destructive "add" action
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate('add');
   if (e.key === 'Escape') closeSheets();
 });
 

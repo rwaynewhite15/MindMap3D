@@ -101,9 +101,12 @@ menu**.
   outline with the ⤓ button as **PDF** (a vector picture of the map plus the full
   outline, via the browser's Save-as-PDF), **Markdown**, **plain text**, or **OPML** (for
   other outliners).
-- **✨ AI** *(when enabled)* — describe a topic and AI generates a starting map of grouped,
-  connected ideas for you to refine. The button appears only when the server has an
-  Anthropic API key configured (see below).
+- **✨ AI** *(when enabled)* — describe what you want and AI builds grouped, connected ideas
+  for you to refine, two ways: **Begin new map** generates a fresh map that *replaces* the
+  current contents, or **Add to map** reads the existing map as context and *expands* it —
+  new ideas are added beside what's there (nothing removed) and can connect to your existing
+  bubbles. The button appears only when the server has an Anthropic API key configured (see
+  below).
 - **Overlap picker** — hovering highlights exactly what a click will select. When things
   stack up, hover for a second (or double-tap on mobile) for a dropdown listing
   everything under the cursor.
@@ -158,9 +161,11 @@ rate-limited per IP.
 
 Setting `ANTHROPIC_API_KEY` turns on the **✨ AI** button. Generation calls the
 [Anthropic API](https://console.anthropic.com) (`@anthropic-ai/sdk`, model
-`claude-opus-4-8`) to turn a prompt into groups, nodes, and weighted edges, which load
-into the current map. Without the key the app runs normally and the button stays hidden.
-Requests are rate-limited per user.
+`claude-opus-4-8`) to turn a prompt into groups, nodes, and weighted edges. **Begin new
+map** replaces the current map; **Add to map** sends the existing map as context and the
+model returns only additions, which are merged in beside your current content (new bubbles
+can even connect to existing ones). Without the key the app runs normally and the button
+stays hidden. Requests are rate-limited per user.
 
 ### Admin console
 
