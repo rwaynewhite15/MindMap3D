@@ -13,6 +13,19 @@ It runs as a single small Node server with a no-build web front end. With no
 configuration your data lives in a JSON file; it upgrades to **Postgres** for production
 and turns on **AI generation** simply by setting environment variables.
 
+## What's new
+
+- **AI can expand a map, not just replace it** — the ✨ AI panel now offers **Add to map**
+  (reads your current map as context and adds new, connected ideas beside it — nothing
+  removed) alongside **Begin new map** (the original replace behavior).
+- **Guests can see likes & comments** — signed-out visitors viewing a public map see its
+  like count and can read comments; liking or commenting prompts them to sign in.
+- **Map bubbles can link to maps you follow** — the 🗺️ Map picker now lists both your own
+  maps and maps from people you follow.
+- **Save a copy** of any map you can view into your own maps, and a read-only **comment
+  section** on every map, with comment counts shown on home-feed cards.
+- **Tidier bubble labels** — long labels shrink to fit and never break a word mid-word.
+
 ## Run it locally
 
 Requires [Node.js](https://nodejs.org) 20+.
