@@ -537,6 +537,41 @@ button.primary {
 .chat-compose input:disabled { opacity: 0.5; }
 .chat-compose .tb { flex: none; }
 
+/* ---------------- comment section (read-only map viewer) ---------------- */
+/* Reuses the chat-panel shell (docked right, full height) with its own item
+   layout: every comment is a titled card, newest at the bottom. */
+.comments-panel { animation: chat-in 0.18s ease-out; }
+.comment-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 11px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.comment-item.mine { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.comment-head .who { color: var(--accent); font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-head time { color: var(--dim); font-size: 11px; white-space: nowrap; flex: none; }
+.comment-head .del {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.comment-head .del:hover { color: var(--danger); }
+.comment-item .body { color: var(--ink); word-break: break-word; white-space: pre-wrap; }
+
 .hint {
   position: absolute;
   top: 58px;
@@ -597,11 +632,21 @@ button.primary {
   padding: 6%;
   max-width: 100%;
   overflow: hidden;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  /* wrap only between words, never inside one; fitBubbleFont shrinks the font so
+     a long single word fits on its line instead of being broken mid-word */
+  word-break: normal;
+  overflow-wrap: normal;
   text-shadow: 0 1px 0 rgba(255,255,255,0.35);
   pointer-events: none;
 }
+/* a "map bubble": links to another map. A solid accent ring marks it as a
+   portal. hovered/selected rings below still win (they're defined after this). */
+.bubble.map-link {
+  box-shadow:
+    inset 0 0 0 2.5px var(--accent),
+    0 2px 8px rgba(0, 0, 0, 0.30);
+}
+
 /* hover: shows what a click would select (selected style below wins over it) */
 .bubble.hovered {
   filter: brightness(1.1);
@@ -732,6 +777,7 @@ button.primary {
   color: var(--accent);
   word-break: break-all;
 }
+.note-viewer-maplink { display: block; width: 100%; margin-top: 12px; }
 
 /* ---------------- outline view ---------------- */
 .outline-panel {
@@ -858,6 +904,23 @@ button.primary {
 }
 .like-btn:hover { color: #F07A8F; border-color: #F07A8F; }
 .like-btn.liked { color: #F07A8F; border-color: #F07A8F; background: color-mix(in srgb, #F07A8F 14%, transparent); }
+
+/* comment count on a feed card — sits next to the like pill, same shape */
+.comment-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.comment-count:hover { color: var(--accent); border-color: var(--accent); }
 .tb.liked { color: #F07A8F; border-color: #F07A8F; }
 
 /* ---------------- profile view ---------------- */
