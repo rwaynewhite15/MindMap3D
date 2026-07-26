@@ -1781,7 +1781,9 @@ function makeOutlineRow(n, depth, childrenOf) {
   row.className = 'outline-row' + (n.kind === 'container' ? ' group' : '') + (n.done ? ' done' : '');
   row.style.paddingLeft = (8 + depth * 16) + 'px';
 
-  if (n.kind === 'container') {
+  // a caret appears for anything that actually has children (groups and parent
+  // bubbles alike); childless nodes keep the plain dot
+  if (childrenOf(n.id).length) {
     const caret = document.createElement('button');
     caret.className = 'outline-caret';
     caret.textContent = outlineCollapsed.has(n.id) ? '▸' : '▾';
@@ -1847,13 +1849,15 @@ function buildOutline() {
     body.appendChild(d);
     return;
   }
-  const childrenOf = id => nodes.filter(n => n.parentId === id);
-  const groups = nodes.filter(n => n.kind === 'container');
-  const loose = nodes.filter(n => n.kind === 'bubble' && !(n.parentId && byId[n.parentId]));
+  const hasParent = n => !!(n.parentId && byId[n.parentId]);
+  const childrenOf = id => nodes.filter(n => n.parentId === id && n.id !== id);
+  const groups = nodes.filter(n => n.kind === 'container' && !hasParent(n));
+  const loose = nodes.filter(n => n.kind !== 'container' && !hasParent(n));
 
+  // any node with children can be expanded, so sub-topics nest to any depth
   const addRow = (n, depth) => {
     body.appendChild(makeOutlineRow(n, depth, childrenOf));
-    if (n.kind === 'container' && !outlineCollapsed.has(n.id)) {
+    if (!outlineCollapsed.has(n.id)) {
       for (const k of childrenOf(n.id)) addRow(k, depth + 1);
     }
   };
@@ -1876,15 +1880,22 @@ function currentMapName() {
   return raw.replace(/\s*👥.*$/, '').trim() || 'Mind map'; // strip the shared-with marker
 }
 
-// The ordered outline structure: top-level groups (with their children) and
+// The ordered outline structure: top-level groups (with their descendants) and
 // then loose bubbles — the same shape the Outline panel renders.
+//
+// `groups`/`loose` are *roots only*: a node whose parent exists is rendered by
+// its parent, so listing it at the top level too would duplicate it. Every
+// consumer walks `childrenOf` recursively, so nesting of any depth comes out as
+// sub-topics.
 function outlineStructure() {
   const map = activeMap().getMap();
   const byId = map.nodes || {};
   const nodes = Object.values(byId);
-  const childrenOf = id => nodes.filter(n => n.parentId === id);
-  const groups = nodes.filter(n => n.kind === 'container');
-  const loose = nodes.filter(n => n.kind === 'bubble' && !(n.parentId && byId[n.parentId]));
+  const hasParent = n => !!(n.parentId && byId[n.parentId]);
+  // guard against a corrupt parent chain (a cycle would otherwise recurse forever)
+  const childrenOf = id => nodes.filter(n => n.parentId === id && n.id !== id);
+  const groups = nodes.filter(n => n.kind === 'container' && !hasParent(n));
+  const loose = nodes.filter(n => n.kind !== 'container' && !hasParent(n));
   return { nodes, childrenOf, groups, loose };
 }
 
@@ -1903,11 +1914,15 @@ function buildOutlineMarkdown() {
 
   let out = '# ' + currentMapName() + '\n\n';
   if (!nodes.length) return out + '_(empty map)_\n';
-  for (const g of groups) {
-    out += '- **' + label(g) + '**\n' + note(g, '  ');
-    for (const c of childrenOf(g.id)) out += '  - ' + label(c) + '\n' + note(c, '    ');
-  }
-  for (const b of loose) out += '- ' + label(b) + '\n' + note(b, '  ');
+  // depth-first: every child becomes a nested sub-topic, at any depth
+  const emit = (n, depth) => {
+    const pad = '  '.repeat(depth);
+    const text = n.kind === 'container' ? '**' + label(n) + '**' : label(n);
+    out += pad + '- ' + text + '\n' + note(n, pad + '  ');
+    for (const c of childrenOf(n.id)) emit(c, depth + 1);
+  };
+  for (const g of groups) emit(g, 0);
+  for (const b of loose) emit(b, 0);
   return out;
 }
 
@@ -1926,11 +1941,14 @@ function buildOutlineText() {
   const title = currentMapName();
   let out = title + '\n' + '='.repeat(title.length) + '\n\n';
   if (!nodes.length) return out + '(empty map)\n';
-  for (const g of groups) {
-    out += '• ' + label(g) + '\n' + note(g, '    ');
-    for (const c of childrenOf(g.id)) out += '    - ' + label(c) + '\n' + note(c, '        ');
-  }
-  for (const b of loose) out += '• ' + label(b) + '\n' + note(b, '    ');
+  // depth-first: top level uses •, every nested sub-topic uses -
+  const emit = (n, depth) => {
+    const pad = '    '.repeat(depth);
+    out += pad + (depth === 0 ? '• ' : '- ') + label(n) + '\n' + note(n, pad + '    ');
+    for (const c of childrenOf(n.id)) emit(c, depth + 1);
+  };
+  for (const g of groups) emit(g, 0);
+  for (const b of loose) emit(b, 0);
   return out;
 }
 
@@ -1945,8 +1963,9 @@ function buildOutlineOPML() {
     if (n.note && n.note.trim()) attrs.push('_note="' + esc(n.note.trim()) + '"');
     if (n.link) attrs.push('url="' + esc(n.link) + '"');
     if (n.done) attrs.push('_done="true"');
+    // any node with children nests them, not just containers
     const kids = childrenOf(n.id);
-    if (n.kind === 'container' && kids.length) {
+    if (kids.length) {
       return indent + '<outline ' + attrs.join(' ') + '>\n'
         + kids.map(k => node(k, indent + '  ')).join('')
         + indent + '</outline>\n';
@@ -2009,8 +2028,11 @@ function buildMapSVG() {
       const lines = wrapLabelLines(lbl, bubbleTextBox(n.r), fs);
       const lineH = fs * 1.2;
       const y0 = n.pos[1] - (lines.length - 1) * lineH / 2; // vertically centre the block
+      // NB: Y() returns a formatted string, so the line offset has to be applied
+      // in map coordinates *before* formatting — adding to Y()'s result would
+      // concatenate ("140.0" + 16.8) instead of adding.
       const tspans = lines.map((ln, i) =>
-        '<tspan x="' + X(n.pos[0]) + '" y="' + (Y(y0) + i * lineH).toFixed(1) + '">' + esc(ln) + '</tspan>'
+        '<tspan x="' + X(n.pos[0]) + '" y="' + Y(y0 + i * lineH) + '">' + esc(ln) + '</tspan>'
       ).join('');
       parts.push('<text text-anchor="middle" dominant-baseline="central" '
         + 'font-family="sans-serif" font-weight="700" font-size="' + fs.toFixed(1)
@@ -2036,14 +2058,24 @@ function buildOutlineHTML() {
   const { nodes, childrenOf, groups, loose } = outlineStructure();
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+  const escAttr = s => esc(s).replace(/"/g, '&quot;');
+  const safeHref = u => {
+    const raw = String(u || '').trim();
+    if (!raw) return '';
+    // Accept normal web/mail links; block javascript/data payloads.
+    if (/^(https?:|mailto:)/i.test(raw)) return raw;
+    return '';
+  };
   const item = n => {
     let lbl = esc((n.label || 'Untitled').trim() || 'Untitled');
     if (n.done) lbl = '<s>' + lbl + '</s> ✓';
-    if (n.link) lbl += ' <a href="' + esc(n.link) + '">🔗</a>';
+    const href = safeHref(n.link);
+    if (href) lbl += ' <a href="' + escAttr(href) + '">🔗</a>';
     let s = '<li>' + lbl;
     if (n.note && n.note.trim()) s += '<div class="note">' + esc(n.note.trim()) + '</div>';
+    // any node with children nests them, not just containers
     const kids = childrenOf(n.id);
-    if (n.kind === 'container' && kids.length) {
+    if (kids.length) {
       s += '<ul>' + kids.map(item).join('') + '</ul>';
     }
     return s + '</li>';
@@ -2077,7 +2109,6 @@ function exportOutlinePDF() {
     + '<div class="sub">Mind map exported from MindMapShare</div>'
     + '<div class="map">' + buildMapSVG() + '</div>'
     + '<h2>Outline</h2>' + buildOutlineHTML()
-    + '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);};<\/script>'
     + '</body></html>';
 
   const win = window.open('', '_blank');
@@ -2085,7 +2116,23 @@ function exportOutlinePDF() {
   win.document.open();
   win.document.write(doc);
   win.document.close();
-  setHint('Opening the print dialog — choose “Save as PDF”.', false);
+  // Trigger print from the opener context (more reliable than inline popup script
+  // in environments that restrict inline scripts).
+  let printed = false;
+  const firePrint = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      win.focus();
+      win.print();
+      setHint('Opening the print dialog — choose “Save as PDF”.', false);
+    } catch {
+      setHint('PDF page opened. If print did not start, press Ctrl+P and choose “Save as PDF”.', true);
+    }
+  };
+  win.onload = () => setTimeout(firePrint, 120);
+  // Some browsers may not emit onload consistently for this document; fallback.
+  setTimeout(firePrint, 350);
 }
 
 const EXPORT_FORMATS = {
