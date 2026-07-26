@@ -43,22 +43,16 @@ const _measureCtx = document.createElement('canvas').getContext('2d');
 
 const _bubbleFont = '-apple-system, "Segoe UI", Roboto, system-ui, sans-serif';
 
-// Word-wrap `label` to fit width `boxW` at font size `fs`, hard-breaking any word
-// too long to fit on its own line. Returns the array of lines.
+// Word-wrap `label` to fit width `boxW` at font size `fs`. Words are only ever
+// broken *between* each other, never mid-word — a single word too wide for the
+// box stays on its own (over-wide) line, and fitBubbleFont shrinks the font
+// until even that word fits. Returns the array of lines.
 function wrapLabelLines(label, boxW, fs) {
   _measureCtx.font = '700 ' + fs + 'px ' + _bubbleFont;
   const w = s => _measureCtx.measureText(s).width;
   const lines = [];
   let line = '';
-  for (let word of label.split(/\s+/)) {
-    // hard-break an over-long word by characters
-    while (w(word) > boxW && word.length > 1) {
-      let i = 1;
-      while (i < word.length && w(word.slice(0, i + 1)) <= boxW) i++;
-      if (line) { lines.push(line); line = ''; }
-      lines.push(word.slice(0, i));
-      word = word.slice(i);
-    }
+  for (const word of label.split(/\s+/)) {
     if (!word) continue;
     const trial = line ? line + ' ' + word : word;
     if (w(trial) <= boxW) line = trial;
@@ -78,14 +72,24 @@ function fitBubbleFont(text, r) {
   const label = (text || 'Untitled').trim() || 'Untitled';
   const box = bubbleTextBox(r);
   const MAX = Math.min(20, r * 0.55);    // cap so a lone word isn't oversized
-  const MIN = 6;
+  // low floor: since words are never broken, a long single word has to shrink
+  // a lot to fit on one line — we let it, rather than clip or break the word
+  const MIN = 3;
   const fits = fs => {
     const lines = wrapLabelLines(label, box, fs);
-    return lines.length * fs * 1.2 <= box;
+    // vertical: every line, stacked, fits within the box height
+    if (lines.length * fs * 1.2 > box) return false;
+    // horizontal: no line overflows — this is what forces the font down until
+    // an unbreakable long word fits on its single line
+    _measureCtx.font = '700 ' + fs + 'px ' + _bubbleFont;
+    for (const line of lines) {
+      if (_measureCtx.measureText(line).width > box) return false;
+    }
+    return true;
   };
   let lo = MIN, hi = MAX, best = MIN;
   if (fits(hi)) return hi;
-  for (let i = 0; i < 12 && hi - lo > 0.5; i++) {
+  for (let i = 0; i < 16 && hi - lo > 0.25; i++) {
     const mid = (lo + hi) / 2;
     if (fits(mid)) { best = mid; lo = mid; } else { hi = mid; }
   }
