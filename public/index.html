@@ -77,6 +77,7 @@
     <div id="editToolbar" class="edit-toolbar">
       <button id="btnAddBubble" class="tb primary-tb" title="Add a new idea bubble (Enter)">+ Bubble</button>
       <button id="btnAddGroup" class="tb" title="Add a container that holds bubbles">+ Group</button>
+      <button id="btnAddMapLink" class="tb" title="Insert one of your other maps as a linked bubble">🗺️ Map</button>
       <button id="btnOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <button id="btnConnect" class="tb" disabled title="Link the selected bubble to another one">+ Connection</button>
       <button id="btnRename" class="tb" disabled title="Rename the selected item (F2)">Rename</button>
@@ -171,6 +172,7 @@
     <div class="edit-toolbar" id="profileToolbar">
       <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
       <button id="btnPLike" class="tb" title="Like this map">♡ Like</button>
+      <button id="btnPClone" class="tb" hidden title="Save your own editable copy of this map">⎘ Save a copy</button>
       <button id="btnPOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <span class="tb-sep"></span>
       <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
@@ -467,6 +469,7 @@
   </div>
   <div id="noteViewerBody" class="note-viewer-body"></div>
   <a id="noteViewerLink" class="note-viewer-link" target="_blank" rel="noopener noreferrer" hidden></a>
+  <button id="noteViewerMapLink" class="tb primary-tb note-viewer-maplink" hidden>🗺️ Open linked map →</button>
 </div>
 
 <div id="sheetGroup" class="sheet" hidden>
@@ -503,6 +506,15 @@
   <div class="sheet-row">
     <button id="newMapCancel" class="tb">Cancel</button>
     <button id="newMapCreate" class="tb primary-tb">Create map</button>
+  </div>
+</div>
+
+<div id="sheetMapLink" class="sheet" hidden>
+  <div class="sheet-title">Insert a map as a bubble</div>
+  <div class="muted" style="margin-bottom:8px">Pick one of your other maps. A bubble linking to it is added here; tapping that bubble in the view opens the linked map.</div>
+  <div id="mapLinkList" class="group-options"></div>
+  <div class="sheet-row">
+    <button id="mapLinkCancel" class="tb">Cancel</button>
   </div>
 </div>
 

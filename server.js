@@ -632,6 +632,14 @@ function cleanLink(v) {
   return /^https?:\/\//i.test(s) ? s : '';
 }
 
+// A map-bubble reference: the id of another map. Only shape is validated here
+// (same charset the map routes accept); whether it exists / is viewable is
+// resolved at navigation time, not stored.
+function cleanMapRef(v) {
+  const s = String(v || '').trim();
+  return /^[A-Za-z0-9]{1,40}$/.test(s) ? s : '';
+}
+
 function sanitizeMap(input) {
   if (!input || typeof input !== 'object') return null;
   const out = { nodes: {}, edges: [] };
@@ -653,6 +661,9 @@ function sanitizeMap(input) {
       hue: Math.max(0, Math.min(11, Math.floor(num(n.hue)))),
       parentId: n.parentId ? String(n.parentId).slice(0, 24) : null,
       kind: n.kind === 'container' ? 'container' : 'bubble',
+      // optional: this bubble links to another map (a "map bubble"). Stored as a
+      // map id; empty/invalid → no link. Navigation resolves + access-checks it.
+      mapRef: cleanMapRef(n.mapRef),
     };
   }
   // drop parent references to nodes that don't exist / aren't containers
@@ -1317,7 +1328,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate|duplicate))?$/);
+  const mapMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})(?:\/(meta|editors|chat|live|like|generate|duplicate|clone))?$/);
   if (mapMatch) {
     const mapId = mapMatch[1], sub = mapMatch[2];
     const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
@@ -1412,6 +1423,31 @@ async function handleApi(req, res, pathname) {
       };
       const idx = user.maps.findIndex(x => x.id === mapId);
       user.maps.splice(idx + 1, 0, copy);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { map: mapMeta(copy, { editors: [] }) });
+    }
+    // Clone a map ANYONE can view into the caller's own "my maps". Unlike
+    // duplicate (owner-only, sits beside the original), this copies the content
+    // into the viewer's account as a fresh, private, independent map — a "save a
+    // copy". canViewMapObj was already enforced above. The copy always lands on
+    // the caller (user), never the owner.
+    if (sub === 'clone' && req.method === 'POST') {
+      if (user.maps.length >= MAX_MAPS) return sendJSON(res, 400, { error: `You can have up to ${MAX_MAPS} maps.` });
+      const now = Date.now();
+      const copy = {
+        id: newId(),
+        name: (m.name + (isOwner ? ' (copy)' : ' — from @' + owner.username)).slice(0, 60),
+        visibility: 'private', // a saved copy starts private; the cloner can reshare
+        editors: [],
+        nodes: JSON.parse(JSON.stringify(m.nodes || {})),
+        edges: JSON.parse(JSON.stringify(m.edges || [])),
+        anchorId: m.anchorId,
+        chat: [],
+        likes: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      user.maps.push(copy);
       await store.saveUser(user);
       return sendJSON(res, 200, { map: mapMeta(copy, { editors: [] }) });
     }

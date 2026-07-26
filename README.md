@@ -55,6 +55,14 @@ menu**.
   **duplicate** it (an independent private copy of its contents — no shared editors,
   chat, or likes carry over), and **reorder** your maps — **drag** the ⠿ handle (or use
   ↑ ↓) — so the dropdown lists them the way you want.
+- **Save a copy of any map you can view** — from the read-only map view, **⎘ Save a
+  copy** clones the map (your own or someone else's public/friends' map) into your **My
+  Maps** as a fresh, private, fully editable copy, then opens it in the editor. The
+  original owner isn't affected; no editors, chat, or likes carry over.
+- **Map bubbles** — insert one of your **other maps as a bubble** with **🗺️ Map** in the
+  editor. It becomes an accent-ringed bubble (with a 🗺️ badge) labelled after that map;
+  when someone **viewing** the map taps it, they're taken to the linked map. Great for
+  splitting a big idea into linked sub-maps or building an index map.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed

@@ -602,6 +602,14 @@ button.primary {
   text-shadow: 0 1px 0 rgba(255,255,255,0.35);
   pointer-events: none;
 }
+/* a "map bubble": links to another map. A solid accent ring marks it as a
+   portal. hovered/selected rings below still win (they're defined after this). */
+.bubble.map-link {
+  box-shadow:
+    inset 0 0 0 2.5px var(--accent),
+    0 2px 8px rgba(0, 0, 0, 0.30);
+}
+
 /* hover: shows what a click would select (selected style below wins over it) */
 .bubble.hovered {
   filter: brightness(1.1);
@@ -732,6 +740,7 @@ button.primary {
   color: var(--accent);
   word-break: break-all;
 }
+.note-viewer-maplink { display: block; width: 100%; margin-top: 12px; }
 
 /* ---------------- outline view ---------------- */
 .outline-panel {

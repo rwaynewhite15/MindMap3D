@@ -277,7 +277,7 @@ function createMapView(host, opts = {}) {
     for (const n of Object.values(map.nodes)) {
       const col = hueOf(n);
       const el = document.createElement('div');
-      el.className = 'bubble' + (n.kind === 'container' ? ' container' : '');
+      el.className = 'bubble' + (n.kind === 'container' ? ' container' : '') + (n.mapRef ? ' map-link' : '');
       el.style.setProperty('--main', col.main);
       el.style.setProperty('--lite', col.lite);
       el.style.setProperty('--dark', col.dark);
@@ -292,6 +292,7 @@ function createMapView(host, opts = {}) {
       el.appendChild(label);
       // small badges mark bubbles that carry a note and/or a link
       const badges = [];
+      if (n.mapRef) badges.push(['🗺️', 'Links to a map']);
       if (n.note && n.note.trim()) badges.push(['📝', 'Has a note']);
       if (n.link) badges.push(['🔗', 'Has a link']);
       if (badges.length) {
@@ -751,7 +752,7 @@ function createMapView(host, opts = {}) {
     const n = {
       id, label: '', note: '', link: '', done: false, pos: [0, 0, 0], r: 62,
       hue: hueOverride !== null ? hueOverride : hueCounter++ % HUES.length,
-      parentId: null, kind: 'bubble',
+      parentId: null, kind: 'bubble', mapRef: '',
     };
 
     if (sel && sel.kind === 'container') {
@@ -776,6 +777,20 @@ function createMapView(host, opts = {}) {
     selectedId = id;
     changed();
     if (opts.onSelect) opts.onSelect(id);
+    return id;
+  }
+
+  // Insert a bubble that links to another map. Positioned like addBubble, but
+  // carries a mapRef and a label seeded from the target map's name. Viewers who
+  // tap it are taken to that map (see the read-only viewer's onCenter).
+  function addMapLinkBubble(mapId, label) {
+    const id = addBubble();
+    const n = map.nodes[id];
+    n.mapRef = String(mapId || '');
+    n.label = String(label || 'Map').slice(0, 80);
+    changed();
+    buildDOM(); // reflect the new label/badge immediately
+    updateSelectionClasses();
     return id;
   }
 
@@ -875,7 +890,7 @@ function createMapView(host, opts = {}) {
         id, label: n.label || '', note: n.note || '', link: n.link || '', done: !!n.done,
         pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0],
         r: n.r || 62, hue: n.hue || 0, parentId: n.parentId || null,
-        kind: n.kind === 'container' ? 'container' : 'bubble',
+        kind: n.kind === 'container' ? 'container' : 'bubble', mapRef: n.mapRef || '',
       };
     }
     map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1141,6 +1156,7 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1191,6 +1207,7 @@ function createMapView(host, opts = {}) {
           hue: n.hue || 0,
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
+          mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
@@ -1212,7 +1229,7 @@ function createMapView(host, opts = {}) {
     containers,
     start() { if (!running) { running = true; requestAnimationFrame(frame); } },
     stop() { running = false; },
-    addBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
+    addBubble, addMapLinkBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setLink, setDone, loadGenerated,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
     // colors: recolor an existing node / pick the color for future bubbles
@@ -1393,7 +1410,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1806,6 +1823,7 @@ function makeOutlineRow(n, depth, childrenOf) {
   const meta = document.createElement('span');
   meta.className = 'outline-meta';
   const bits = [];
+  if (n.mapRef) bits.push('🗺️');
   if (n.link) bits.push('🔗');
   if (n.done) bits.push('✓');
   meta.textContent = bits.join(' ');
@@ -2206,6 +2224,7 @@ function initEditor() {
     refreshToolbar();
     openRename(id);
   });
+  $('#btnAddMapLink').addEventListener('click', openMapLinkSheet);
   $('#btnOutline').addEventListener('click', () => toggleOutline());
   $('#btnAI').addEventListener('click', openAISheet);
   $('#btnConnect').addEventListener('click', () => {
@@ -2373,6 +2392,35 @@ $('#newMapName').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('#newMapCreate').click();
   if (e.key === 'Escape') closeSheets();
 });
+
+/* ---------- insert-a-map-as-bubble sheet ---------- */
+// Lists my other maps; picking one drops a bubble that links to it into the map
+// I'm editing. Tapping that bubble in the read-only view opens the linked map.
+function openMapLinkSheet() {
+  const list = $('#mapLinkList');
+  list.innerHTML = '';
+  const others = mapsMine.filter(m => m.id !== currentMapId);
+  if (!others.length) {
+    const p = document.createElement('div');
+    p.className = 'muted';
+    p.textContent = 'You have no other maps yet. Create another map first, then insert it here.';
+    list.appendChild(p);
+  } else {
+    for (const m of others) {
+      const b = document.createElement('button');
+      b.className = 'tb';
+      b.textContent = m.name || 'Untitled map';
+      b.addEventListener('click', () => {
+        myMap.addMapLinkBubble(m.id, m.name || 'Map'); // its changed() triggers the save
+        closeSheets();
+        refreshToolbar();
+      });
+      list.appendChild(b);
+    }
+  }
+  openSheet('#sheetMapLink');
+}
+$('#mapLinkCancel').addEventListener('click', () => closeSheets());
 
 /* ---------- map settings sheet (rename, visibility, editors, order, delete) ---------- */
 let msEditors = []; // [{ username, name }] for the map being configured
@@ -3339,6 +3387,8 @@ async function openProfileMap(id) {
   $('#btnPEdit').hidden = !data.canEdit;
   profileLike = { count: data.likeCount || 0, liked: !!data.likedByMe };
   renderProfileLike(!!data.isOwner);
+  // any signed-in user can save their own editable copy of a map they can view
+  $('#btnPClone').hidden = !me;
   refreshOutlineIfOpen(); // keep an open outline in sync when switching map tabs
 }
 
@@ -3359,6 +3409,27 @@ $('#btnPLike').addEventListener('click', async () => {
     renderProfileLike(false);
   } catch (err) { alert(err.message); }
   $('#btnPLike').disabled = false;
+});
+
+// Save a copy: clone the previewed map into my own maps, then open it in the
+// editor. Works for any map I can view — my own or someone else's.
+$('#btnPClone').addEventListener('click', async () => {
+  if (!profileMapId || !me) return;
+  const btn = $('#btnPClone');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Saving…';
+  try {
+    const r = await api('/api/maps/' + profileMapId + '/clone', 'POST');
+    await loadMaps(r.map.id); // pull the new map into my list and select it
+    location.hash = '#/map';
+    await openMyMap(r.map.id);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
 });
 
 // jump from the read-only profile preview into the full editor
@@ -3452,9 +3523,40 @@ function showNoteViewer(n) {
   } else {
     link.hidden = true;
   }
+  // a map bubble carries a mapRef: offer a button that opens the linked map
+  const mapBtn = $('#noteViewerMapLink');
+  if (n.mapRef) {
+    mapBtn.hidden = false;
+    mapBtn.onclick = () => { hideNoteViewer(); openLinkedMap(n.mapRef); };
+  } else {
+    mapBtn.hidden = true;
+    mapBtn.onclick = null;
+  }
   $('#noteViewer').hidden = false;
 }
 function hideNoteViewer() { $('#noteViewer').hidden = true; }
+
+// Open a map referenced by a "map bubble". The reference is just a map id, so
+// resolve its owner (and confirm we can view it) via the map endpoint, then land
+// in the read-only viewer on that map. Handles deleted / no-longer-visible maps.
+async function openLinkedMap(mapId) {
+  if (!mapId) return;
+  try {
+    const data = await api('/api/maps/' + mapId);
+    const targetHash = '#/u/' + data.owner.username;
+    // If that owner's profile is already open, the hash won't change (so no
+    // hashchange/route fires) — switch the previewed map directly. Otherwise
+    // navigate and let openProfile pick up the requested map.
+    if (onProfileView() && location.hash === targetHash) {
+      await openProfileMap(mapId);
+    } else {
+      pendingProfileMapId = mapId;
+      location.hash = targetHash;
+    }
+  } catch (err) {
+    alert(err.status === 404 ? "That map isn't available (it may be private or deleted)." : err.message);
+  }
+}
 
 function initProfileViewer() {
   // read-only; a tap on a bubble focuses it (and pops its note if it has one);
@@ -3467,8 +3569,8 @@ function initProfileViewer() {
       if (id === null) { hideNoteViewer(); setProfileHint('Drag to pan · tap a bubble to focus it'); return; }
       const n = profileMap.getNode(id);
       if (!n) return;
-      // tapping a bubble that carries a note or link pops it open to read
-      if ((n.note && n.note.trim()) || n.link) showNoteViewer(n);
+      // tapping a bubble that carries a note, link, or map reference pops it open
+      if ((n.note && n.note.trim()) || n.link || n.mapRef) showNoteViewer(n);
       else { hideNoteViewer(); setProfileHint(`"${n.label || 'Untitled'}" · drag to pan`); }
     },
     isSheetOpen: () => !$('#pickMenu').hidden,
