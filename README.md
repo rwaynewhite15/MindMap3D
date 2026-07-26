@@ -26,6 +26,20 @@ and turns on **AI generation** simply by setting environment variables.
   section** on every map, with comment counts shown on home-feed cards.
 - **Tidier bubble labels** — long labels shrink to fit and never break a word mid-word.
 
+## Why people choose MindMapShare
+
+- **Visual thinking that stays organized**: map ideas as bubbles, connect them with weighted links, and group concepts into clear structures.
+- **Outline + canvas together**: switch between freeform spatial thinking and a collapsible text outline for fast navigation and editing.
+- **Built for collaboration**: share maps with friends, co-edit in real time, and keep context with integrated chat and attributed activity history.
+- **Privacy that matches real use**: every map can be Public, Friends only, or Private, with owner-controlled edit permissions.
+- **Social discovery baked in**: follow creators, browse profiles, and discover fresh public maps from the home feed.
+- **From zero to first draft quickly**: generate a starter map from a prompt (when AI is enabled), then refine it with your team.
+
+## Product Tour
+
+These screenshots provide a customer-facing walkthrough of the full product experience.
+The screenshots are embedded directly throughout the feature sections below.
+
 ## Run it locally
 
 Requires [Node.js](https://nodejs.org) 20+.
@@ -45,6 +59,11 @@ allow Node.js through Windows Firewall on private networks.) The layout is
 mobile-friendly: on small screens the top navigation collapses into a **☰ hamburger
 menu**.
 
+![Mobile navigation on phone](public/screenshots/13-mobile-hamburger-menu.png)
+
+This view demonstrates that map browsing and navigation remain comfortable on a phone,
+not just on desktop.
+
 ## What you can do
 
 ### Accounts, profiles & the social side
@@ -62,6 +81,16 @@ menu**.
   owner can moderate any of them. Distinct from the editor-only collaboration chat.
 - **Guests can see likes & comments** — signed-out visitors viewing a public map see its
   like count and can read the comments; posting a comment or liking prompts them to sign in.
+
+![Home feed with discovery](public/screenshots/01-home-feed.png)
+
+The home feed keeps users engaged with fresh activity from people they care about while
+still helping them discover new public maps.
+
+![Browse and profile pages](public/screenshots/12-browse-and-profile.png)
+
+Browse and profile views make MindMapShare feel like a network, not just a single-player
+tool.
 
 ### Multiple maps per account
 - Keep several independent maps (e.g. "Work", "Novel ideas", "Trip planning"). Switch
@@ -83,6 +112,11 @@ menu**.
   to the linked map. Great for splitting a big idea into linked sub-maps, building an index
   map, or pointing at maps you follow.
 
+![Map switcher and create new map](public/screenshots/04-map-switcher-and-new-map.png)
+
+This flow highlights a key product advantage: one account can manage many distinct maps
+without clutter or context switching pain.
+
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
   on your profile, not counted in your totals in Browse, and it can't be opened by URL —
@@ -90,6 +124,11 @@ menu**.
 - A **Public** map is viewable (read-only) by everyone; a **Private** map is yours alone
   (plus anyone you've granted edit access).
 - Being able to *view* a map never implies being able to *edit* it — see below.
+
+![Per-map privacy controls](public/screenshots/08-map-privacy-controls.png)
+
+Privacy is configured at the map level, so users can publish some ideas, keep others to
+friends, and keep sensitive work private.
 
 ### Building a map
 - **2D bubbles** — a flat, pannable canvas. Tap a bubble to select it, tap again to
@@ -124,6 +163,35 @@ menu**.
   stack up, hover for a second (or double-tap on mobile) for a dropdown listing
   everything under the cursor.
 
+![Map canvas overview](public/screenshots/02-map-canvas-overview.png)
+
+The core canvas emphasizes clarity: users can quickly see structure, relationships, and
+priority at a glance.
+
+![Create bubbles and weighted links](public/screenshots/05-create-bubble-and-link.png)
+
+Fast creation and mind map linking make brainstorming feel fluid while preserving signal
+about which connections matter most.
+
+![Groups for structure](public/screenshots/06-groups-and-structure.png)
+
+Groups help large maps stay readable by clustering related ideas without sacrificing
+cross-group connections.
+
+![Notes, links, and task states](public/screenshots/07-notes-links-and-tasks.png)
+
+Notes, links, and task markers turn a visual map into an actionable workspace.
+
+![Outline panel open](public/screenshots/03-outline-open.png)
+
+The Outline view complements the canvas for users who prefer hierarchy and quick scanning
+of nested ideas.
+
+![Outline export options](public/screenshots/15-outline-export-options.png)
+
+Export options make maps portable for docs, planning workflows, and external knowledge
+tools.
+
 ### Sharing & real-time collaboration
 - **Grant edit access** to friends from **Map ▾ → "Who can edit this map?"**. Maps shared
   with you appear in your map dropdown under **Shared with me**.
@@ -140,6 +208,25 @@ menu**.
   added/edited/removed, tasks completed/reopened, moves in and out of groups, and
   connection changes. The history saves with the map and survives restarts; an unread
   badge appears when new activity arrives while the panel is closed.
+
+![Share map edit access](public/screenshots/09-share-edit-access.png)
+
+Sharing permissions give owners confidence: collaboration is easy to grant and easy to
+control.
+
+![Live collaboration with chat](public/screenshots/10-live-collaboration-chat.png)
+
+Real-time updates plus chat reduce coordination overhead for teams working in parallel.
+
+![AI map generation flow](public/screenshots/14-ai-map-generation.png)
+
+AI generation accelerates the blank-page moment by producing a first draft users can
+immediately refine. You can also have the AI add to your ideas and build off them.
+
+![Read-only preview experience](public/screenshots/11-read-only-preview.png)
+
+Read-only previews let creators publish and present maps safely without exposing edit
+controls.
 
   > Concurrency is **last-write-wins** — great for people working on different parts of a
   > map at once; two people editing the *same* bubble in the same instant can overwrite
