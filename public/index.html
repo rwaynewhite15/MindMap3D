@@ -173,12 +173,33 @@
       <button id="btnPEdit" class="tb primary-tb" hidden title="Open this map in the editor">✎ Edit this map</button>
       <button id="btnPLike" class="tb" title="Like this map">♡ Like</button>
       <button id="btnPClone" class="tb" hidden title="Save your own editable copy of this map">⎘ Save a copy</button>
+      <button id="btnPComments" class="tb" title="Comments" hidden>💬 Comments</button>
       <button id="btnPOutline" class="tb" title="Show the map as a collapsible outline">☰ Outline</button>
       <span class="tb-sep"></span>
       <button id="btnPCenter" class="tb icon" title="Reset the view">⌖</button>
       <button id="btnPZoomOut" class="tb icon" title="Zoom out">−</button>
       <button id="btnPZoomIn" class="tb icon" title="Zoom in">+</button>
     </div>
+
+    <!-- comment section: any signed-in viewer can read + post -->
+    <aside id="commentsPanel" class="chat-panel comments-panel" hidden>
+      <div class="chat-head">
+        <div class="chat-head-text">
+          <div class="chat-title">Comments</div>
+          <div id="commentsCount" class="chat-presence muted"></div>
+        </div>
+        <div class="chat-head-btns">
+          <button id="btnCommentsClose" class="tb icon" title="Close" aria-label="Close comments">✕</button>
+        </div>
+      </div>
+      <div class="chat-body">
+        <div id="commentsLog" class="chat-log"></div>
+        <form id="commentsForm" class="chat-compose">
+          <input id="commentsInput" maxlength="1000" placeholder="Add a comment…" autocomplete="off">
+          <button type="submit" class="tb primary-tb">Post</button>
+        </form>
+      </div>
+    </aside>
   </section>
 
   <!-- outline: the active map as a collapsible text tree (shared by the editor

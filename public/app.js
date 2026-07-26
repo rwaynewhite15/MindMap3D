@@ -1354,6 +1354,7 @@ function show(name) {
   }
   if (myMap) { name === 'map' ? myMap.start() : myMap.stop(); }
   if (profileMap) { name === 'profile' ? profileMap.start() : profileMap.stop(); }
+  if (name !== 'profile') closeComments(); // the comment panel belongs to the profile viewer
 }
 
 function route() {
@@ -3134,6 +3135,7 @@ function timeAgo(ts) {
 }
 
 let pendingProfileMapId = null; // a specific map a feed card asked to open next
+let pendingOpenComments = false; // a feed card asked to open that map's comments
 
 function feedCard(item) {
   const owner = item.owner || {};
@@ -3187,11 +3189,25 @@ function feedCard(item) {
     } catch (err) { alert(err.message); }
     like.disabled = false;
   });
+  // comment count, shown right beside the likes; tapping opens the map with its
+  // comment panel already open (signed-in only — comments are a signed-in feature)
+  const comments = document.createElement('button');
+  comments.className = 'comment-count';
+  comments.title = 'Comments';
+  comments.innerHTML = '💬 <span>' + (item.commentCount || 0) + '</span>';
+  comments.addEventListener('click', e => {
+    e.stopPropagation();
+    pendingProfileMapId = item.id;
+    pendingOpenComments = true;
+    location.hash = '#/u/' + owner.username;
+  });
   const open = document.createElement('button');
   open.className = 'tb';
   open.textContent = 'Open map →';
   open.addEventListener('click', openMap);
-  foot.appendChild(like); foot.appendChild(open);
+  foot.appendChild(like);
+  if (me) foot.appendChild(comments); // anonymous visitors can't see/post comments
+  foot.appendChild(open);
 
   card.appendChild(head); card.appendChild(body); card.appendChild(foot);
   return card;
@@ -3311,6 +3327,7 @@ let viewingSelf = false;
 async function openProfile(username) {
   viewingSelf = !!(me && username === me.username);
   show('profile');
+  closeComments(); // start each profile with the comment panel reset
   try {
     const data = await api('/api/users/' + username);
     currentProfile = data;
@@ -3334,7 +3351,11 @@ async function openProfile(username) {
       pendingProfileMapId = null;
       await openProfileMap(wanted);
       profileMap.start();
+      // a feed card's comment count asks to open the comment panel straight away
+      if (pendingOpenComments) openComments();
+      pendingOpenComments = false;
     } else {
+      pendingOpenComments = false;
       $('#profileLocked').hidden = false;
       $('#profileToolbar').hidden = true;
       $('#profileHint').hidden = true;
@@ -3393,6 +3414,8 @@ async function openProfileMap(id) {
   renderProfileLike(!!data.isOwner);
   // any signed-in user can save their own editable copy of a map they can view
   $('#btnPClone').hidden = !me;
+  updateCommentsButton(data.commentCount || 0);
+  if (commentsOpen) loadComments(); // switching map tabs reloads the open panel
   refreshOutlineIfOpen(); // keep an open outline in sync when switching map tabs
 }
 
@@ -3434,6 +3457,128 @@ $('#btnPClone').addEventListener('click', async () => {
     btn.disabled = false;
     btn.textContent = prev;
   }
+});
+
+/* ---------- comments (read-only map viewer) ----------
+   A public comment section on the previewed map. Any signed-in viewer can read
+   and post — including the owner viewing their own map. Authors can delete their
+   own comments; the owner can moderate any. Loaded on demand when the panel is
+   opened, and after switching map tabs while it's open. */
+let commentItems = [];
+let commentsCanModerate = false;
+let commentsOpen = false;
+let commentsReqMapId = null; // guards against out-of-order responses when switching maps
+
+function updateCommentsButton(count) {
+  const btn = $('#btnPComments');
+  // comments are a signed-in feature; anonymous visitors don't see the button
+  if (!me) { btn.hidden = true; return; }
+  btn.hidden = false;
+  btn.textContent = '💬 Comments' + (count ? ' ' + count : '');
+}
+
+function commentEl(c) {
+  const who = c.actor ? (c.actor.name || '@' + c.actor.username) : 'Someone';
+  const wrap = document.createElement('div');
+  wrap.className = 'comment-item' + (c.mine ? ' mine' : '');
+  wrap.dataset.id = c.id;
+  const head = document.createElement('div');
+  head.className = 'comment-head';
+  head.innerHTML = `<span class="who">${escapeHtml(c.mine ? 'You' : who)}</span>` +
+    `<time>${fmtTime(c.ts)}</time>`;
+  if (c.mine || commentsCanModerate) {
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.title = 'Delete comment';
+    del.setAttribute('aria-label', 'Delete comment');
+    del.textContent = '✕';
+    del.addEventListener('click', () => deleteComment(c.id));
+    head.appendChild(del);
+  }
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = c.text;
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function renderComments() {
+  const log = $('#commentsLog');
+  log.innerHTML = '';
+  $('#commentsCount').textContent = commentItems.length
+    ? commentItems.length + (commentItems.length === 1 ? ' comment' : ' comments') : '';
+  if (!commentItems.length) {
+    const d = document.createElement('div');
+    d.className = 'chat-empty';
+    d.textContent = 'No comments yet. Be the first to say something.';
+    log.appendChild(d);
+    return;
+  }
+  for (const c of commentItems) log.appendChild(commentEl(c));
+  log.scrollTop = log.scrollHeight;
+}
+
+async function loadComments() {
+  if (!profileMapId) return;
+  commentsReqMapId = profileMapId;
+  $('#commentsLog').innerHTML = '<div class="chat-empty">Loading…</div>';
+  try {
+    const data = await api('/api/maps/' + profileMapId + '/comments');
+    if (commentsReqMapId !== profileMapId) return; // a newer map was opened meanwhile
+    commentItems = data.comments || [];
+    commentsCanModerate = !!data.canModerate;
+    renderComments();
+    updateCommentsButton(commentItems.length);
+  } catch (err) {
+    $('#commentsLog').innerHTML = '<div class="chat-empty">' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+function openComments() {
+  if (!me || !profileMapId) return;
+  commentsOpen = true;
+  $('#commentsPanel').hidden = false;
+  $('#btnPComments').classList.add('active');
+  loadComments();
+  setTimeout(() => $('#commentsInput').focus(), 50);
+}
+
+function closeComments() {
+  commentsOpen = false;
+  $('#commentsPanel').hidden = true;
+  $('#btnPComments').classList.remove('active');
+}
+
+async function deleteComment(id) {
+  if (!profileMapId) return;
+  try {
+    await api('/api/maps/' + profileMapId + '/comments/' + id, 'DELETE');
+    commentItems = commentItems.filter(c => c.id !== id);
+    renderComments();
+    updateCommentsButton(commentItems.length);
+  } catch (err) { alert(err.message); }
+}
+
+$('#btnPComments').addEventListener('click', () => { commentsOpen ? closeComments() : openComments(); });
+$('#btnCommentsClose').addEventListener('click', closeComments);
+$('#commentsForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = $('#commentsInput');
+  const text = input.value.trim();
+  if (!text || !profileMapId) return;
+  input.disabled = true;
+  try {
+    const r = await api('/api/maps/' + profileMapId + '/comments', 'POST', { text });
+    input.value = '';
+    if (r.entry && !commentItems.some(c => c.id === r.entry.id)) {
+      commentItems.push(r.entry);
+      renderComments();
+      updateCommentsButton(commentItems.length);
+    }
+  } catch (err) { alert(err.message); }
+  input.disabled = false;
+  input.focus();
 });
 
 // jump from the read-only profile preview into the full editor

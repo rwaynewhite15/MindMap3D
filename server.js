@@ -355,12 +355,14 @@ function makeMap(name, visibility, seedLabel) {
     nodes: { n1: { id: 'n1', label: seedLabel || 'Me', pos: [0, 0, 0], r: 62, hue: 0, parentId: null, kind: 'bubble' } },
     edges: [],
     chat: [],
+    comments: [],
     createdAt: now,
     updatedAt: now,
   };
 }
 
 const MAX_CHAT = 400; // per map; oldest entries roll off
+const MAX_COMMENTS = 500; // per map; oldest entries roll off
 
 // Legacy users carry a single `map`; wrap it into the multi-map shape in place.
 function normalizeUser(u) {
@@ -383,6 +385,7 @@ function normalizeUser(u) {
     if (!m.nodes || typeof m.nodes !== 'object') m.nodes = {};
     if (!Array.isArray(m.edges)) m.edges = [];
     if (!Array.isArray(m.chat)) m.chat = [];
+    if (!Array.isArray(m.comments)) m.comments = []; // viewer comments (any signed-in viewer)
     if (!Array.isArray(m.likes)) m.likes = []; // user ids who liked this map
   }
   delete u.map;
@@ -423,6 +426,19 @@ function actorRef(u) {
   return { username: u.username, name: selfName(u) };
 }
 
+// A comment as sent to a client. The stored record keeps an authorId so we can
+// authorize deletes server-side; we never expose that id — instead we tell each
+// viewer whether the comment is theirs (`mine`), which is all the UI needs.
+function commentOut(c, viewer) {
+  return {
+    id: c.id,
+    actor: c.actor,
+    text: c.text,
+    ts: c.ts,
+    mine: !!viewer && c.authorId === viewer.id,
+  };
+}
+
 function canViewMapObj(m, owner, viewer) {
   const rel = relationTo(viewer, owner);
   if (rel === 'self') return true;
@@ -447,6 +463,7 @@ function mapMeta(m, extra) {
     nodeCount: Object.keys(m.nodes || {}).length,
     updatedAt: m.updatedAt || 0,
     likeCount: (m.likes || []).length,
+    commentCount: (m.comments || []).length,
   }, extra || {});
 }
 
@@ -1122,6 +1139,7 @@ async function handleApi(req, res, pathname) {
       owner: ownerRef(owner, user), isOwner, canEdit,
       likeCount: (m.likes || []).length,
       likedByMe: !!user && (m.likes || []).includes(user.id),
+      commentCount: (m.comments || []).length,
       present: presenceList(m.id),
     });
   }
@@ -1417,6 +1435,7 @@ async function handleApi(req, res, pathname) {
         edges: JSON.parse(JSON.stringify(m.edges || [])),
         anchorId: m.anchorId,
         chat: [],
+        comments: [],
         likes: [],
         createdAt: now,
         updatedAt: now,
@@ -1443,6 +1462,7 @@ async function handleApi(req, res, pathname) {
         edges: JSON.parse(JSON.stringify(m.edges || [])),
         anchorId: m.anchorId,
         chat: [],
+        comments: [],
         likes: [],
         createdAt: now,
         updatedAt: now,
@@ -1491,6 +1511,52 @@ async function handleApi(req, res, pathname) {
       }
       const eds = await store.getUsersByIds(m.editors);
       return sendJSON(res, 200, { editors: eds.map(e => ownerRef(e, user)) });
+    }
+    return sendJSON(res, 404, { error: 'Not found.' });
+  }
+
+  // --- comments: a public comment section on a map. Unlike the editor-only
+  //     chat/activity feed above, ANY signed-in viewer who can see the map may
+  //     read and post here — including the owner viewing their own map. Authors
+  //     can delete their own comments; the map owner can moderate any of them. ---
+  const commentMatch = pathname.match(/^\/api\/maps\/([A-Za-z0-9]{1,40})\/comments(?:\/([a-f0-9]{1,40}))?$/);
+  if (commentMatch) {
+    const mapId = commentMatch[1], commentId = commentMatch[2];
+    const owner = user.maps.some(m => m.id === mapId) ? user : await store.getUserByMapId(mapId);
+    const m = owner && owner.maps.find(x => x.id === mapId);
+    if (!m || !canViewMapObj(m, owner, user)) return sendJSON(res, 404, { error: 'No such map.' });
+    if (!Array.isArray(m.comments)) m.comments = [];
+    const isOwner = owner.id === user.id;
+
+    if (!commentId && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        comments: m.comments.map(c => commentOut(c, user)),
+        canPost: true,
+        canModerate: isOwner,
+      });
+    }
+    if (!commentId && req.method === 'POST') {
+      const body = await readBody(req);
+      const text = String(body.text || '').trim().slice(0, 1000);
+      if (!text) return sendJSON(res, 400, { error: 'Say something first.' });
+      // roll the oldest off once we hit the cap
+      if (m.comments.length >= MAX_COMMENTS) m.comments.splice(0, m.comments.length - MAX_COMMENTS + 1);
+      const entry = { id: newId(), authorId: user.id, actor: actorRef(user), text, ts: Date.now() };
+      m.comments.push(entry);
+      await store.saveUser(owner);
+      broadcast(mapId, 'comment', commentOut(entry, null)); // live to any open viewers
+      return sendJSON(res, 200, { entry: commentOut(entry, user) });
+    }
+    if (commentId && req.method === 'DELETE') {
+      const i = m.comments.findIndex(c => c.id === commentId);
+      if (i < 0) return sendJSON(res, 404, { error: 'No such comment.' });
+      if (!isOwner && m.comments[i].authorId !== user.id) {
+        return sendJSON(res, 403, { error: 'You can only delete your own comments.' });
+      }
+      m.comments.splice(i, 1);
+      await store.saveUser(owner);
+      broadcast(mapId, 'comment-del', { id: commentId });
+      return sendJSON(res, 200, { ok: true });
     }
     return sendJSON(res, 404, { error: 'Not found.' });
   }
