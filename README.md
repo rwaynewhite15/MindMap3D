@@ -13,6 +13,19 @@ It runs as a single small Node server with a no-build web front end. With no
 configuration your data lives in a JSON file; it upgrades to **Postgres** for production
 and turns on **AI generation** simply by setting environment variables.
 
+## What's new
+
+- **AI can expand a map, not just replace it** — the ✨ AI panel now offers **Add to map**
+  (reads your current map as context and adds new, connected ideas beside it — nothing
+  removed) alongside **Begin new map** (the original replace behavior).
+- **Guests can see likes & comments** — signed-out visitors viewing a public map see its
+  like count and can read comments; liking or commenting prompts them to sign in.
+- **Map bubbles can link to maps you follow** — the 🗺️ Map picker now lists both your own
+  maps and maps from people you follow.
+- **Save a copy** of any map you can view into your own maps, and a read-only **comment
+  section** on every map, with comment counts shown on home-feed cards.
+- **Tidier bubble labels** — long labels shrink to fit and never break a word mid-word.
+
 ## Run it locally
 
 Requires [Node.js](https://nodejs.org) 20+.
@@ -47,6 +60,8 @@ menu**.
 - **Comments** — any signed-in viewer can leave comments on a map from the read-only view
   (the 💬 Comments panel), the owner included. You can delete your own comments; the map
   owner can moderate any of them. Distinct from the editor-only collaboration chat.
+- **Guests can see likes & comments** — signed-out visitors viewing a public map see its
+  like count and can read the comments; posting a comment or liking prompts them to sign in.
 
 ### Multiple maps per account
 - Keep several independent maps (e.g. "Work", "Novel ideas", "Trip planning"). Switch
@@ -62,10 +77,11 @@ menu**.
   copy** clones the map (your own or someone else's public/friends' map) into your **My
   Maps** as a fresh, private, fully editable copy, then opens it in the editor. The
   original owner isn't affected; no editors, chat, or likes carry over.
-- **Map bubbles** — insert one of your **other maps as a bubble** with **🗺️ Map** in the
-  editor. It becomes an accent-ringed bubble (with a 🗺️ badge) labelled after that map;
-  when someone **viewing** the map taps it, they're taken to the linked map. Great for
-  splitting a big idea into linked sub-maps or building an index map.
+- **Map bubbles** — insert a map **as a bubble** with **🗺️ Map** in the editor — one of your
+  own maps, or a map from **someone you follow**. It becomes an accent-ringed bubble (with a
+  🗺️ badge) labelled after that map; when someone **viewing** the map taps it, they're taken
+  to the linked map. Great for splitting a big idea into linked sub-maps, building an index
+  map, or pointing at maps you follow.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
@@ -98,9 +114,12 @@ menu**.
   outline with the ⤓ button as **PDF** (a vector picture of the map plus the full
   outline, via the browser's Save-as-PDF), **Markdown**, **plain text**, or **OPML** (for
   other outliners).
-- **✨ AI** *(when enabled)* — describe a topic and AI generates a starting map of grouped,
-  connected ideas for you to refine. The button appears only when the server has an
-  Anthropic API key configured (see below).
+- **✨ AI** *(when enabled)* — describe what you want and AI builds grouped, connected ideas
+  for you to refine, two ways: **Begin new map** generates a fresh map that *replaces* the
+  current contents, or **Add to map** reads the existing map as context and *expands* it —
+  new ideas are added beside what's there (nothing removed) and can connect to your existing
+  bubbles. The button appears only when the server has an Anthropic API key configured (see
+  below).
 - **Overlap picker** — hovering highlights exactly what a click will select. When things
   stack up, hover for a second (or double-tap on mobile) for a dropdown listing
   everything under the cursor.
@@ -155,9 +174,11 @@ rate-limited per IP.
 
 Setting `ANTHROPIC_API_KEY` turns on the **✨ AI** button. Generation calls the
 [Anthropic API](https://console.anthropic.com) (`@anthropic-ai/sdk`, model
-`claude-opus-4-8`) to turn a prompt into groups, nodes, and weighted edges, which load
-into the current map. Without the key the app runs normally and the button stays hidden.
-Requests are rate-limited per user.
+`claude-opus-4-8`) to turn a prompt into groups, nodes, and weighted edges. **Begin new
+map** replaces the current map; **Add to map** sends the existing map as context and the
+model returns only additions, which are merged in beside your current content (new bubbles
+can even connect to existing ones). Without the key the app runs normally and the button
+stays hidden. Requests are rate-limited per user.
 
 ### Admin console
 

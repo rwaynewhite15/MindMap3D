@@ -2151,30 +2151,51 @@ function openAISheet() {
   const ta = $('#aiPrompt');
   requestAnimationFrame(() => ta.focus());
 }
-async function runAIGenerate() {
+// mode: 'add' expands the current map (nothing removed); 'replace' overwrites it.
+async function runAIGenerate(mode) {
   const prompt = $('#aiPrompt').value.trim();
   const err = $('#aiError');
   if (prompt.length < 3) { err.textContent = 'Describe the map you want in a few words.'; return; }
   if (!currentMapId) return;
-  const btn = $('#aiGenerate');
-  btn.disabled = true; btn.textContent = 'Generating…'; err.textContent = '';
+  // guard the destructive path: replacing a map that already has content
+  if (mode === 'replace') {
+    const hasContent = Object.keys(myMap.getMap().nodes || {}).length > 0;
+    if (hasContent && !confirm('Begin a new map? This replaces everything currently on this map.')) return;
+  }
+  const addBtn = $('#aiAdd'), repBtn = $('#aiReplace');
+  const active = mode === 'add' ? addBtn : repBtn;
+  const label = active.textContent;
+  addBtn.disabled = repBtn.disabled = true;
+  active.textContent = mode === 'add' ? 'Adding…' : 'Generating…';
+  err.textContent = '';
   try {
-    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt });
-    myMap.loadGenerated(data.map); // replaces contents, fits the view, and saves
+    if (mode === 'add') {
+      // make sure the server has our latest edits before it reads the map to expand
+      clearTimeout(saveTimer);
+      mapDirty = false;
+      await api('/api/maps/' + currentMapId, 'PUT', { map: myMap.getMap() });
+    }
+    const data = await api('/api/maps/' + currentMapId + '/generate', 'POST', { prompt, mode });
+    myMap.loadGenerated(data.map); // loads the (merged, for add) map, fits the view, and saves
     refreshToolbar();
     refreshOutlineIfOpen();
     closeSheets();
-    setHint('Generated a map ✨ — edit away, it saves automatically', false);
+    setHint(mode === 'add'
+      ? 'Added to your map ✨ — edit away, it saves automatically'
+      : 'Generated a map ✨ — edit away, it saves automatically', false);
   } catch (e) {
     err.textContent = e.message || 'Generation failed.';
   }
-  btn.disabled = false; btn.textContent = 'Generate';
+  addBtn.disabled = repBtn.disabled = false;
+  active.textContent = label;
 }
 $('#aiCancel').addEventListener('click', () => closeSheets());
-$('#aiGenerate').addEventListener('click', runAIGenerate);
+$('#aiAdd').addEventListener('click', () => runAIGenerate('add'));
+$('#aiReplace').addEventListener('click', () => runAIGenerate('replace'));
 $('#aiPrompt').addEventListener('keydown', e => {
   e.stopPropagation();
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate();
+  // Cmd/Ctrl+Enter runs the safe, non-destructive "add" action
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runAIGenerate('add');
   if (e.key === 'Escape') closeSheets();
 });
 
@@ -2399,31 +2420,55 @@ $('#newMapName').addEventListener('keydown', e => {
 });
 
 /* ---------- insert-a-map-as-bubble sheet ---------- */
-// Lists my other maps; picking one drops a bubble that links to it into the map
-// I'm editing. Tapping that bubble in the read-only view opens the linked map.
-function openMapLinkSheet() {
+// Lists my other maps and maps from people I follow; picking one drops a bubble
+// that links to it into the map I'm editing. Tapping that bubble in the read-only
+// view opens the linked map.
+async function openMapLinkSheet() {
   const list = $('#mapLinkList');
+  list.innerHTML = '<div class="muted">Loading…</div>';
+  openSheet('#sheetMapLink');
+  // maps from people I follow (best-effort — the picker still works without them)
+  let followed = [];
+  try { const d = await api('/api/following/maps'); followed = d.maps || []; } catch { /* ignore */ }
+
+  const pick = (mapId, name) => {
+    myMap.addMapLinkBubble(mapId, name || 'Map'); // its changed() triggers the save
+    closeSheets();
+    refreshToolbar();
+  };
+  const addRow = (label, sub) => {
+    const b = document.createElement('button');
+    b.className = 'tb';
+    b.innerHTML = escapeHtml(label) + (sub ? ' <span class="muted">' + escapeHtml(sub) + '</span>' : '');
+    list.appendChild(b);
+    return b;
+  };
+  const section = title => {
+    const h = document.createElement('div');
+    h.className = 'section-title';
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
   list.innerHTML = '';
-  const others = mapsMine.filter(m => m.id !== currentMapId);
-  if (!others.length) {
-    const p = document.createElement('div');
-    p.className = 'muted';
-    p.textContent = 'You have no other maps yet. Create another map first, then insert it here.';
-    list.appendChild(p);
-  } else {
-    for (const m of others) {
-      const b = document.createElement('button');
-      b.className = 'tb';
-      b.textContent = m.name || 'Untitled map';
-      b.addEventListener('click', () => {
-        myMap.addMapLinkBubble(m.id, m.name || 'Map'); // its changed() triggers the save
-        closeSheets();
-        refreshToolbar();
-      });
-      list.appendChild(b);
+  const mine = mapsMine.filter(m => m.id !== currentMapId);
+  if (mine.length) {
+    section('Your maps');
+    for (const m of mine) addRow(m.name || 'Untitled map').addEventListener('click', () => pick(m.id, m.name || 'Map'));
+  }
+  if (followed.length) {
+    section('Maps you follow');
+    for (const m of followed) {
+      addRow(m.name || 'Untitled map', '@' + m.owner.username)
+        .addEventListener('click', () => pick(m.id, m.name || 'Map'));
     }
   }
-  openSheet('#sheetMapLink');
+  if (!mine.length && !followed.length) {
+    const p = document.createElement('div');
+    p.className = 'muted';
+    p.textContent = 'No other maps yet — create another map, or follow people to link to their maps.';
+    list.appendChild(p);
+  }
 }
 $('#mapLinkCancel').addEventListener('click', () => closeSheets());
 
@@ -3421,14 +3466,17 @@ async function openProfileMap(id) {
 
 function renderProfileLike(isOwner) {
   const btn = $('#btnPLike');
-  // you can't like your own map, and anonymous visitors can't like at all
-  if (isOwner || !me) { btn.hidden = true; return; }
+  if (isOwner) { btn.hidden = true; return; } // you don't like your own map
   btn.hidden = false;
   btn.classList.toggle('liked', profileLike.liked);
   btn.textContent = (profileLike.liked ? '♥ ' : '♡ ') + profileLike.count;
+  // guests see the like count but can't toggle it
+  btn.classList.toggle('readonly', !me);
+  btn.title = me ? 'Like this map' : 'Sign in to like this map';
 }
 $('#btnPLike').addEventListener('click', async () => {
   if (!profileMapId) return;
+  if (!me) { location.hash = '#/signin'; return; } // guests: prompt sign-in
   $('#btnPLike').disabled = true;
   try {
     const r = await api('/api/maps/' + profileMapId + '/like', 'POST');
@@ -3471,10 +3519,16 @@ let commentsReqMapId = null; // guards against out-of-order responses when switc
 
 function updateCommentsButton(count) {
   const btn = $('#btnPComments');
-  // comments are a signed-in feature; anonymous visitors don't see the button
-  if (!me) { btn.hidden = true; return; }
+  // everyone (guests included) can read comments; only signed-in users can post
   btn.hidden = false;
   btn.textContent = '💬 Comments' + (count ? ' ' + count : '');
+}
+
+// Show the compose box only to signed-in users; guests get a sign-in prompt.
+function applyCommentCompose() {
+  const canPost = !!me;
+  $('#commentsForm').hidden = !canPost;
+  $('#commentsSignin').hidden = canPost;
 }
 
 function commentEl(c) {
@@ -3536,12 +3590,13 @@ async function loadComments() {
 }
 
 function openComments() {
-  if (!me || !profileMapId) return;
+  if (!profileMapId) return; // guests can read, signed-in users can also post
   commentsOpen = true;
   $('#commentsPanel').hidden = false;
   $('#btnPComments').classList.add('active');
+  applyCommentCompose();
   loadComments();
-  setTimeout(() => $('#commentsInput').focus(), 50);
+  if (me) setTimeout(() => $('#commentsInput').focus(), 50);
 }
 
 function closeComments() {
@@ -3564,6 +3619,7 @@ $('#btnPComments').addEventListener('click', () => { commentsOpen ? closeComment
 $('#btnCommentsClose').addEventListener('click', closeComments);
 $('#commentsForm').addEventListener('submit', async e => {
   e.preventDefault();
+  if (!me) { location.hash = '#/signin'; return; }
   const input = $('#commentsInput');
   const text = input.value.trim();
   if (!text || !profileMapId) return;

@@ -198,6 +198,7 @@
           <input id="commentsInput" maxlength="1000" placeholder="Add a comment…" autocomplete="off">
           <button type="submit" class="tb primary-tb">Post</button>
         </form>
+        <a id="commentsSignin" class="comments-signin" href="#/signin" hidden>Sign in to join the conversation →</a>
       </div>
     </aside>
   </section>
@@ -457,13 +458,14 @@
 </div>
 
 <div id="sheetAI" class="sheet" hidden>
-  <div class="sheet-title">✨ Generate a mind map</div>
-  <div class="muted" style="margin-bottom:8px">Describe a topic and AI will build a starting map. This replaces the current map's contents.</div>
+  <div class="sheet-title">✨ Mind map with AI</div>
+  <div class="muted" style="margin-bottom:8px">Describe what you want. <b>Add to map</b> keeps everything already on this map and expands it with new, connected ideas. <b>Begin new map</b> replaces the current map's contents.</div>
   <textarea id="aiPrompt" maxlength="600" rows="3" placeholder="e.g. A launch plan for a coffee subscription startup"></textarea>
   <div class="form-error" id="aiError"></div>
   <div class="sheet-row">
     <button id="aiCancel" class="tb">Cancel</button>
-    <button id="aiGenerate" class="tb primary-tb">Generate</button>
+    <button id="aiReplace" class="tb">✨ Begin new map</button>
+    <button id="aiAdd" class="tb primary-tb">➕ Add to map</button>
   </div>
 </div>
 
@@ -532,7 +534,7 @@
 
 <div id="sheetMapLink" class="sheet" hidden>
   <div class="sheet-title">Insert a map as a bubble</div>
-  <div class="muted" style="margin-bottom:8px">Pick one of your other maps. A bubble linking to it is added here; tapping that bubble in the view opens the linked map.</div>
+  <div class="muted" style="margin-bottom:8px">Pick one of your maps, or a map from someone you follow. A bubble linking to it is added here; tapping that bubble in the view opens the linked map.</div>
   <div id="mapLinkList" class="group-options"></div>
   <div class="sheet-row">
     <button id="mapLinkCancel" class="tb">Cancel</button>
