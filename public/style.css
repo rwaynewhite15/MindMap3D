@@ -571,6 +571,18 @@ button.primary {
 }
 .comment-head .del:hover { color: var(--danger); }
 .comment-item .body { color: var(--ink); word-break: break-word; white-space: pre-wrap; }
+/* guest prompt shown in place of the compose box */
+.comments-signin {
+  display: block;
+  padding: 12px 14px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+  text-align: center;
+}
+.comments-signin:hover { text-decoration: underline; }
 
 .hint {
   position: absolute;
@@ -922,6 +934,8 @@ button.primary {
 }
 .comment-count:hover { color: var(--accent); border-color: var(--accent); }
 .tb.liked { color: #F07A8F; border-color: #F07A8F; }
+/* a read-only like count (guests / the owner's own map): shown, not clickable */
+.tb.readonly { cursor: default; }
 
 /* ---------------- profile view ---------------- */
 #profileBar {

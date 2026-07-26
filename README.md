@@ -47,6 +47,8 @@ menu**.
 - **Comments** — any signed-in viewer can leave comments on a map from the read-only view
   (the 💬 Comments panel), the owner included. You can delete your own comments; the map
   owner can moderate any of them. Distinct from the editor-only collaboration chat.
+- **Guests can see likes & comments** — signed-out visitors viewing a public map see its
+  like count and can read the comments; posting a comment or liking prompts them to sign in.
 
 ### Multiple maps per account
 - Keep several independent maps (e.g. "Work", "Novel ideas", "Trip planning"). Switch
@@ -62,10 +64,11 @@ menu**.
   copy** clones the map (your own or someone else's public/friends' map) into your **My
   Maps** as a fresh, private, fully editable copy, then opens it in the editor. The
   original owner isn't affected; no editors, chat, or likes carry over.
-- **Map bubbles** — insert one of your **other maps as a bubble** with **🗺️ Map** in the
-  editor. It becomes an accent-ringed bubble (with a 🗺️ badge) labelled after that map;
-  when someone **viewing** the map taps it, they're taken to the linked map. Great for
-  splitting a big idea into linked sub-maps or building an index map.
+- **Map bubbles** — insert a map **as a bubble** with **🗺️ Map** in the editor — one of your
+  own maps, or a map from **someone you follow**. It becomes an accent-ringed bubble (with a
+  🗺️ badge) labelled after that map; when someone **viewing** the map taps it, they're taken
+  to the linked map. Great for splitting a big idea into linked sub-maps, building an index
+  map, or pointing at maps you follow.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
