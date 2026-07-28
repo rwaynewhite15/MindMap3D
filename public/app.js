@@ -1348,6 +1348,7 @@ function show(name) {
   $('#navToggle').hidden = name === 'auth';
   // auth-only nav links are hidden for anonymous visitors; show a Sign in link instead
   for (const a of document.querySelectorAll('#mainNav a[data-auth]')) a.hidden = !me;
+  $('#notifWrap').hidden = !me; // the bell lives outside the nav; toggle it too
   $('#navSignIn').hidden = !!me;
   for (const a of document.querySelectorAll('#mainNav a')) {
     a.classList.toggle('active', a.dataset.nav === name);
@@ -3403,6 +3404,235 @@ function updateBadge(n) {
   b.textContent = n;
 }
 
+/* ================================================================
+   Notifications (bell feed + Web Push)
+   ----------------------------------------------------------------
+   A per-user SSE stream feeds a bell dropdown live; the same events also
+   arrive as OS-level Web Push (when the user opts in) via /sw.js.
+================================================================ */
+let notifItems = [];      // newest-first
+let notifUnread = 0;
+let notifSource = null;   // EventSource for the bell stream
+let notifPanelOpen = false;
+let vapidKey = null;      // server's public VAPID key, or null when push is off
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function updateNotifBadge() {
+  const b = $('#notifBadge');
+  b.hidden = !notifUnread;
+  b.textContent = notifUnread > 99 ? '99+' : notifUnread;
+}
+
+function relTime(ts) {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24); if (d < 7) return d + 'd ago';
+  return new Date(ts).toLocaleDateString();
+}
+
+function notifActorName(n) {
+  return (n.actor && (n.actor.name || '@' + n.actor.username)) || 'Someone';
+}
+
+function renderNotifs() {
+  const list = $('#notifList');
+  list.innerHTML = '';
+  if (!notifItems.length) {
+    const e = document.createElement('div');
+    e.className = 'notif-empty';
+    e.textContent = 'No notifications yet.';
+    list.appendChild(e);
+    return;
+  }
+  for (const n of notifItems) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'notif-item' + (n.read ? '' : ' unread');
+
+    const verb = n.kind === 'comment' ? ' commented on ' : ' chatted in ';
+    const title = document.createElement('div');
+    title.className = 'notif-title';
+    const who = document.createElement('b'); who.textContent = notifActorName(n);
+    const mapb = document.createElement('b'); mapb.textContent = '“' + (n.mapName || 'a map') + '”';
+    title.append(who, verb, mapb);
+    item.appendChild(title);
+
+    if (n.text) {
+      const p = document.createElement('div');
+      p.className = 'notif-preview';
+      p.textContent = n.text;
+      item.appendChild(p);
+    }
+    const t = document.createElement('div');
+    t.className = 'notif-time';
+    t.textContent = relTime(n.ts);
+    item.appendChild(t);
+
+    item.addEventListener('click', () => openNotifTarget(n));
+    list.appendChild(item);
+  }
+}
+
+// Jump to the map the notification is about (reuses the profile map viewer).
+function openNotifTarget(n) {
+  closeNotifPanel();
+  pendingProfileMapId = n.mapId;
+  const target = '#/u/' + n.mapOwner;
+  if (location.hash === target) openProfile(n.mapOwner); // same hash won't refire route()
+  else location.hash = target;
+}
+
+async function loadNotifications() {
+  try {
+    const data = await api('/api/notifications');
+    notifItems = data.notifications || [];
+    notifUnread = data.unread || 0;
+    updateNotifBadge();
+    if (notifPanelOpen) renderNotifs();
+  } catch { /* not signed in */ }
+}
+
+function connectNotifyStream() {
+  if (notifSource) return;
+  try {
+    notifSource = new EventSource('/api/notifications/stream');
+    notifSource.addEventListener('notify', e => {
+      let n; try { n = JSON.parse(e.data); } catch { return; }
+      notifItems.unshift(n);
+      if (notifItems.length > 100) notifItems.pop();
+      if (!n.read) { notifUnread++; updateNotifBadge(); }
+      if (notifPanelOpen) renderNotifs();
+    });
+    // EventSource reconnects on its own; nothing to do on error
+  } catch { /* SSE unavailable */ }
+}
+
+function disconnectNotifyStream() {
+  if (notifSource) { notifSource.close(); notifSource = null; }
+}
+
+function openNotifPanel() {
+  notifPanelOpen = true;
+  $('#notifPanel').hidden = false;
+  $('#notifBell').setAttribute('aria-expanded', 'true');
+  renderNotifs();
+  refreshPushButton();
+  if (notifUnread) {
+    // opening the bell clears the unread count
+    notifUnread = 0; updateNotifBadge();
+    for (const n of notifItems) n.read = true;
+    api('/api/notifications/read', 'POST', {}).catch(() => {});
+    renderNotifs();
+  }
+}
+function closeNotifPanel() {
+  notifPanelOpen = false;
+  $('#notifPanel').hidden = true;
+  $('#notifBell').setAttribute('aria-expanded', 'false');
+}
+function toggleNotifPanel() { notifPanelOpen ? closeNotifPanel() : openNotifPanel(); }
+
+function startNotifications() {
+  loadNotifications();
+  connectNotifyStream();
+  initPushState();
+}
+function stopNotifications() {
+  disconnectNotifyStream();
+  notifItems = []; notifUnread = 0;
+  updateNotifBadge();
+  closeNotifPanel();
+}
+
+/* ---- Web Push opt-in ---- */
+function urlBase64ToUint8Array(base64) {
+  const padding = '='.repeat((4 - base64.length % 4) % 4);
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+async function registerSW() {
+  if (!pushSupported) return null;
+  try { return await navigator.serviceWorker.register('/sw.js'); }
+  catch { return null; }
+}
+
+async function initPushState() {
+  try {
+    const v = await api('/api/push/vapid');
+    vapidKey = v.enabled ? v.key : null;
+  } catch { vapidKey = null; }
+  if (pushSupported && vapidKey) {
+    await registerSW();
+    // already granted on a prior visit? make sure the server still has a sub
+    if (Notification.permission === 'granted') ensureSubscribed().catch(() => {});
+  }
+  refreshPushButton();
+}
+
+function refreshPushButton() {
+  const btn = $('#notifPushBtn');
+  const state = $('#notifPushState');
+  if (!btn || !state) return;
+  if (!pushSupported || !vapidKey) {
+    btn.hidden = true;
+    state.textContent = pushSupported
+      ? 'Live alerts on. (Device push isn’t set up on this server.)'
+      : 'Live alerts on. (This browser can’t do device push.)';
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    btn.hidden = true; state.textContent = 'Push notifications are on.';
+  } else if (Notification.permission === 'denied') {
+    btn.hidden = true; state.textContent = 'Push is blocked in your browser settings.';
+  } else {
+    btn.hidden = false; state.textContent = '';
+  }
+}
+
+async function ensureSubscribed() {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    });
+  }
+  await api('/api/push/subscribe', 'POST', { subscription: sub.toJSON() });
+}
+
+async function enablePush() {
+  const state = $('#notifPushState');
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { refreshPushButton(); return; }
+    await registerSW();
+    await ensureSubscribed();
+    refreshPushButton();
+  } catch (err) {
+    state.textContent = 'Could not enable push: ' + err.message;
+  }
+}
+
+// Bell wiring (elements exist by the time app.js runs).
+$('#notifBell').addEventListener('click', e => { e.stopPropagation(); toggleNotifPanel(); });
+$('#notifPanel').addEventListener('click', e => e.stopPropagation()); // clicks inside stay open
+$('#notifPushBtn').addEventListener('click', e => { e.stopPropagation(); enablePush(); });
+$('#notifClear').addEventListener('click', async e => {
+  e.stopPropagation();
+  notifItems = []; notifUnread = 0; updateNotifBadge(); renderNotifs();
+  try { await api('/api/notifications', 'DELETE'); } catch { /* ignore */ }
+});
+document.addEventListener('click', e => {
+  if (notifPanelOpen && !$('#notifWrap').contains(e.target)) closeNotifPanel();
+});
+
 async function refreshBadge() {
   try {
     const data = await api('/api/friends');
@@ -3871,6 +4101,7 @@ $('#btnLogout').addEventListener('click', async () => {
   flushSave();
   stopLive();
   closeChat();
+  stopNotifications();
   try { await api('/api/logout', 'POST'); } catch { /* ignore */ }
   me = null;
   mapsMine = [];
@@ -3944,6 +4175,7 @@ async function afterSignIn() {
   loadChatLayout();
   await loadMaps();
   refreshBadge();
+  startNotifications();
   location.hash = '#/home';
   route();
 }
@@ -3998,6 +4230,7 @@ $('#formRegister').addEventListener('submit', async e => {
     loadChatLayout();
     await loadMaps();
     refreshBadge();
+    startNotifications();
   } catch { me = null; }
   route();
 })();
