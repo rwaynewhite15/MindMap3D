@@ -12,6 +12,22 @@
 
 <header id="topbar" hidden>
   <div id="logo">MindMap<span>Share</span> <em>Social Mind Maps</em></div>
+  <div id="notifWrap" data-auth hidden>
+    <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
+      🔔<span id="notifBadge" class="badge" hidden></span>
+    </button>
+    <div id="notifPanel" hidden>
+      <div class="notif-head">
+        <span>Notifications</span>
+        <button id="notifClear" class="notif-clear" type="button">Clear</button>
+      </div>
+      <div id="notifList" class="notif-list"></div>
+      <div class="notif-foot">
+        <button id="notifPushBtn" class="notif-push" type="button" hidden>Enable push notifications</button>
+        <span id="notifPushState" class="notif-pushstate"></span>
+      </div>
+    </div>
+  </div>
   <button id="navToggle" class="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mainNav" hidden>
     <span></span><span></span><span></span>
   </button>

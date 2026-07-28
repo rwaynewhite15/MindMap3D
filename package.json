@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.113.0",
-    "pg": "^8.16.0"
+    "pg": "^8.16.0",
+    "web-push": "^3.6.7"
   }
 }

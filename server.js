@@ -64,6 +64,8 @@ function pgStore() {
     requestsOut: r.requests_out,
     following: r.following,
     followers: r.followers,
+    notifications: r.notifications,
+    pushSubs: r.push_subs,
     map: r.map,
     maps: r.maps,
   });
@@ -92,6 +94,9 @@ function pgStore() {
       // asymmetric follow graph (distinct from mutual friends)
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS following JSONB NOT NULL DEFAULT '[]'`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS followers JSONB NOT NULL DEFAULT '[]'`);
+      // notification bell feed + Web Push subscriptions
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications JSONB NOT NULL DEFAULT '[]'`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_subs JSONB NOT NULL DEFAULT '[]'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -143,24 +148,27 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)`,
+                            following, followers, notifications, push_subs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
-         JSON.stringify(u.following || []), JSON.stringify(u.followers || [])]);
+         JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
-                          following=$10::jsonb, followers=$11::jsonb
+                          following=$10::jsonb, followers=$11::jsonb,
+                          notifications=$12::jsonb, push_subs=$13::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
-         JSON.stringify(u.following || []), JSON.stringify(u.followers || [])]);
+         JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -363,12 +371,16 @@ function makeMap(name, visibility, seedLabel) {
 
 const MAX_CHAT = 400; // per map; oldest entries roll off
 const MAX_COMMENTS = 500; // per map; oldest entries roll off
+const MAX_NOTIFS = 100; // per user; oldest entries roll off
+const MAX_PUSH_SUBS = 20; // per user; browsers/devices they enabled push on
 
 // Legacy users carry a single `map`; wrap it into the multi-map shape in place.
 function normalizeUser(u) {
   if (!u) return u;
   if (!Array.isArray(u.following)) u.following = [];
   if (!Array.isArray(u.followers)) u.followers = [];
+  if (!Array.isArray(u.notifications)) u.notifications = []; // bell feed (chat/comment alerts)
+  if (!Array.isArray(u.pushSubs)) u.pushSubs = []; // Web Push subscriptions
   if (!Array.isArray(u.maps)) u.maps = [];
   if (!u.maps.length) {
     const m = makeMap('My Map', u.visibility, u.displayName || u.username);
@@ -636,6 +648,144 @@ function startLiveStream(req, res, mapId, who) {
   };
   req.on('close', cleanup);
   req.on('error', cleanup);
+}
+
+/* ================================================================
+   Notifications + Web Push
+   ----------------------------------------------------------------
+   Two delivery channels for "someone chatted / commented" alerts:
+     1. an in-app bell, fed live over a per-USER SSE stream (notifyHub)
+        and backed by a stored user.notifications[] feed, and
+     2. real OS-level Web Push to any browsers the user opted in on
+        (user.pushSubs[]), so closed tabs still get pinged.
+   Recipients of a map event = the owner + every editor + everyone who
+   has previously commented on that map, minus whoever triggered it.
+================================================================ */
+
+// Web Push is optional: it only runs when VAPID keys are configured.
+let webpush = null;
+let pushReady = false;
+(function initPush() {
+  const pub = process.env.VAPID_PUBLIC_KEY;
+  const priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv) return; // not configured — in-app bell still works
+  try {
+    webpush = require('web-push');
+    const subject = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+    webpush.setVapidDetails(subject, pub, priv);
+    pushReady = true;
+  } catch (err) {
+    console.warn('Web Push disabled:', err.message);
+  }
+})();
+const pushConfigured = () => pushReady;
+
+// Per-user SSE hub for the notification bell (distinct from the per-map liveHub).
+const notifyHub = new Map(); // userId → Set<res>
+
+function startNotifyStream(req, res, userId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  let set = notifyHub.get(userId);
+  if (!set) { set = new Set(); notifyHub.set(userId, set); }
+  set.add(res);
+  res.write('event: hello\ndata: {}\n\n');
+
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
+  const cleanup = () => {
+    clearInterval(beat);
+    set.delete(res);
+    if (!set.size) notifyHub.delete(userId);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+}
+
+function pushToUser(userId, event, data) {
+  const set = notifyHub.get(userId);
+  if (!set) return;
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of set) {
+    try { res.write(frame); } catch { /* dropped; cleanup runs on close */ }
+  }
+}
+
+// Fire OS-level Web Push to each of a user's subscriptions. Fire-and-forget so
+// it never blocks the request; prunes subscriptions the browser has expired.
+function sendWebPush(user, notif) {
+  if (!pushConfigured() || !Array.isArray(user.pushSubs) || !user.pushSubs.length) return;
+  const actor = notif.actor && (notif.actor.name || '@' + notif.actor.username) || 'Someone';
+  const verb = notif.kind === 'comment' ? 'commented on' : 'chatted in';
+  const payload = JSON.stringify({
+    title: `${actor} ${verb} “${notif.mapName}”`,
+    body: notif.text || '',
+    url: '/#/u/' + notif.mapOwner,
+    tag: 'map-' + notif.mapId,
+  });
+  let pruned = false;
+  for (const sub of [...user.pushSubs]) {
+    webpush.sendNotification(sub, payload).catch(err => {
+      // 404/410 = the subscription is gone for good; drop it.
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        user.pushSubs = (user.pushSubs || []).filter(s => s.endpoint !== sub.endpoint);
+        pruned = true;
+        store.saveUser(user).catch(() => {});
+      }
+    });
+  }
+  return pruned;
+}
+
+// A stored notification, as sent to a client. It's already free of anything
+// private, so this is mostly a passthrough / shape guard.
+function notifOut(n) {
+  return {
+    id: n.id, kind: n.kind, mapId: n.mapId, mapOwner: n.mapOwner,
+    mapName: n.mapName, actor: n.actor, text: n.text, ts: n.ts, read: !!n.read,
+  };
+}
+
+function unreadCount(u) {
+  return (u.notifications || []).reduce((s, n) => s + (n.read ? 0 : 1), 0);
+}
+
+// Deliver a chat/comment alert for map `m` (owned by `owner`) triggered by
+// `actorUser`. Mutates each recipient's notifications[] and persists it — EXCEPT
+// the owner, whose record the caller saves alongside the chat/comment write.
+async function notifyMapEvent(owner, m, actorUser, kind, text) {
+  const recipientIds = new Set([owner.id, ...(m.editors || [])]);
+  for (const c of (m.comments || [])) if (c.authorId) recipientIds.add(c.authorId);
+  recipientIds.delete(actorUser.id); // never notify the person who acted
+
+  const base = {
+    kind,
+    mapId: m.id,
+    mapOwner: owner.username,
+    mapName: m.name,
+    actor: actorRef(actorUser),
+    text: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 140),
+  };
+
+  for (const rid of recipientIds) {
+    const target = rid === owner.id ? owner : await store.getUserById(rid);
+    if (!target) continue;
+    if (!Array.isArray(target.notifications)) target.notifications = [];
+    const notif = Object.assign({ id: newId(), ts: Date.now(), read: false }, base);
+    target.notifications.push(notif);
+    if (target.notifications.length > MAX_NOTIFS) {
+      target.notifications.splice(0, target.notifications.length - MAX_NOTIFS);
+    }
+    // The owner's record is saved by the caller (it also carries the new
+    // chat/comment); every other recipient we persist right here.
+    if (rid !== owner.id) await store.saveUser(target);
+    pushToUser(rid, 'notify', notifOut(notif)); // live in-app bell
+    sendWebPush(target, notif);                  // OS-level push
+  }
 }
 
 /* ================================================================
@@ -1162,6 +1312,7 @@ async function handleApi(req, res, pathname) {
       createdAt: Date.now(),
       friends: [], requestsIn: [], requestsOut: [],
       following: [], followers: [],
+      notifications: [], pushSubs: [],
       maps: [makeMap('My Map', body.visibility, displayName || username)],
     };
     try {
@@ -1423,6 +1574,67 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { ok: true });
   }
 
+  // --- notifications (bell feed) ---
+  if (route === 'GET /api/notifications') {
+    const list = (user.notifications || []).slice().sort((a, b) => b.ts - a.ts).map(notifOut);
+    return sendJSON(res, 200, { notifications: list, unread: unreadCount(user) });
+  }
+  // Live per-user stream that pushes each new notification as it arrives.
+  if (route === 'GET /api/notifications/stream') {
+    return startNotifyStream(req, res, user.id);
+  }
+  // Mark notifications read: {ids:[...]} for specific ones, or omit to mark all.
+  if (route === 'POST /api/notifications/read') {
+    const body = await readBody(req);
+    const ids = Array.isArray(body.ids) ? new Set(body.ids) : null;
+    for (const n of user.notifications || []) {
+      if (!ids || ids.has(n.id)) n.read = true;
+    }
+    await store.saveUser(user);
+    return sendJSON(res, 200, { unread: unreadCount(user) });
+  }
+  // Clear the whole feed.
+  if (route === 'DELETE /api/notifications') {
+    user.notifications = [];
+    await store.saveUser(user);
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  // --- Web Push subscription management ---
+  // Public VAPID key the browser needs to subscribe; `enabled` is false when the
+  // server has no VAPID keys configured (the in-app bell still works either way).
+  if (route === 'GET /api/push/vapid') {
+    return sendJSON(res, 200, {
+      enabled: pushConfigured(),
+      key: pushConfigured() ? process.env.VAPID_PUBLIC_KEY : null,
+    });
+  }
+  if (route === 'POST /api/push/subscribe') {
+    const body = await readBody(req);
+    const sub = body && body.subscription;
+    if (!sub || typeof sub.endpoint !== 'string' || !sub.keys) {
+      return sendJSON(res, 400, { error: 'Invalid subscription.' });
+    }
+    if (!Array.isArray(user.pushSubs)) user.pushSubs = [];
+    // de-dupe by endpoint; refresh the record if the same browser re-subscribes
+    user.pushSubs = user.pushSubs.filter(s => s.endpoint !== sub.endpoint);
+    user.pushSubs.push({ endpoint: sub.endpoint, keys: sub.keys, ts: Date.now() });
+    if (user.pushSubs.length > MAX_PUSH_SUBS) {
+      user.pushSubs.splice(0, user.pushSubs.length - MAX_PUSH_SUBS);
+    }
+    await store.saveUser(user);
+    return sendJSON(res, 200, { ok: true });
+  }
+  if (route === 'POST /api/push/unsubscribe') {
+    const body = await readBody(req);
+    const endpoint = body && body.endpoint;
+    if (Array.isArray(user.pushSubs) && endpoint) {
+      user.pushSubs = user.pushSubs.filter(s => s.endpoint !== endpoint);
+      await store.saveUser(user);
+    }
+    return sendJSON(res, 200, { ok: true });
+  }
+
   // --- maps ---
   if (route === 'GET /api/maps') {
     const editorIds = new Set();
@@ -1511,6 +1723,7 @@ async function handleApi(req, res, pathname) {
       if (!text) return sendJSON(res, 400, { error: 'Empty message.' });
       const entry = { kind: 'message', actor: actorRef(user), text, ts: Date.now(), id: newId() };
       pushChat(m, entry);
+      await notifyMapEvent(owner, m, user, 'chat', text); // bell + push to owner/editors/commenters
       await store.saveUser(owner);
       broadcast(m.id, 'chat', entry);
       return sendJSON(res, 200, { entry });
@@ -1667,6 +1880,7 @@ async function handleApi(req, res, pathname) {
       if (m.comments.length >= MAX_COMMENTS) m.comments.splice(0, m.comments.length - MAX_COMMENTS + 1);
       const entry = { id: newId(), authorId: user.id, actor: actorRef(user), text, ts: Date.now() };
       m.comments.push(entry);
+      await notifyMapEvent(owner, m, user, 'comment', text); // bell + push to owner/editors/commenters
       await store.saveUser(owner);
       broadcast(mapId, 'comment', commentOut(entry, null)); // live to any open viewers
       return sendJSON(res, 200, { entry: commentOut(entry, user) });
