@@ -720,9 +720,15 @@ function pushToUser(userId, event, data) {
 function sendWebPush(user, notif) {
   if (!pushConfigured() || !Array.isArray(user.pushSubs) || !user.pushSubs.length) return;
   const actor = notif.actor && (notif.actor.name || '@' + notif.actor.username) || 'Someone';
-  const verb = notif.kind === 'comment' ? 'commented on' : 'chatted in';
+  let title;
+  switch (notif.kind) {
+    case 'comment': title = `${actor} commented on “${notif.mapName}”`; break;
+    case 'edit':    title = `${actor} edited “${notif.mapName}”`; break;
+    case 'newmap':  title = `${actor} posted a new map: “${notif.mapName}”`; break;
+    default:        title = `${actor} chatted in “${notif.mapName}”`;
+  }
   const payload = JSON.stringify({
-    title: `${actor} ${verb} “${notif.mapName}”`,
+    title,
     body: notif.text || '',
     url: '/#/u/' + notif.mapOwner,
     tag: 'map-' + notif.mapId,
@@ -754,12 +760,34 @@ function unreadCount(u) {
   return (u.notifications || []).reduce((s, n) => s + (n.read ? 0 : 1), 0);
 }
 
-// Deliver a chat/comment alert for map `m` (owned by `owner`) triggered by
-// `actorUser`. Mutates each recipient's notifications[] and persists it — EXCEPT
-// the owner, whose record the caller saves alongside the chat/comment write.
-async function notifyMapEvent(owner, m, actorUser, kind, text) {
+// Append a notification to a target user, honoring the per-user cap, and fan it
+// out over both delivery channels (bell SSE + Web Push).
+function deliverNotif(target, base) {
+  if (!Array.isArray(target.notifications)) target.notifications = [];
+  const notif = Object.assign({ id: newId(), ts: Date.now(), read: false }, base);
+  target.notifications.push(notif);
+  if (target.notifications.length > MAX_NOTIFS) {
+    target.notifications.splice(0, target.notifications.length - MAX_NOTIFS);
+  }
+  pushToUser(target.id, 'notify', notifOut(notif)); // live in-app bell
+  sendWebPush(target, notif);                        // OS-level push
+  return notif;
+}
+
+// Deliver a chat / comment / edit alert for map `m` (owned by `owner`) triggered
+// by `actorUser`. Mutates each recipient's notifications[] and persists it —
+// EXCEPT the owner, whose record the caller saves alongside the map write.
+//   opts.includeCommenters  also notify anyone who commented on the map (default true)
+//   opts.dedupeMs           skip a recipient who already got the same kind of alert
+//                           for this map from this actor within the window (0 = off)
+async function notifyMapEvent(owner, m, actorUser, kind, text, opts = {}) {
+  const includeCommenters = opts.includeCommenters !== false;
+  const dedupeMs = opts.dedupeMs || 0;
+
   const recipientIds = new Set([owner.id, ...(m.editors || [])]);
-  for (const c of (m.comments || [])) if (c.authorId) recipientIds.add(c.authorId);
+  if (includeCommenters) {
+    for (const c of (m.comments || [])) if (c.authorId) recipientIds.add(c.authorId);
+  }
   recipientIds.delete(actorUser.id); // never notify the person who acted
 
   const base = {
@@ -775,16 +803,43 @@ async function notifyMapEvent(owner, m, actorUser, kind, text) {
     const target = rid === owner.id ? owner : await store.getUserById(rid);
     if (!target) continue;
     if (!Array.isArray(target.notifications)) target.notifications = [];
-    const notif = Object.assign({ id: newId(), ts: Date.now(), read: false }, base);
-    target.notifications.push(notif);
-    if (target.notifications.length > MAX_NOTIFS) {
-      target.notifications.splice(0, target.notifications.length - MAX_NOTIFS);
+    // Collapse a burst of edits (autosave fires often) into a single alert:
+    // if we already told this person about this kind of change to this map
+    // recently, skip rather than pile on.
+    if (dedupeMs) {
+      const cutoff = Date.now() - dedupeMs;
+      const seen = target.notifications.some(n =>
+        n.kind === kind && n.mapId === m.id &&
+        n.actor && n.actor.username === actorUser.username && n.ts >= cutoff);
+      if (seen) continue;
     }
-    // The owner's record is saved by the caller (it also carries the new
-    // chat/comment); every other recipient we persist right here.
+    deliverNotif(target, base);
+    // The owner's record is saved by the caller (it also carries the map write);
+    // every other recipient we persist right here.
     if (rid !== owner.id) await store.saveUser(target);
-    pushToUser(rid, 'notify', notifOut(notif)); // live in-app bell
-    sendWebPush(target, notif);                  // OS-level push
+  }
+}
+
+// Announce a freshly created map to the creator's friends and followers — the
+// people who chose to see their activity — but only those who may actually view
+// it (private maps notify no one; friends-only maps skip non-friends).
+async function notifyNewMap(creator, m) {
+  const candidateIds = new Set([...(creator.friends || []), ...(creator.followers || [])]);
+  candidateIds.delete(creator.id);
+  if (!candidateIds.size) return;
+  const targets = await store.getUsersByIds([...candidateIds]);
+  const base = {
+    kind: 'newmap',
+    mapId: m.id,
+    mapOwner: creator.username,
+    mapName: m.name,
+    actor: actorRef(creator),
+    text: '',
+  };
+  for (const target of targets) {
+    if (!canViewMapObj(m, creator, target)) continue; // respect the map's visibility
+    deliverNotif(target, base);
+    await store.saveUser(target);
   }
 }
 
@@ -1661,6 +1716,7 @@ async function handleApi(req, res, pathname) {
     const m = makeMap(body.name, body.visibility, user.displayName || user.username);
     user.maps.push(m);
     await store.saveUser(user);
+    await notifyNewMap(user, m); // tell friends/followers who can see it
     return sendJSON(res, 200, { map: mapMeta(m, { editors: [] }) });
   }
 
@@ -1707,6 +1763,14 @@ async function handleApi(req, res, pathname) {
       m.anchorId = clean.anchorId;
       m.updatedAt = Date.now();
       for (const entry of activity) pushChat(m, entry);
+      // Alert co-collaborators (owner + editors) that a shared map changed. The
+      // actor is excluded, so a solo owner editing their own map notifies no one.
+      // Autosave fires often, so collapse a burst into one alert per 15 min.
+      if (activity.length) {
+        const summary = activity.length === 1 ? activity[0].text : `made ${activity.length} changes`;
+        await notifyMapEvent(owner, m, user, 'edit', summary,
+          { includeCommenters: false, dedupeMs: 15 * 60 * 1000 });
+      }
       await store.saveUser(owner);
       // live push: others viewing this map get the new state + the activity lines
       broadcast(m.id, 'map', { nodes: m.nodes, edges: m.edges, anchorId: m.anchorId, by: user.username }, res);

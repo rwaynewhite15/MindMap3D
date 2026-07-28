@@ -3451,7 +3451,13 @@ function renderNotifs() {
     item.type = 'button';
     item.className = 'notif-item' + (n.read ? '' : ' unread');
 
-    const verb = n.kind === 'comment' ? ' commented on ' : ' chatted in ';
+    const verbs = {
+      comment: ' commented on ',
+      chat: ' chatted in ',
+      edit: ' edited ',
+      newmap: ' posted a new map ',
+    };
+    const verb = verbs[n.kind] || ' updated ';
     const title = document.createElement('div');
     title.className = 'notif-title';
     const who = document.createElement('b'); who.textContent = notifActorName(n);
