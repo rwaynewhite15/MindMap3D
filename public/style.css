@@ -1321,6 +1321,18 @@ button.primary {
   }
   #mainNav a.active { background: var(--line); }
 
+  /* the notification panel isn't anchored to the little bell on phones — it
+     spans the screen (with margins) just under the header so it never clips */
+  #notifPanel {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 54px);
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-height: 72vh;
+    max-height: 72dvh;
+  }
+
   /* profile (read-only viewer) header: keep the name and its two action
      buttons on one line without the buttons crowding the name off-screen */
   #profileBar { gap: 6px; }
