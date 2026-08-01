@@ -421,6 +421,8 @@ function makeGame(name, visibility) {
     code: '',
     scoreOrder: 'desc', // 'desc' = higher is better, 'asc' = lower is better (times, golf)
     scores: [],         // [{ userId, best, plays, ts }] — one entry per player
+    personas: [],       // AI opponents born in this game: [{id,name,personality,style,w,l,d,createdAt}]
+    records: {},        // human match records: userId → {w,l,d}
     plays: 0,
     announced: false,   // has "posted a new game" gone out to friends/followers yet?
     createdAt: now,
@@ -462,6 +464,8 @@ function normalizeUser(u) {
     if (g.scoreOrder !== 'asc') g.scoreOrder = 'desc';
     if (!Array.isArray(g.scores)) g.scores = [];
     if (typeof g.plays !== 'number' || !isFinite(g.plays)) g.plays = 0;
+    if (!Array.isArray(g.personas)) g.personas = []; // AI opponents born in this game
+    if (!g.records || typeof g.records !== 'object') g.records = {}; // userId → {w,l,d} match record
   }
   delete u.map;
   return u;
@@ -585,6 +589,7 @@ function gameMeta(g, extra) {
     plays: g.plays || 0,
     playerCount: (g.scores || []).length,
     hasCode: !!(g.code && g.code.trim()),
+    openTables: countOpenTables(g.id), // players sitting in the lobby right now
     updatedAt: g.updatedAt || 0,
   }, extra || {});
 }
@@ -627,7 +632,8 @@ async function leaderboardOut(g, viewer) {
     .sort((a, b) => (g.scoreOrder === 'asc' ? a.best - b.best : b.best - a.best) || a.ts - b.ts);
   const top = sorted.slice(0, LEADERBOARD_TOP);
   const myIndex = viewer ? sorted.findIndex(s => s.userId === viewer.id) : -1;
-  const needIds = new Set(top.map(s => s.userId));
+  const recordIds = Object.keys(g.records || {});
+  const needIds = new Set([...top.map(s => s.userId), ...recordIds]);
   if (myIndex >= 0) needIds.add(viewer.id);
   const users = await store.getUsersByIds([...needIds]);
   const byId = new Map(users.map(u => [u.id, u]));
@@ -643,12 +649,31 @@ async function leaderboardOut(g, viewer) {
       me: !!viewer && s.userId === viewer.id,
     };
   };
+  // Match (win/loss) records sit beside the score board: humans from
+  // g.records, AI personas from their rows — one ladder, sorted by wins.
+  const matchRows = [];
+  for (const [uid, r] of Object.entries(g.records || {})) {
+    const u = byId.get(uid);
+    if (!u) continue;
+    matchRows.push({
+      kind: 'human', username: u.username, name: nameFor(u, viewer),
+      w: r.w || 0, l: r.l || 0, d: r.d || 0,
+      me: !!viewer && uid === viewer.id,
+    });
+  }
+  for (const p of g.personas || []) {
+    if (!(p.w || p.l || p.d)) continue; // personas appear once they've played
+    matchRows.push({ kind: 'ai', username: null, name: p.name, w: p.w || 0, l: p.l || 0, d: p.d || 0, me: false });
+  }
+  matchRows.sort((a, b) => (b.w - a.w) || (a.l - b.l) || (b.d - a.d));
+
   return {
     scoreOrder: g.scoreOrder === 'asc' ? 'asc' : 'desc',
     totalPlayers: sorted.length,
     totalPlays: g.plays || 0,
     entries: top.map(rowOut),
     mine: myIndex >= 0 ? rowOut(sorted[myIndex], myIndex) : null,
+    matches: matchRows.slice(0, LEADERBOARD_TOP),
   };
 }
 
@@ -701,9 +726,91 @@ const GAME_SDK = `
 'use strict';
 // MindGame — the bridge between your game and MindMapShare.
 window.MindGame = (function () {
-  var score = 0, ready = false, readyFns = [], aiCalls = {}, aiSeq = 0;
+  var score = 0, ready = false, readyFns = [], calls = {}, callSeq = 0;
   var info = { player: null, aiAvailable: false };
+  var curMatch = null;  // the one live match handle (a new match() replaces it)
+  var lobbyFns = [];    // live open-table subscribers
+
   function post(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  // A request the host page answers with {mg:'bridge-ack', id, ok, ...}.
+  function request(msg, timeoutMs) {
+    var id = ++callSeq;
+    return new Promise(function (resolve, reject) {
+      calls[id] = { resolve: resolve, reject: reject };
+      msg.id = id;
+      post(msg);
+      setTimeout(function () {
+        if (calls[id]) { delete calls[id]; reject(new Error('Request timed out')); }
+      }, timeoutMs || 30000);
+    });
+  }
+
+  // The live match handle a game holds after MindGame.match() resolves.
+  function makeMatch(state, persona) {
+    var listeners = {}, lastSeq = 0, started = false;
+    var h = {
+      id: state.id,
+      mode: state.mode,
+      you: state.you,                 // your player id (matches players[].id)
+      players: state.players || [],   // [{id, username, name, isAI}]
+      status: state.status,           // 'waiting' | 'active' | 'done'
+      turnBased: !!state.turnBased,
+      turn: state.turn || null,       // player id whose move it is (turn-based)
+      persona: persona || null,       // vs-ai: {id, name, personality, style, w, l, d}
+      get isMyTurn() { return h.status === 'active' && (!h.turnBased || h.turn === h.you); },
+      on: function (ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return h; },
+      // Relay a move to the other players (server-stamped, turn-checked).
+      send: function (data) {
+        return request({ mg: 'match-send', data: data }).then(function (r) {
+          if (r.turn !== undefined) h.turn = r.turn;
+          return r;
+        });
+      },
+      // Declare the result: {winner: playerId} or {winner: null} for a draw.
+      end: function (result) {
+        return request({ mg: 'match-end', winner: result && result.winner !== undefined ? result.winner : null });
+      },
+      leave: function () { h.status = 'done'; post({ mg: 'match-leave' }); },
+    };
+    function fire(ev) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      (listeners[ev] || []).forEach(function (fn) {
+        try { fn.apply(null, args); } catch (err) { console.error(err); }
+      });
+    }
+    function applyMove(mv) {
+      if (mv.seq <= lastSeq) return; // already replayed
+      lastSeq = mv.seq;
+      if (mv.turn !== undefined) h.turn = mv.turn;
+      fire('message', mv.from, mv.data);
+    }
+    function maybeStart(players, turn) {
+      if (started) return;
+      started = true;
+      h.status = 'active';
+      if (players) h.players = players;
+      if (turn !== undefined) h.turn = turn;
+      fire('start', { players: h.players, turn: h.turn });
+    }
+    h._event = function (event, data) {
+      if (event === 'start') maybeStart(data.players, data.turn);
+      else if (event === 'message') applyMove(data);
+      else if (event === 'sync') { // reconnect/hello: full state + missed moves
+        if (data.match && data.match.status === 'active') maybeStart(data.match.players, data.match.turn);
+        (data.moves || []).forEach(applyMove);
+      }
+      else if (event === 'leave') fire('leave', data.playerId);
+      else if (event === 'end') { h.status = 'done'; fire('end', data.winner); }
+      else if (event === 'gone') { if (h.status !== 'done') { h.status = 'done'; fire('leave', null); } }
+    };
+    if (state.status === 'active') {
+      // joined an already-full lobby: fire 'start' right after the caller has
+      // had a chance to attach listeners
+      setTimeout(function () { maybeStart(state.players, state.turn); }, 0);
+    }
+    return h;
+  }
+
   window.addEventListener('message', function (e) {
     if (e.source !== window.parent || !e.data || typeof e.data !== 'object') return;
     var d = e.data;
@@ -713,12 +820,22 @@ window.MindGame = (function () {
       ready = true;
       var fns = readyFns; readyFns = [];
       fns.forEach(function (fn) { try { fn(info); } catch (err) { console.error(err); } });
-    } else if (d.mg === 'ai-result' && aiCalls[d.id]) {
-      var call = aiCalls[d.id]; delete aiCalls[d.id];
+    } else if (d.mg === 'ai-result' && calls[d.id]) {
+      var call = calls[d.id]; delete calls[d.id];
       d.ok ? call.resolve(String(d.text || '')) : call.reject(new Error(d.error || 'AI unavailable'));
+    } else if (d.mg === 'bridge-ack' && calls[d.id]) {
+      var c = calls[d.id]; delete calls[d.id];
+      d.ok ? c.resolve(d) : c.reject(new Error(d.error || 'Request failed'));
+    } else if (d.mg === 'match-event' && curMatch && d.matchId === curMatch.id) {
+      curMatch._event(d.event, d.data);
+    } else if (d.mg === 'lobby') {
+      lobbyFns.forEach(function (fn) {
+        try { fn(d.tables || []); } catch (err) { console.error(err); }
+      });
     }
   });
   post({ mg: 'ready' });
+
   return {
     // The signed-in player ({username, name}) or null for guests.
     get player() { return info.player; },
@@ -739,15 +856,55 @@ window.MindGame = (function () {
     // Ask the AI. Returns a Promise of the reply text.
     //   MindGame.ai('Give me a trivia question about space')
     //   MindGame.ai(prompt, { system: 'You are a pirate NPC.' })
+    //   MindGame.ai(prompt, { as: personaId })   — answer in that persona's character
     ai: function (prompt, opts) {
-      var id = ++aiSeq;
+      var id = ++callSeq;
       return new Promise(function (resolve, reject) {
-        aiCalls[id] = { resolve: resolve, reject: reject };
-        post({ mg: 'ai', id: id, prompt: String(prompt || ''), system: opts && opts.system ? String(opts.system) : '' });
+        calls[id] = { resolve: resolve, reject: reject };
+        post({ mg: 'ai', id: id, prompt: String(prompt || ''),
+               system: opts && opts.system ? String(opts.system) : '',
+               as: opts && opts.as ? String(opts.as) : '' });
         setTimeout(function () {
-          if (aiCalls[id]) { delete aiCalls[id]; reject(new Error('AI request timed out')); }
+          if (calls[id]) { delete calls[id]; reject(new Error('AI request timed out')); }
         }, 60000);
       });
+    },
+    // Start, join, or sit down for a match. Requires a signed-in player.
+    //   MindGame.match({ mode: 'vs-ai' })               — play an AI persona
+    //   MindGame.match({ mode: 'pvp' })                 — quick match: take the
+    //       longest-waiting open table, or sit down as a new one and wait
+    //   MindGame.match({ mode: 'pvp', join: tableId })  — sit at a listed table
+    //   MindGame.match({ mode: 'pvp', host: true })     — always open a new table
+    // Resolves to a match handle:
+    //   match.players / match.you / match.turn / match.isMyTurn / match.persona
+    //   match.status                 — 'waiting' until someone sits down
+    //   match.send(data)             — relay a move (Promise; rejects off-turn)
+    //   match.on('start'|'message'|'leave'|'end', fn)
+    //   match.end({winner: id|null}) — declare the result (records W/L)
+    //   match.leave()                — get up from the table
+    match: function (opts) {
+      if (curMatch) { try { curMatch.leave(); } catch (e) {} }
+      return request({ mg: 'match', opts: opts || {} }, 60000).then(function (r) {
+        curMatch = makeMatch(r.match, r.persona || null);
+        return curMatch;
+      });
+    },
+    // The pooling lobby: open tables waiting for an opponent, longest wait
+    // first. Each is { id, host: {username, name}, seated, seats, waitingSince }
+    // — pass an id to MindGame.match({ mode:'pvp', join: id }).
+    lobby: function () {
+      return request({ mg: 'lobby' }).then(function (r) { return r.tables || []; });
+    },
+    // Watch the pool live: fn(tables) fires now and on every change, so a
+    // lobby screen stays current without polling. Returns an unsubscribe fn.
+    onLobby: function (fn) {
+      lobbyFns.push(fn);
+      post({ mg: 'lobby-watch' });
+      return function () {
+        var i = lobbyFns.indexOf(fn);
+        if (i >= 0) lobbyFns.splice(i, 1);
+        if (!lobbyFns.length) post({ mg: 'lobby-unwatch' });
+      };
     },
   };
 })();
@@ -795,6 +952,313 @@ async function serveGameFrame(req, res, pathname) {
   }
   headers(200);
   res.end(gameFrameHtml(g));
+}
+
+/* ================================================================
+   Matches — multiplayer (and vs-AI) sessions for games.
+   ----------------------------------------------------------------
+   The platform owns identity and transport; game code only sends and
+   receives moves. The HOST PAGE (not the sandboxed game) opens a
+   per-match SSE stream authenticated by the session cookie and POSTs
+   moves on the game's behalf, so the server binds every message to a
+   verified user and game code physically can't spoof who moved. Turn
+   order is enforced server-side for turn-based matches.
+
+   Live match state is in-memory (like liveHub) — a restart drops
+   matches in flight, and players simply rematch. What matters
+   long-term is persisted on the game object itself: AI personas and
+   win/loss records for humans and AI alike.
+================================================================ */
+const MATCH_WAIT_TTL = 15 * 60 * 1000; // a table nobody joins leaves the pool
+const MATCH_LINGER = 60 * 1000;        // grace after end/leave for final calls
+const MAX_MATCH_MOVES = 512;           // replay buffer for reconnects
+const MAX_MOVE_BYTES = 4096;
+const MAX_PERSONAS = 12;               // per game; after that, opponents are reused
+
+const matches = new Map(); // matchId → match
+
+function matchOut(m, viewer) {
+  return {
+    id: m.id,
+    gameId: m.gameId,
+    mode: m.mode,
+    status: m.status,
+    turnBased: m.turnBased,
+    turn: m.turn || null,
+    you: viewer ? viewer.id : null,
+    players: m.players.map(p => ({ id: p.id, username: p.username, name: p.name, isAI: p.kind === 'ai' })),
+  };
+}
+
+/* ---------- the pooling lobby ----------
+   Every PvP match that is still waiting for an opponent is an open TABLE in
+   its game's pool: publicly listed to anyone who can view the game, joinable
+   by id, with the host shown. Sitting down is the only way in — no codes to
+   pass around out-of-band. The pool is live over SSE, so a player watching
+   the lobby sees tables appear and fill in real time. */
+const lobbyHub = new Map(); // gameId → Set<res>
+
+function tableOut(m) {
+  const host = m.players[0];
+  return {
+    id: m.id,
+    host: { username: host.username, name: host.name },
+    seated: m.players.length,
+    seats: m.seats,
+    waitingSince: m.createdAt,
+  };
+}
+
+function openTables(gameId) {
+  const out = [];
+  for (const m of matches.values()) {
+    if (m.gameId === gameId && m.mode === 'pvp' && m.status === 'waiting') out.push(tableOut(m));
+  }
+  out.sort((a, b) => a.waitingSince - b.waitingSince); // longest wait first
+  return out;
+}
+
+function countOpenTables(gameId) {
+  let n = 0;
+  for (const m of matches.values()) {
+    if (m.gameId === gameId && m.mode === 'pvp' && m.status === 'waiting') n++;
+  }
+  return n;
+}
+
+function broadcastLobby(gameId) {
+  const set = lobbyHub.get(gameId);
+  if (!set || !set.size) return;
+  const frame = `event: tables\ndata: ${JSON.stringify({ tables: openTables(gameId) })}\n\n`;
+  for (const res of set) {
+    try { res.write(frame); } catch { /* dropped; cleanup runs on close */ }
+  }
+}
+
+function startLobbyStream(req, res, gameId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  let set = lobbyHub.get(gameId);
+  if (!set) { set = new Set(); lobbyHub.set(gameId, set); }
+  set.add(res);
+  res.write(`event: tables\ndata: ${JSON.stringify({ tables: openTables(gameId) })}\n\n`);
+
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
+  const cleanup = () => {
+    clearInterval(beat);
+    set.delete(res);
+    if (!set.size) lobbyHub.delete(gameId);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+}
+
+function matchBroadcast(m, event, data, exceptUserId) {
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const [res, userId] of m.streams) {
+    if (exceptUserId && userId === exceptUserId) continue;
+    try { res.write(frame); } catch { /* dropped; cleanup on close */ }
+  }
+}
+
+function deleteMatch(m) {
+  clearTimeout(m.reaper);
+  const wasOpen = m.mode === 'pvp' && m.status === 'waiting';
+  matches.delete(m.id);
+  if (wasOpen) broadcastLobby(m.gameId); // the table left the pool
+}
+
+// Schedule (or reschedule) the match's cleanup timer.
+function reapLater(m, ms) {
+  clearTimeout(m.reaper);
+  m.reaper = setTimeout(() => {
+    matchBroadcast(m, 'gone', { reason: m.status === 'waiting' ? 'expired' : 'closed' });
+    deleteMatch(m);
+  }, ms);
+}
+
+function findMemberSeat(m, userId) {
+  return m.players.find(p => p.id === userId && p.kind === 'human') || null;
+}
+
+// Quick match: the table that has waited longest, skipping the seeker's own.
+function findQuickMatch(gameId, seekerId) {
+  let best = null;
+  for (const m of matches.values()) {
+    if (m.gameId !== gameId || m.mode !== 'pvp' || m.status !== 'waiting') continue;
+    if (m.players.some(p => p.id === seekerId)) continue;
+    if (!best || m.createdAt < best.createdAt) best = m;
+  }
+  return best;
+}
+
+function startMatch(m) {
+  m.status = 'active';
+  // fair coin for who moves first (turn is a player id)
+  m.turn = m.turnBased ? m.players[crypto.randomInt(m.players.length)].id : null;
+  reapLater(m, 6 * 60 * 60 * 1000); // active matches live up to 6h
+  matchBroadcast(m, 'start', { players: matchOut(m, null).players, turn: m.turn });
+  if (m.mode === 'pvp') broadcastLobby(m.gameId); // the table filled up
+}
+
+// Record a finished match on the game object: bump w/l/d for every human
+// (g.records) and AI persona (persona row) seated in it. Idempotent per match.
+async function recordMatchResult(m, winnerId) {
+  if (m.recorded) return;
+  m.recorded = true;
+  const owner = await store.getUserByGameId(m.gameId);
+  const g = owner && owner.games.find(x => x.id === m.gameId);
+  if (!g) return;
+  for (const p of m.players) {
+    const key = winnerId === null ? 'd' : (p.id === winnerId ? 'w' : 'l');
+    if (p.kind === 'ai') {
+      const persona = (g.personas || []).find(x => x.id === p.id);
+      if (persona) persona[key] = (persona[key] || 0) + 1;
+    } else {
+      if (!g.records || typeof g.records !== 'object') g.records = {};
+      const row = g.records[p.id] || (g.records[p.id] = { w: 0, l: 0, d: 0 });
+      row[key] = (row[key] || 0) + 1;
+    }
+  }
+  await store.saveUser(owner);
+}
+
+/* ---------- AI personas ----------
+   Named AI opponents that belong to a game, persisted on the game object so
+   they build up win/loss records and reappear in future vs-AI matches. They
+   are invented SERVER-side (names stay unique and moderated); the LLM writes
+   the character when AI is configured, with a fallback list otherwise. */
+const PERSONA_FALLBACKS = [
+  ['Rusty Circuits', 'A creaky old bot with surprising flashes of brilliance.', 'Plays solid openings, wobbles under pressure.'],
+  ['Neon Sage', 'Serene, cryptic, speaks in koans about victory.', 'Patient and defensive until the perfect moment.'],
+  ['Pixel Baron', 'A pompous aristocrat of the arcade age.', 'Aggressive openings, hates retreating.'],
+  ['Turbo Tortoise', 'Slow to speak, never slow to win.', 'Methodical; grinds out endgames.'],
+  ['Glitchy Gambit', 'Chaotic, dramatic, allergic to obvious moves.', 'Loves sacrifices and traps.'],
+  ['Quantum Quokka', 'Cheerful and unpredictable — possibly in two states at once.', 'Random-looking play that keeps working out.'],
+  ['Sir Segfault', 'A noble knight who occasionally crashes mid-sentence.', 'Bold attacks, forgets defense.'],
+  ['Mellow Machine', 'Utterly unbothered. Has never rage-quit.', 'Balanced, punishes mistakes calmly.'],
+];
+
+const PERSONA_AI_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'A playful 1–3 word opponent name.' },
+    personality: { type: 'string', description: 'One line of character.' },
+    style: { type: 'string', description: 'One line describing how it plays.' },
+  },
+  required: ['name', 'personality', 'style'],
+};
+
+async function inventPersona(g) {
+  const taken = new Set((g.personas || []).map(p => p.name.toLowerCase()));
+  if (aiConfigured()) {
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic();
+      const response = await client.messages.create({
+        model: GAME_AI_MODEL,
+        max_tokens: 300,
+        output_config: { format: { type: 'json_schema', schema: PERSONA_AI_SCHEMA } },
+        system: 'You invent fun, family-friendly AI opponent characters for small browser games. Keep every field short.',
+        messages: [{ role: 'user', content:
+          'Invent an AI opponent persona for a game called "' + g.name + '"' +
+          (g.description ? ' (' + g.description.slice(0, 200) + ')' : '') +
+          '. Avoid these existing names: ' + ([...taken].join(', ') || 'none') + '.' }],
+      });
+      const block = (response.content || []).find(b => b.type === 'text');
+      const data = JSON.parse(block ? block.text : '{}');
+      const name = String(data.name || '').trim().slice(0, 40);
+      if (name && !taken.has(name.toLowerCase())) {
+        return {
+          name,
+          personality: String(data.personality || '').trim().slice(0, 200),
+          style: String(data.style || '').trim().slice(0, 200),
+        };
+      }
+    } catch { /* fall through to the list */ }
+  }
+  const fresh = PERSONA_FALLBACKS.filter(f => !taken.has(f[0].toLowerCase()));
+  const pick = fresh.length ? fresh[crypto.randomInt(fresh.length)]
+    : PERSONA_FALLBACKS[crypto.randomInt(PERSONA_FALLBACKS.length)];
+  const name = fresh.length ? pick[0] : pick[0] + ' ' + (g.personas.length + 1); // keep names unique
+  return { name, personality: pick[1], style: pick[2] };
+}
+
+// Get (or create) the AI persona that will sit in a vs-AI match.
+async function pickPersona(gOwner, g, personaId) {
+  if (!Array.isArray(g.personas)) g.personas = [];
+  if (personaId) {
+    const p = g.personas.find(x => x.id === personaId);
+    if (p) return p;
+  }
+  if (g.personas.length >= MAX_PERSONAS) {
+    return g.personas[crypto.randomInt(g.personas.length)];
+  }
+  const invented = await inventPersona(g);
+  const persona = {
+    id: newId(),
+    name: invented.name,
+    personality: invented.personality,
+    style: invented.style,
+    w: 0, l: 0, d: 0,
+    createdAt: Date.now(),
+  };
+  g.personas.push(persona);
+  await store.saveUser(gOwner);
+  return persona;
+}
+
+function personaOut(p) {
+  return { id: p.id, name: p.name, personality: p.personality, style: p.style, w: p.w || 0, l: p.l || 0, d: p.d || 0 };
+}
+
+// Find a persona by id across a game (for MindGame.ai({as}) roleplay).
+function personaSystem(g, personaId) {
+  const p = (g.personas || []).find(x => x.id === personaId);
+  if (!p) return '';
+  return 'You are roleplaying "' + p.name + '", an AI game opponent. Personality: ' +
+    (p.personality || 'playful') + ' Play style: ' + (p.style || 'balanced') +
+    ' Stay in character; keep replies short and game-focused.';
+}
+
+// Per-match SSE stream for one member (the host page owns this connection).
+function startMatchStream(req, res, m, userId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  m.streams.set(res, userId);
+  // hello carries full current state + move history so a late/reconnecting
+  // subscriber misses nothing (the SDK replays by sequence number)
+  res.write(`event: hello\ndata: ${JSON.stringify({
+    match: matchOut(m, { id: userId }),
+    moves: m.moves,
+  })}\n\n`);
+
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
+  const cleanup = () => {
+    clearInterval(beat);
+    if (!m.streams.has(res)) return;
+    m.streams.delete(res);
+    // no other open stream for this user → they left the match
+    if (![...m.streams.values()].includes(userId)) {
+      matchBroadcast(m, 'leave', { playerId: userId });
+      if (m.status === 'waiting') { deleteMatch(m); return; }
+      // keep the match briefly so the survivor can claim the forfeit via /end
+      if (m.status === 'active') reapLater(m, MATCH_LINGER);
+    }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
 }
 
 function publicUser(u, viewer) {
@@ -1531,11 +1995,29 @@ const GAME_SDK_DOC =
   '  MindGame.onReady(fn)      — fn({player, aiAvailable}) once the bridge is up; player is {username, name} or null for guests\n' +
   '  MindGame.setScore(n) / MindGame.addScore(n) / MindGame.getScore()\n' +
   '  MindGame.gameOver(finalScore?) — ends the round and submits the score to the leaderboard\n' +
-  '  MindGame.ai(prompt, {system}) — Promise<string>; only when MindGame.aiAvailable is true\n' +
+  '  MindGame.ai(prompt, {system, as}) — Promise<string>; only when MindGame.aiAvailable is true.\n' +
+  '      {as: personaId} makes the reply come from that AI character, in voice.\n' +
+  'MULTIPLAYER (only if the request calls for it — the platform owns identity and transport, ' +
+  'so game code just sends and receives moves; the server stamps the verified sender and ' +
+  'enforces turn order):\n' +
+  '  const m = await MindGame.match({mode:"pvp"})   — quick match: joins the longest-waiting\n' +
+  '      open table in this game\'s lobby, or opens one and waits ("waiting" status).\n' +
+  '      {mode:"pvp", host:true} always opens a new table; {mode:"pvp", join:tableId} sits at\n' +
+  '      a specific one; {mode:"vs-ai"} plays an AI character (m.persona = {id,name,personality,style}).\n' +
+  '  m.status / m.players ([{id,username,name,isAI}]) / m.you / m.turn / m.isMyTurn\n' +
+  '  await m.send(data) — relay a move; AWAIT IT before applying a move that ends the match,\n' +
+  '      so the opponent receives the move before the result.\n' +
+  '  m.on("start"|"message"|"leave"|"end", fn) — message gives (fromPlayerId, data)\n' +
+  '  m.end({winner: playerId|null}) — records W/L/D; m.leave() gets up from the table\n' +
+  '  MindGame.lobby() / MindGame.onLobby(fn) — the pool of open tables ({id, host, seated,\n' +
+  '      seats, waitingSince}); onLobby fires live on every change and returns an unsubscribe fn.\n' +
+  '      There are no join codes: players see open tables and sit down. Multiplayer needs a\n' +
+  '      signed-in player, so handle the guest case (MindGame.player === null).\n' +
   'Hard constraints: NO network access of any kind (no fetch/XHR/WebSocket, no external ' +
   'scripts, stylesheets, images, or fonts — inline everything; images only as data: URIs or ' +
   'canvas drawing), no cookies or storage. The page background is dark (#10141D) with light ' +
-  'text; design for both mouse and touch, and make the game fill the frame responsively.';
+  'text; design for both mouse and touch, make the game fill the frame responsively, and keep ' +
+  'the top-right ~120px clear (the platform draws a score pill there).';
 
 async function generateGameFromPrompt(prompt, existingCode) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -2473,7 +2955,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { game: gameMeta(g, { code: g.code }) });
   }
 
-  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate))?$/);
+  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate|match|personas|lobby|lobby\/stream))?$/);
   if (gameMatch) {
     const gameId = gameMatch[1], sub = gameMatch[2];
     const owner = user.games.some(g => g.id === gameId) ? user : await store.getUserByGameId(gameId);
@@ -2533,12 +3015,95 @@ async function handleApi(req, res, pathname) {
       const body = await readBody(req);
       const prompt = String(body.prompt || '').trim().slice(0, 4000);
       if (!prompt) return sendJSON(res, 400, { error: 'Empty prompt.' });
+      // {as: personaId} makes the reply come from that persona, in character
+      const roleplay = body.as ? personaSystem(g, String(body.as)) : '';
+      const system = (roleplay ? roleplay + '\n\n' : '') + String(body.system || '').slice(0, 2000);
       try {
-        const text = await gameAiAsk(prompt, String(body.system || '').slice(0, 2000));
+        const text = await gameAiAsk(prompt, system);
         return sendJSON(res, 200, { text });
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'AI request failed.' });
       }
+    }
+
+    // The AI opponents this game has accumulated — for "choose your rival" UIs.
+    if (sub === 'personas' && req.method === 'GET') {
+      return sendJSON(res, 200, { personas: (g.personas || []).map(personaOut) });
+    }
+
+    // The pool of open tables for this game: a snapshot, or a live stream that
+    // pushes the table list every time one opens, fills, or expires.
+    if (sub === 'lobby' && req.method === 'GET') {
+      return sendJSON(res, 200, { tables: openTables(g.id) });
+    }
+    if (sub === 'lobby/stream' && req.method === 'GET') {
+      return startLobbyStream(req, res, g.id);
+    }
+
+    // Start, join, or sit down for a match. The response is the full current
+    // match state; live events then arrive on GET /api/match/:id/stream.
+    //   {mode:'vs-ai', personaId?}   — seat an AI persona and start now
+    //   {mode:'pvp'}                 — quick match: take the longest-waiting
+    //                                  open table, or sit down as a new one
+    //   {mode:'pvp', join:tableId}   — sit down at a specific open table
+    //   {mode:'pvp', host:true}      — always open a new table (don't auto-pair)
+    //   turnBased:false              — opt out of server turn enforcement
+    if (sub === 'match' && req.method === 'POST') {
+      if (tooMany('match:' + user.id, 120, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many matches this hour. Try again later.' });
+      }
+      const body = await readBody(req);
+      const mode = body.mode === 'vs-ai' ? 'vs-ai' : 'pvp';
+      const seat = { id: user.id, username: user.username, name: selfName(user), kind: 'human' };
+
+      // Joining an existing table — either a named one or (quick match) the
+      // one that has been waiting longest.
+      if (mode === 'pvp') {
+        let open = null;
+        if (body.join) {
+          open = matches.get(String(body.join));
+          if (!open || open.gameId !== g.id || open.mode !== 'pvp' || open.status !== 'waiting') {
+            return sendJSON(res, 409, { error: 'That table is no longer open.' });
+          }
+          if (open.players.some(p => p.id === user.id)) {
+            return sendJSON(res, 409, { error: 'You’re already at that table.' });
+          }
+        } else if (!body.host) {
+          open = findQuickMatch(g.id, user.id);
+        }
+        if (open) {
+          open.players.push(seat);
+          startMatch(open);
+          return sendJSON(res, 200, { match: matchOut(open, user) });
+        }
+      }
+
+      const m = {
+        id: newId(),
+        gameId: g.id,
+        mode,
+        status: 'waiting',
+        seats: 2, // two-seat tables for now; the pool shows seated/seats
+        turnBased: mode === 'pvp' && body.turnBased !== false, // vs-ai moves are computed in-game
+        turn: null,
+        players: [seat],
+        streams: new Map(),
+        moves: [],
+        seq: 0,
+        recorded: false,
+        reaper: null,
+        createdAt: Date.now(),
+      };
+      matches.set(m.id, m);
+      if (mode === 'vs-ai') {
+        const persona = await pickPersona(owner, g, body.personaId ? String(body.personaId) : null);
+        m.players.push({ id: persona.id, username: persona.name, name: persona.name, kind: 'ai', persona });
+        startMatch(m);
+        return sendJSON(res, 200, { match: matchOut(m, user), persona: personaOut(persona) });
+      }
+      reapLater(m, MATCH_WAIT_TTL);
+      broadcastLobby(g.id); // a new table is open in the pool
+      return sendJSON(res, 200, { match: matchOut(m, user) });
     }
 
     // ✨ AI writes (or reworks) the game's code from a description.
@@ -2557,6 +3122,65 @@ async function handleApi(req, res, pathname) {
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
       }
+    }
+
+    return sendJSON(res, 404, { error: 'Not found.' });
+  }
+
+  // --- live match transport (members only; identity comes from the session) ---
+  const matchRoute = pathname.match(/^\/api\/match\/([A-Za-z0-9]{1,40})\/(stream|move|end|leave)$/);
+  if (matchRoute) {
+    const m = matches.get(matchRoute[1]);
+    const act = matchRoute[2];
+    if (!m || !findMemberSeat(m, user.id)) return sendJSON(res, 404, { error: 'No such match.' });
+
+    if (act === 'stream' && req.method === 'GET') {
+      return startMatchStream(req, res, m, user.id);
+    }
+
+    // Relay one move to the room. The server stamps the verified sender and,
+    // for turn-based matches, rejects out-of-turn moves and advances the turn.
+    if (act === 'move' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (m.status !== 'active') return sendJSON(res, 409, { error: 'The match hasn’t started.' });
+      const payload = body.data === undefined ? null : body.data;
+      if (JSON.stringify(payload).length > MAX_MOVE_BYTES) {
+        return sendJSON(res, 400, { error: 'Move too large.' });
+      }
+      if (m.turnBased) {
+        if (m.turn !== user.id) return sendJSON(res, 409, { error: 'Not your turn.' });
+        const humans = m.players.filter(p => p.kind === 'human');
+        const i = humans.findIndex(p => p.id === user.id);
+        m.turn = humans[(i + 1) % humans.length].id;
+      }
+      const move = { seq: ++m.seq, from: user.id, data: payload, turn: m.turn };
+      m.moves.push(move);
+      if (m.moves.length > MAX_MATCH_MOVES) m.moves.shift();
+      matchBroadcast(m, 'message', move, user.id); // sender's 200 is their ack
+      return sendJSON(res, 200, { seq: move.seq, turn: m.turn });
+    }
+
+    // Declare the result. First call wins (identical honest clients agree on
+    // it anyway); records land on the game for humans and personas alike.
+    if (act === 'end' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (m.status === 'done') return sendJSON(res, 200, { ok: true, already: true });
+      let winner = body.winner === null || body.winner === undefined ? null : String(body.winner);
+      if (winner && !m.players.some(p => p.id === winner)) {
+        return sendJSON(res, 400, { error: 'Winner must be a player in the match.' });
+      }
+      m.status = 'done';
+      await recordMatchResult(m, winner);
+      matchBroadcast(m, 'end', { winner, byId: user.id });
+      reapLater(m, MATCH_LINGER);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (act === 'leave' && req.method === 'POST') {
+      matchBroadcast(m, 'leave', { playerId: user.id }, user.id);
+      if (m.status === 'waiting') deleteMatch(m);
+      else reapLater(m, MATCH_LINGER);
+      return sendJSON(res, 200, { ok: true });
     }
 
     return sendJSON(res, 404, { error: 'Not found.' });

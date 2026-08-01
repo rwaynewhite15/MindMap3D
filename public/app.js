@@ -3514,6 +3514,229 @@ const GAME_TEMPLATES = [
     ].join('\n'),
   },
   {
+    id: 'ttt',
+    label: '⭕ Tic Tac Toe — multiplayer lobby + AI opponents',
+    code: [
+      '<div id="app">',
+      '  <div id="head"><span id="status">Tic Tac Toe</span><button id="quit" hidden>Leave match</button></div>',
+      '  <div id="menu">',
+      '    <p class="lead">Play a real person, or take on one of this game\'s AI characters.</p>',
+      '    <div class="row"><button id="quick" class="primary">⚡ Quick match</button>',
+      '    <button id="host">🪑 Open a table</button>',
+      '    <button id="ai">🤖 Play an AI</button></div>',
+      '    <h3>Open tables</h3>',
+      '    <div id="tables"><p class="dim">Nobody is waiting right now — open a table and someone can sit down.</p></div>',
+      '  </div>',
+      '  <div id="boardWrap" hidden><div id="board"></div><div id="sub"></div></div>',
+      '</div>',
+      '<style>',
+      '  #app{max-width:440px;margin:0 auto;padding:18px 16px;font-family:system-ui,sans-serif}',
+      '  /* keep the top-right clear: the platform draws its score pill there */',
+      '  #head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-right:120px}',
+      '  #status{font-size:17px;font-weight:700;flex:1}',
+      '  .lead{opacity:.75;font-size:14px;margin:0 0 12px}',
+      '  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}',
+      '  button{font:inherit;font-size:14px;padding:10px 14px;border-radius:10px;border:1px solid #2a3550;background:#141926;color:#E8ECF4;cursor:pointer}',
+      '  button.primary{background:#4FD1E0;color:#10141D;border-color:#4FD1E0;font-weight:700}',
+      '  button:disabled{opacity:.45;cursor:default}',
+      '  h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin:0 0 8px}',
+      '  .dim{opacity:.55;font-size:13px;margin:0}',
+      '  .table{display:flex;align-items:center;gap:10px;background:#141926;border:1px solid #2a3550;border-radius:10px;padding:8px 10px;margin-bottom:6px}',
+      '  .table b{flex:1;font-size:14px;font-weight:600}',
+      '  .table small{opacity:.55;font-size:12px}',
+      '  #board{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;aspect-ratio:1;margin-bottom:12px}',
+      '  .cell{font-size:min(13vw,52px);font-weight:700;background:#141926;border:1px solid #2a3550;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer}',
+      '  .cell:disabled{cursor:default}',
+      '  .cell.win{background:#4FD1E033;border-color:#4FD1E0}',
+      '  #sub{text-align:center;opacity:.75;font-size:14px;min-height:22px}',
+      '</style>',
+      '<script>',
+      '// A complete multiplayer reference. The platform owns identity and',
+      '// transport: match.send() relays a move, and every message you receive is',
+      '// stamped by the server with who really sent it — so a move can never be',
+      '// forged by another player\'s code.',
+      'var WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];',
+      'var board, match, mark, myTurn, over, unwatch, winLine;',
+      'var el = function (id) { return document.getElementById(id); };',
+      '',
+      'function render(winLine) {',
+      '  var b = el("board"); b.innerHTML = "";',
+      '  board.forEach(function (v, i) {',
+      '    var c = document.createElement("button");',
+      '    c.className = "cell" + (winLine && winLine.indexOf(i) >= 0 ? " win" : "");',
+      '    c.textContent = v || "";',
+      '    c.disabled = !!v || !myTurn || over;',
+      '    c.onclick = function () { play(i); };',
+      '    b.appendChild(c);',
+      '  });',
+      '}',
+      '',
+      'function winner() {',
+      '  for (var i = 0; i < WINS.length; i++) {',
+      '    var w = WINS[i];',
+      '    if (board[w[0]] && board[w[0]] === board[w[1]] && board[w[1]] === board[w[2]]) return { mark: board[w[0]], line: w };',
+      '  }',
+      '  return board.indexOf("") < 0 ? { mark: null, line: null } : null; // null mark = draw',
+      '}',
+      '',
+      '// Apply a move locally, then see whether the game is decided.',
+      'function apply(i, m) {',
+      '  if (board[i] || over) return;',
+      '  board[i] = m;',
+      '  var res = winner();',
+      '  if (res) {',
+      '    over = true;',
+      '    winLine = res.line; // remembered so later re-renders keep the highlight',
+      '    render(winLine);',
+      '    var iWon = res.mark === mark;',
+      '    el("sub").textContent = res.mark === null ? "Draw." : (iWon ? "You win!" : "You lose.");',
+      '    MindGame.setScore(res.mark === null ? 1 : (iWon ? 3 : 0)); // 3/1/0 points',
+      '    MindGame.gameOver();',
+      '    // Whoever notices first reports it; the server records W/L once.',
+      '    var winnerId = res.mark === null ? null',
+      '      : (iWon ? match.you : (match.players.filter(function (p) { return p.id !== match.you; })[0] || {}).id);',
+      '    match.end({ winner: winnerId });',
+      '    return;',
+      '  }',
+      '  render();',
+      '  turnText();',
+      '}',
+      '',
+      'function turnText() {',
+      '  if (over) return;',
+      '  el("sub").textContent = myTurn ? "Your move (" + mark + ")" : "Waiting for your opponent…";',
+      '}',
+      '',
+      '// Relay the move FIRST, then resolve it locally. A winning move both',
+      '// sends and ends the match, and the opponent has to receive the move',
+      '// before the end — so we wait for the relay to be acknowledged.',
+      'function play(i) {',
+      '  if (!myTurn || board[i] || over) return;',
+      '  myTurn = false;',
+      '  render(); // lock the board while the move is in flight',
+      '  match.send({ cell: i }).then(function () {',
+      '    apply(i, mark);',
+      '    if (!over && match.mode === "vs-ai") setTimeout(aiMove, 500);',
+      '  }).catch(function (err) {',
+      '    myTurn = true; // the move never landed — let them try again',
+      '    el("sub").textContent = err.message;',
+      '    render();',
+      '  });',
+      '}',
+      '',
+      '// The AI opponent: ask the model in-character, and fall back to a solid',
+      '// local strategy if AI is off or the answer is unusable.',
+      'function aiMove() {',
+      '  if (over) return;',
+      '  var free = [];',
+      '  board.forEach(function (v, i) { if (!v) free.push(i); });',
+      '  if (!free.length) return;',
+      '  var mine = mark === "X" ? "O" : "X";',
+      '  function finish(i) { apply(i, mine); myTurn = !over; render(); turnText(); }',
+      '  function best() { // win, else block, else centre/corner',
+      '    for (var t = 0; t < 2; t++) {',
+      '      var who = t === 0 ? mine : mark;',
+      '      for (var w = 0; w < WINS.length; w++) {',
+      '        var line = WINS[w], vals = line.map(function (i) { return board[i]; });',
+      '        var open = line.filter(function (i) { return !board[i]; });',
+      '        if (open.length === 1 && vals.filter(function (v) { return v === who; }).length === 2) return open[0];',
+      '      }',
+      '    }',
+      '    var pref = [4, 0, 2, 6, 8, 1, 3, 5, 7];',
+      '    for (var p = 0; p < pref.length; p++) if (!board[pref[p]]) return pref[p];',
+      '    return free[0];',
+      '  }',
+      '  if (!MindGame.aiAvailable) return finish(best());',
+      '  MindGame.ai(',
+      '    "Tic tac toe. Cells 0-8, row-major. Board: [" + board.map(function (v) { return v || "_"; }).join(",") + "]. " +',
+      '    "You are \\"" + mine + "\\". Reply with ONLY the number of your chosen empty cell.",',
+      '    { as: match.persona && match.persona.id }   // answer in character',
+      '  ).then(function (text) {',
+      '    var n = parseInt(String(text).match(/\\d/) ? String(text).match(/\\d/)[0] : "", 10);',
+      '    finish(free.indexOf(n) >= 0 ? n : best());',
+      '  }).catch(function () { finish(best()); });',
+      '}',
+      '',
+      'function begin(m) {',
+      '  match = m;',
+      '  if (unwatch) { unwatch(); unwatch = null; }',
+      '  board = ["", "", "", "", "", "", "", "", ""];',
+      '  over = false;',
+      '  winLine = null;',
+      '  el("quit").hidden = false;',
+      '  m.on("start", function (info) {',
+      '    var opp = info.players.filter(function (p) { return p.id !== m.you; })[0] || {};',
+      '    // X always moves first, so your mark follows who the server chose',
+      '    myTurn = m.isMyTurn;',
+      '    mark = myTurn ? "X" : "O";',
+      '    el("menu").hidden = true;',
+      '    el("boardWrap").hidden = false;',
+      '    el("status").textContent = "vs " + (opp.isAI ? "🤖 " : "@") + (opp.name || opp.username || "opponent");',
+      '    if (m.persona && m.persona.personality) el("sub").textContent = m.persona.personality;',
+      '    render();',
+      '    setTimeout(turnText, m.persona ? 1600 : 0);',
+      '    if (m.mode === "vs-ai" && !myTurn) setTimeout(aiMove, 700);',
+      '  });',
+      '  m.on("message", function (from, data) { // `from` is server-verified',
+      '    if (!data || typeof data.cell !== "number") return;',
+      '    myTurn = true;',
+      '    apply(data.cell, mark === "X" ? "O" : "X");',
+      '  });',
+      '  m.on("leave", function () {',
+      '    if (over) return;',
+      '    over = true;',
+      '    el("sub").textContent = "Your opponent left — you win by forfeit.";',
+      '    MindGame.setScore(3); MindGame.gameOver();',
+      '    m.end({ winner: m.you });',
+      '  });',
+      '  m.on("end", function () { over = true; render(winLine); });',
+      '  if (m.status === "waiting") {',
+      '    el("menu").hidden = true;',
+      '    el("boardWrap").hidden = false;',
+      '    el("board").innerHTML = "";',
+      '    el("status").textContent = "Waiting at your table…";',
+      '    el("sub").textContent = "You\'re in the lobby — the next player who sits down starts the game.";',
+      '  }',
+      '}',
+      '',
+      'function renderTables(tables) {',
+      '  var box = el("tables");',
+      '  var open = tables.filter(function (t) { return t.host.username !== (MindGame.player || {}).username; });',
+      '  if (!open.length) { box.innerHTML = "<p class=\\"dim\\">Nobody is waiting right now — open a table and someone can sit down.</p>"; return; }',
+      '  box.innerHTML = "";',
+      '  open.forEach(function (t) {',
+      '    var row = document.createElement("div"); row.className = "table";',
+      '    var who = document.createElement("b"); who.textContent = t.host.name || "@" + t.host.username;',
+      '    var age = document.createElement("small");',
+      '    var secs = Math.max(0, Math.round((Date.now() - t.waitingSince) / 1000));',
+      '    age.textContent = "waiting " + (secs < 60 ? secs + "s" : Math.round(secs / 60) + "m");',
+      '    var sit = document.createElement("button"); sit.className = "primary"; sit.textContent = "Sit down";',
+      '    sit.onclick = function () { MindGame.match({ mode: "pvp", join: t.id }).then(begin).catch(oops); };',
+      '    row.appendChild(who); row.appendChild(age); row.appendChild(sit);',
+      '    box.appendChild(row);',
+      '  });',
+      '}',
+      '',
+      'function oops(err) { el("sub").textContent = err.message; el("menu").hidden = false; el("boardWrap").hidden = true; }',
+      '',
+      'el("quick").onclick = function () { MindGame.match({ mode: "pvp" }).then(begin).catch(oops); };',
+      'el("host").onclick = function () { MindGame.match({ mode: "pvp", host: true }).then(begin).catch(oops); };',
+      'el("ai").onclick = function () { MindGame.match({ mode: "vs-ai" }).then(begin).catch(oops); };',
+      'el("quit").onclick = function () { if (match) match.leave(); location.reload(); };',
+      '',
+      'MindGame.onReady(function (info) {',
+      '  MindGame.setScore(0);',
+      '  if (!info.player) {',
+      '    el("status").textContent = "Sign in to play";',
+      '    el("menu").innerHTML = "<p class=\\"lead\\">Multiplayer needs an account — sign in on MindMapShare to join the lobby.</p>";',
+      '    return;',
+      '  }',
+      '  unwatch = MindGame.onLobby(renderTables); // live pool of open tables',
+      '});',
+      '<\/script>',
+    ].join('\n'),
+  },
+  {
     id: 'quiz',
     label: '🧠 AI Trivia — questions written by AI as you play',
     code: [
@@ -3611,7 +3834,30 @@ function fmtScore(n) {
   return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-/* ---------- the postMessage bridge (player + editor preview) ---------- */
+/* ---------- the postMessage bridge (player + editor preview) ----------
+   The host page is the only side with credentials: it holds the session
+   cookie, opens the match/lobby SSE streams, and makes every API call the
+   game asks for. Game code just sends and receives moves — the server
+   stamps the verified sender, so it can't claim to be anyone else. */
+let bridge = null; // { mode, gameId, matchId, matchEs, lobbyEs } for the running frame
+
+function bridgeFrame(mode) { return mode === 'play' ? gpFrame : gePreview; }
+
+function postToGame(mode, msg) {
+  const f = bridgeFrame(mode);
+  try { if (f.contentWindow) f.contentWindow.postMessage(msg, '*'); } catch { /* frame gone */ }
+}
+
+// Drop any match/lobby streams held for a frame that's being replaced or closed.
+function resetBridge() {
+  if (!bridge) return;
+  if (bridge.matchEs) bridge.matchEs.close();
+  if (bridge.lobbyEs) bridge.lobbyEs.close();
+  // tell the server we've left an unfinished match so the table clears
+  if (bridge.matchId) api('/api/match/' + bridge.matchId + '/leave', 'POST').catch(() => {});
+  bridge = null;
+}
+
 window.addEventListener('message', e => {
   const d = e.data;
   if (!d || typeof d !== 'object' || !d.mg) return;
@@ -3621,6 +3867,8 @@ window.addEventListener('message', e => {
   else if (gameEdit && gamePreviewOn && e.source === gePreview.contentWindow) { mode = 'preview'; gameId = gameEdit.id; }
   if (!mode) return;
   const reply = msg => { try { e.source.postMessage(msg, '*'); } catch { /* frame gone */ } };
+  const ack = (id, extra) => reply(Object.assign({ mg: 'bridge-ack', id, ok: true }, extra || {}));
+  const nack = (id, error) => reply({ mg: 'bridge-ack', id, ok: false, error });
 
   if (d.mg === 'ready') {
     reply({ mg: 'init', player: playerRef(), aiAvailable: !!(me && me.aiEnabled) });
@@ -3630,8 +3878,98 @@ window.addEventListener('message', e => {
     onGameOver(mode, gameId, Number(d.score) || 0);
   } else if (d.mg === 'ai') {
     relayGameAi(gameId, d, reply);
+  } else if (d.mg === 'match') {
+    startMatchForGame(mode, gameId, d, ack, nack);
+  } else if (d.mg === 'match-send') {
+    if (!bridge || !bridge.matchId) return nack(d.id, 'You are not in a match.');
+    api('/api/match/' + bridge.matchId + '/move', 'POST', { data: d.data })
+      .then(r => ack(d.id, { seq: r.seq, turn: r.turn }))
+      .catch(err => nack(d.id, err.message));
+  } else if (d.mg === 'match-end') {
+    if (!bridge || !bridge.matchId) return nack(d.id, 'You are not in a match.');
+    api('/api/match/' + bridge.matchId + '/end', 'POST', { winner: d.winner === undefined ? null : d.winner })
+      .then(() => ack(d.id))
+      .catch(err => nack(d.id, err.message));
+  } else if (d.mg === 'match-leave') {
+    resetBridge();
+  } else if (d.mg === 'lobby') {
+    api('/api/games/' + gameId + '/lobby')
+      .then(r => ack(d.id, { tables: r.tables }))
+      .catch(err => nack(d.id, err.message));
+  } else if (d.mg === 'lobby-watch') {
+    watchLobby(mode, gameId);
+  } else if (d.mg === 'lobby-unwatch') {
+    if (bridge && bridge.lobbyEs) { bridge.lobbyEs.close(); bridge.lobbyEs = null; }
   }
 });
+
+// Sit down for a match on the game's behalf, then wire its live stream.
+async function startMatchForGame(mode, gameId, d, ack, nack) {
+  if (!me) return nack(d.id, 'Sign in to play against other people.');
+  const opts = (d.opts && typeof d.opts === 'object') ? d.opts : {};
+  resetBridge();
+  try {
+    const r = await api('/api/games/' + gameId + '/match', 'POST', {
+      mode: opts.mode === 'vs-ai' ? 'vs-ai' : 'pvp',
+      join: opts.join ? String(opts.join) : undefined,
+      host: !!opts.host,
+      personaId: opts.personaId ? String(opts.personaId) : undefined,
+      turnBased: opts.turnBased,
+    });
+    const b = { mode, gameId, matchId: r.match.id, you: r.match.you, matchEs: null, lobbyEs: bridge ? bridge.lobbyEs : null };
+    bridge = b;
+    ack(d.id, { match: r.match, persona: r.persona || null });
+    // live match events → the game, tagged with the match they belong to
+    const es = new EventSource('/api/match/' + r.match.id + '/stream');
+    b.matchEs = es;
+    const forward = ev => es.addEventListener(ev, msg => {
+      let data; try { data = JSON.parse(msg.data); } catch { return; }
+      if (bridge !== b) return; // a newer match replaced this one
+      postToGame(mode, { mg: 'match-event', matchId: b.matchId, event: ev, data });
+      if (ev === 'end' || ev === 'gone') showMatchOutcome(mode, b, data, ev);
+    });
+    ['message', 'start', 'leave', 'end', 'gone'].forEach(forward);
+    // `hello` carries the full state + any moves already made (reconnect-safe)
+    es.addEventListener('hello', msg => {
+      let data; try { data = JSON.parse(msg.data); } catch { return; }
+      if (bridge !== b) return;
+      postToGame(mode, { mg: 'match-event', matchId: b.matchId, event: 'sync', data });
+    });
+  } catch (err) {
+    nack(d.id, err.message);
+  }
+}
+
+function watchLobby(mode, gameId) {
+  if (!bridge) bridge = { mode, gameId, matchId: null, matchEs: null, lobbyEs: null };
+  if (bridge.lobbyEs) return;
+  const b = bridge;
+  const es = new EventSource('/api/games/' + gameId + '/lobby/stream');
+  b.lobbyEs = es;
+  es.addEventListener('tables', msg => {
+    let data; try { data = JSON.parse(msg.data); } catch { return; }
+    if (bridge !== b) return;
+    postToGame(mode, { mg: 'lobby', tables: data.tables || [] });
+  });
+}
+
+// Surface a match result in the platform chrome too, so the outcome is visible
+// even if the game's own UI is subtle about it.
+function showMatchOutcome(mode, b, data, ev) {
+  if (ev === 'gone') { gameToast('The match ended — your opponent left.'); b.matchId = null; return; }
+  const winner = data && data.winner;
+  gameToast(winner === null || winner === undefined ? '🤝 Match drawn.'
+    : winner === b.you ? '🏆 You won the match!' : 'Match over — better luck next time.');
+  b.matchId = null; // finished: nothing to leave
+  if (mode === 'play' && gamePlay) refreshLeaderboard(gamePlay.id);
+}
+
+async function refreshLeaderboard(gameId) {
+  try {
+    const r = await api('/api/games/' + gameId + '/leaderboard');
+    if (gamePlay && gamePlay.id === gameId) renderLeaderboard(r.leaderboard);
+  } catch { /* keep whatever is shown */ }
+}
 
 function setGameScorePill(mode, value) {
   const pill = mode === 'play' ? $('#gpScore') : $('#geScore');
@@ -3646,6 +3984,7 @@ async function relayGameAi(gameId, d, reply) {
     const r = await api('/api/games/' + gameId + '/ai', 'POST', {
       prompt: String(d.prompt || '').slice(0, 4000),
       system: String(d.system || '').slice(0, 2000),
+      as: d.as ? String(d.as) : undefined, // answer in a persona's character
     });
     reply({ mg: 'ai-result', id: d.id, ok: true, text: r.text });
   } catch (err) {
@@ -3731,6 +4070,15 @@ function gameCard(g, opts) {
   if (g.updatedAt) bits.push(timeAgo(g.updatedAt));
   stats.textContent = bits.join(' · ');
   card.appendChild(stats);
+
+  // someone is sitting in this game's lobby right now — the strongest possible
+  // nudge to click Play, so it gets its own live badge
+  if (g.openTables) {
+    const live = document.createElement('div');
+    live.className = 'game-card-live';
+    live.textContent = '🟢 ' + g.openTables + ' player' + (g.openTables === 1 ? '' : 's') + ' waiting to play';
+    card.appendChild(live);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'game-card-actions';
@@ -3901,6 +4249,7 @@ async function runGamePreview() {
   if (!(await saveGameCode())) return;
   try {
     const r = await api('/api/games/' + gameEdit.id + '/play', 'POST');
+    resetBridge(); // re-running drops the previous run's match/lobby streams
     gamePreviewOn = true;
     $('#gePreviewEmpty').hidden = true;
     $('#geScore').hidden = false;
@@ -3914,6 +4263,7 @@ async function runGamePreview() {
 function stopGamePreview() {
   if (!gamePreviewOn) return;
   gamePreviewOn = false;
+  resetBridge();
   gePreview.src = 'about:blank';
 }
 
@@ -4052,6 +4402,7 @@ async function openGamePlayer(gameId) {
 function stopGamePlayer() {
   if (!gamePlay) return;
   gamePlay = null;
+  resetBridge(); // leaves any open table so it doesn't sit in the pool
   gpFrame.src = 'about:blank';
 }
 
@@ -4096,6 +4447,35 @@ function renderLeaderboard(board) {
     list.appendChild(gap);
     list.appendChild(row(board.mine));
   }
+  renderMatchRecords(board.matches || []);
+}
+
+// Head-to-head records from multiplayer matches — humans and AI personas on
+// the same ladder, since a persona is just another player with a record.
+function renderMatchRecords(rows) {
+  const list = $('#gpBoardList');
+  if (!rows.length) return;
+  const head = document.createElement('div');
+  head.className = 'board-subhead';
+  head.textContent = '⚔️ Match record';
+  list.appendChild(head);
+  for (const r of rows) {
+    const el = document.createElement('div');
+    el.className = 'board-row' + (r.me ? ' me' : '');
+    const who = document.createElement('span');
+    who.className = 'br-who';
+    who.textContent = (r.kind === 'ai' ? '🤖 ' : '') + (r.name || '@' + r.username) + (r.me ? ' (you)' : '');
+    if (r.kind === 'human' && r.username) {
+      who.addEventListener('click', () => { location.hash = '#/u/' + r.username; });
+    } else {
+      who.style.cursor = 'default';
+    }
+    const rec = document.createElement('span');
+    rec.className = 'br-score br-record';
+    rec.textContent = r.w + 'W ' + r.l + 'L' + (r.d ? ' ' + r.d + 'D' : '');
+    el.append(who, rec);
+    list.appendChild(el);
+  }
 }
 
 $('#btnGpBack').addEventListener('click', () => {
@@ -4108,17 +4488,13 @@ $('#btnGpRestart').addEventListener('click', () => {
   if (!gamePlay || !gamePlay.src) return;
   $('#gpScore').hidden = true;
   $('#gpToast').hidden = true;
+  resetBridge(); // a fresh round starts with no match attached
   gpFrame.src = gamePlay.src + '&r=' + Date.now(); // reload = fresh round
 });
-$('#btnGpBoard').addEventListener('click', async () => {
+$('#btnGpBoard').addEventListener('click', () => {
   const panel = $('#gpBoardPanel');
   panel.hidden = !panel.hidden;
-  if (!panel.hidden && gamePlay) {
-    try {
-      const r = await api('/api/games/' + gamePlay.id + '/leaderboard');
-      renderLeaderboard(r.leaderboard);
-    } catch { /* keep whatever is shown */ }
-  }
+  if (!panel.hidden && gamePlay) refreshLeaderboard(gamePlay.id);
 });
 $('#btnGpBoardClose').addEventListener('click', () => { $('#gpBoardPanel').hidden = true; });
 

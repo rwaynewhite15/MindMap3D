@@ -20,6 +20,12 @@ and turns on **AI generation** simply by setting environment variables.
   run safely sandboxed, keep score, post to **per-game leaderboards**, and can even **call
   the AI mid-play** (think AI-written trivia questions or NPC dialogue). Publish to friends
   or everyone and discover other people's games on the new **Games** page.
+- **Multiplayer, with a real lobby** — games can host **live matches against other people**.
+  There are no join codes to pass around: every player waiting for an opponent shows up as an
+  **open table in that game's lobby**, and you simply **sit down** at one (or hit **Quick
+  match**). Game cards show *"🟢 2 players waiting to play"* so you can find a live game.
+  Prefer solo? **Play an AI character** instead — the platform invents named opponents with
+  their own personalities that **build win/loss records** on the same ladder as human players.
 - **AI can expand a map, not just replace it** — the ✨ AI panel now offers **Add to map**
   (reads your current map as context and adds new, connected ideas beside it — nothing
   removed) alongside **Begin new map** (the original replace behavior).
@@ -206,9 +212,10 @@ widgets) and share them the same way maps are shared.
   games from the whole community. Signed-out visitors can browse and play public games too.
 - **The editor** is a split view: your **HTML/CSS/JS code on the left, a live preview on
   the right** — press **▶ Run** to save and play instantly. Start from a template (a blank
-  scaffold, an arcade game, or an AI trivia quiz), or open **✨ AI** and just *describe* the
-  game — the AI writes the whole thing, and can also **improve your existing code** on
-  request ("add sound-free juice", "make it harder over time", …).
+  scaffold, an arcade game, a multiplayer Tic Tac Toe, or an AI trivia quiz), or open
+  **✨ AI** and just *describe* the game — the AI writes the whole thing, and can also
+  **improve your existing code** on request ("add sound-free juice", "make it harder over
+  time", …).
 - **Scores & leaderboards** — games report scores through a tiny `MindGame` API
   (`setScore`, `addScore`, `gameOver`). Each game keeps a **leaderboard of every player's
   personal best** (with play counts), shown beside the game with medals for the top three
@@ -221,10 +228,48 @@ widgets) and share them the same way maps are shared.
 - **Same privacy tiers as maps** — every game is **Private**, **Friends only**, or
   **Public**. Publishing a playable game notifies your friends and followers (bell and
   push), and tapping the alert drops them straight into the game.
-- **Safety** — game code runs in a **sandboxed iframe with a locked-down Content Security
+- **Multiplayer & AI opponents** — games can host live matches through a pooling lobby;
+  see below.
+
+#### Multiplayer & the pooling lobby
+
+Games can run **live matches** between players — and against AI characters — without the
+author writing any networking code.
+
+- **The lobby is a pool, not a code exchange.** Anyone waiting for an opponent is an **open
+  table** listed in that game's lobby, showing who's waiting and for how long. You **sit
+  down** at a table to start the match, or press **Quick match** to be paired with whoever
+  has waited longest. Tables appear and disappear live over a stream, and the Games hub
+  advertises *"🟢 N players waiting to play"* on each card so live games are easy to find.
+- **AI opponents are characters, not difficulty settings.** The first time someone plays
+  a game's AI, the platform *invents* a persona server-side — a name, a personality, and a
+  play style ("Rusty Circuits: a creaky old bot with surprising flashes of brilliance") —
+  saves it to the game, and seats it. Its moves can be driven by `MindGame.ai(prompt, {as})`,
+  which answers **in that character's voice**, and it **accumulates a win/loss record** that
+  sits on the same match ladder as human players. Later matches can re-seat the same rival.
+- **Match records** live beside the score leaderboard: a W/L/D ladder covering humans and AI
+  personas alike, sorted by wins.
+- **For game authors** it's a handful of calls — `MindGame.match({mode:'pvp'})`,
+  `match.send(move)`, `match.on('message', …)`, `match.end({winner})`, plus
+  `MindGame.onLobby(fn)` for a live table list. The **Tic Tac Toe template** is a complete
+  working example: lobby, quick match, AI opponent, forfeit handling, and result recording.
+
+#### Safety — why user-written code is safe to run
+
+- Game code runs in a **sandboxed iframe with a locked-down Content Security
   Policy**: an opaque origin, no cookies, and **no network access at all**. Games talk to
-  the app only through a narrow `postMessage` bridge (score, round-over, AI ask), and
-  score submission is authenticated by the page around the game — never by game code.
+  the app only through a narrow `postMessage` bridge (score, round-over, AI ask, moves),
+  and everything privileged happens outside the sandbox: **the host page holds the session,
+  opens the match stream, and makes every API call**. The server binds each connection to
+  the signed-in user and **stamps every relayed move with the verified sender**, so game
+  code cannot forge who moved, join a match it wasn't seated at, or read anyone's
+  credentials. Turn order is enforced server-side — an out-of-turn move is rejected before
+  it reaches the other player.
+
+> **Honest caveat:** scores and match results are still *reported by the game*, so
+> leaderboards are casual/honor-system — a determined player could report a score they
+> didn't earn. Identity, turn order, and delivery are enforced; the *meaning* of a move is
+> not. Server-side validators for authors would be the fix, and are not built yet.
 
 ### Sharing & real-time collaboration
 - **Grant edit access** to friends from **Map ▾ → "Who can edit this map?"**. Maps shared
@@ -321,9 +366,15 @@ IP. Leave `ADMIN_PASSWORD` unset and both the page and its API stay disabled.
 ### Live collaboration behind a proxy
 
 Real-time updates use **Server-Sent Events** (one long-lived HTTP connection per open
-map). A reverse proxy must not buffer or prematurely close the stream — the server sends
-the `X-Accel-Buffering: no` header and a 25-second heartbeat to keep connections healthy
-through common proxies (nginx, Render).
+map, per open game match, and per watched game lobby). A reverse proxy must not buffer or
+prematurely close the stream — the server sends the `X-Accel-Buffering: no` header and a
+25-second heartbeat to keep connections healthy through common proxies (nginx, Render).
+
+Game matches are **in-memory** on the server: a restart drops matches in flight (players
+just start a new one), while everything durable — AI personas, win/loss records, scores —
+lives on the game record in the database. Because match state is per-process, running
+multiple workers would need a shared bus (Redis) before matches could span them; a single
+web service handles the current scale fine.
 
 ### Schema migrations are automatic and safe
 
@@ -339,7 +390,7 @@ is required for them.
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, games (sandboxed serving, leaderboards, AI relay), static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, games (sandboxed serving, leaderboards, AI relay, matches + lobby + AI personas), static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |

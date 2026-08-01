@@ -1551,6 +1551,17 @@ button.primary {
 .board-row.top3 .br-rank { color: #E09A5A; }
 .board-gap { text-align: center; color: var(--dim); font-size: 12px; padding: 2px 0; }
 .board-empty { color: var(--dim); font-size: 13px; padding: 14px 4px; text-align: center; }
+.board-subhead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 12px 0 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.br-record { font-size: 12px; font-weight: 600; color: var(--dim); }
+.game-card-live { font-size: 12px; color: var(--accent); font-weight: 600; }
 
 /* stacked layouts on phones: editor panes vertical, leaderboard overlays */
 @media (max-width: 760px) {

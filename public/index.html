@@ -187,20 +187,46 @@
         <textarea id="geCode" spellcheck="false" autocomplete="off" autocapitalize="off"
           placeholder="Write your game here — HTML, <style> and <script> tags. It runs in a sandboxed frame with the MindGame bridge (see the guide below)."></textarea>
         <details class="gedit-help">
-          <summary>MindGame API — how scores, leaderboards &amp; AI work</summary>
+          <summary>MindGame API — scores, leaderboards, AI &amp; multiplayer</summary>
           <pre>Your code is the body of a sandboxed page (no network, no cookies —
-inline everything). A MindGame object is defined before your code runs:
+inline everything). A MindGame object is defined before your code runs.
 
+SCORE
   MindGame.onReady(fn)        fn({player, aiAvailable}); player = {username, name} or null (guest)
-  MindGame.setScore(n)        show + track the live score
-  MindGame.addScore(n)        increment it
-  MindGame.getScore()         current score
+  MindGame.setScore(n) / addScore(n) / getScore()
   MindGame.gameOver(score?)   end the round — submits the score to the leaderboard
-  MindGame.ai(prompt, {system})   Promise&lt;string&gt; — ask the AI (when MindGame.aiAvailable)
 
-Tip: call MindGame.gameOver() exactly when a round truly ends; players'
-best scores build the leaderboard. Set "lower is better" in Game ▾ for
-time-based games.</pre>
+AI
+  MindGame.ai(prompt, {system, as})   Promise&lt;string&gt; — when MindGame.aiAvailable
+                              {as: personaId} answers in that AI character's voice
+
+MULTIPLAYER — the platform owns identity and transport. You send and
+receive moves; the server stamps who really sent each one, so a move
+can't be forged, and it enforces turn order for you.
+
+  const m = await MindGame.match({mode:'pvp'})      quick match: take the
+                              longest-waiting open table, or open one and wait
+  MindGame.match({mode:'pvp', host:true})           always open a new table
+  MindGame.match({mode:'pvp', join:tableId})        sit at a listed table
+  MindGame.match({mode:'vs-ai'})                    play an AI character
+                              (m.persona = {id, name, personality, style, w/l/d})
+
+  m.status 'waiting'|'active'|'done'   m.players [{id,username,name,isAI}]
+  m.you    your player id              m.turn / m.isMyTurn
+  m.send(data)                await it, then apply the move locally
+  m.on('start'|'message'|'leave'|'end', fn)   message: (fromPlayerId, data)
+  m.end({winner: playerId|null})       records W/L/D on the match ladder
+  m.leave()                            get up from the table
+
+THE LOBBY (no join codes — players see each other and sit down)
+  MindGame.lobby()            Promise&lt;tables&gt; — [{id, host, seated, seats, waitingSince}]
+  MindGame.onLobby(fn)        live pool: fires now and on every change;
+                              returns an unsubscribe function
+
+Tips: keep the top-right ~120px clear (the platform draws the score pill
+there). Call gameOver() when a round truly ends. Set "lower is better"
+in Game ▾ for time-based games. Start from the Tic Tac Toe template to
+see the whole multiplayer flow working.</pre>
         </details>
       </div>
       <div class="gedit-preview-pane">
