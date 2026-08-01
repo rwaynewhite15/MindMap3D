@@ -20,6 +20,12 @@ and turns on **AI generation** simply by setting environment variables.
   run safely sandboxed, keep score, post to **per-game leaderboards**, and can even **call
   the AI mid-play** (think AI-written trivia questions or NPC dialogue). Publish to friends
   or everyone and discover other people's games on the new **Games** page.
+- **Ranked play, decided by the server** — a game can ship **rules that run on our servers**,
+  so matches stop being self-reported: illegal moves are refused before they reach your
+  opponent, the winner is worked out from the moves themselves, and a client that claims a
+  victory it didn't earn is simply told no. Ranked games keep an **Elo ladder**. Author rules
+  run in a locked-down sandbox — a separate process with no filesystem, no environment, and
+  no network.
 - **Multiplayer, with a real lobby** — games can host **live matches against other people**.
   There are no join codes to pass around: every player waiting for an opponent shows up as an
   **open table in that game's lobby**, and you simply **sit down** at one (or hit **Quick
@@ -254,6 +260,44 @@ author writing any networking code.
   `MindGame.onLobby(fn)` for a live table list. The **Tic Tac Toe template** is a complete
   working example: lobby, quick match, AI opponent, forfeit handling, and result recording.
 
+#### Ranked play — results the leaderboard can trust
+
+Casual games report their own results, so their boards are honour-system. A **ranked** game
+adds a second, small piece of code — **rules that run on MindMapShare's servers** — and the
+players' browsers stop being the authority:
+
+```js
+const Rules = {
+  seats: 2,
+  setup(players) { return { board: ['','','','','','','','',''], turn: 0 }; },
+  move(state, seat, data) {
+    // `seat` is who the SERVER saw send this move — it cannot be forged.
+    if (seat !== state.turn)  return { error: 'It is not your turn.' };
+    if (state.board[data.cell]) return { error: 'That square is taken.' };
+    state.board[data.cell] = seat === 0 ? 'X' : 'O';
+    // …return { state, done: true, winner: seat } when it's decided
+    return { state, next: 1 - seat };
+  },
+};
+```
+
+- **Every move is checked before it is relayed.** An illegal move is refused with the rules'
+  own message and never reaches the opponent — it simply didn't happen.
+- **The server declares the result.** When the rules say the game is over, the server ends
+  the match and records it. A client that POSTs "I won" gets a 409; the only result a player
+  may declare is **resignation**. Quitting mid-match forfeits (after a short grace period, so
+  a dropped connection isn't an instant loss) — and the server awards that too.
+- **Elo ratings** start at 1200 and move only from server-decided matches (K=32 until a
+  player has 10 games, then 24; provisional ratings are marked "?"). The **ranked ladder**
+  sits beside the casual score board, precisely because those two kinds of number deserve
+  different levels of trust.
+- **Ranked is PvP-only.** In a vs-AI match your own browser drives the opponent, so a rating
+  from it would mean nothing.
+- **Turning it on**: write the rules in the editor's **⚖️ Ranked** panel and press *Check
+  rules* — they're compiled and smoke-tested in the sandbox, and ranked can only be switched
+  on once they actually run. The **Tic Tac Toe template ships with rules**, so a game made
+  from it is ranked from the moment it's created.
+
 #### Safety — why user-written code is safe to run
 
 - Game code runs in a **sandboxed iframe with a locked-down Content Security
@@ -266,10 +310,28 @@ author writing any networking code.
   credentials. Turn order is enforced server-side — an out-of-turn move is rejected before
   it reaches the other player.
 
-> **Honest caveat:** scores and match results are still *reported by the game*, so
-> leaderboards are casual/honor-system — a determined player could report a score they
-> didn't earn. Identity, turn order, and delivery are enforced; the *meaning* of a move is
-> not. Server-side validators for authors would be the fix, and are not built yet.
+Rules themselves are author-written code that the *server* runs, so they get their own
+containment, layered deliberately:
+
+1. a **separate process** (`rules-runner.js`) started with Node's permission model —
+   **no filesystem, no child processes, no worker threads, no native addons**;
+2. **an empty environment** (`env: {}`): no `DATABASE_URL`, no API keys, nothing to steal;
+3. **a `vm` context per game** with dynamic code generation disabled (no `eval`, no
+   `new Function`), where **only JSON strings cross the boundary** — the documented `vm`
+   escape works by grabbing a host object handed into the sandbox, and nothing is;
+4. **CPU and memory ceilings**: a runaway `move()` fails that one move (the player is told
+   the rules took too long), a memory bomb kills only the sandbox, and the parent restarts
+   it. If the sandbox can't start at all, ranked play is unavailable rather than unguarded.
+
+`vm` alone is explicitly not a security boundary, which is exactly why it is never the only
+one. This is verified by tests that fire hostile rules at it — reading files, spawning
+shells, reaching for `process.env`, the `constructor.constructor` escape, infinite loops,
+memory bombs — and check the server keeps serving.
+
+> **Remaining caveat, stated plainly:** *single-player score* leaderboards are still
+> self-reported and remain honour-system — validating those needs replay verification,
+> which isn't built. What ranked play fixes is **match** results: those are decided by the
+> server from the moves themselves.
 
 ### Sharing & real-time collaboration
 - **Grant edit access** to friends from **Map ▾ → "Who can edit this map?"**. Maps shared
@@ -371,8 +433,8 @@ prematurely close the stream — the server sends the `X-Accel-Buffering: no` he
 25-second heartbeat to keep connections healthy through common proxies (nginx, Render).
 
 Game matches are **in-memory** on the server: a restart drops matches in flight (players
-just start a new one), while everything durable — AI personas, win/loss records, scores —
-lives on the game record in the database. Because match state is per-process, running
+just start a new one), while everything durable — AI personas, win/loss records, scores,
+ranked ratings — lives on the game record in the database. Because match state is per-process, running
 multiple workers would need a shared bus (Redis) before matches could span them; a single
 web service handles the current scale fine.
 
@@ -390,7 +452,8 @@ is required for them.
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, games (sandboxed serving, leaderboards, AI relay, matches + lobby + AI personas), static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, games (sandboxed serving, leaderboards, AI relay, matches + lobby + AI personas, ranked play + Elo), static files |
+| `rules-runner.js` | The sandbox for ranked games' server-side rules — spawned as a privilege-stripped child process (no filesystem, no environment, no network), one `vm` context per game |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |

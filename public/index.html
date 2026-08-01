@@ -178,6 +178,7 @@
         <div id="geState" class="gedit-state muted">Saved</div>
       </div>
       <button id="btnGeAI" class="tb" hidden title="Let AI write or rework this game from a description">✨ AI</button>
+      <button id="btnGeRules" class="tb" title="Server-side rules: make this game ranked">⚖️ Ranked</button>
       <button id="btnGeSettings" class="tb" title="Name, description, visibility, scoring, delete">Game ▾</button>
       <button id="btnGeSave" class="tb" title="Save the code (Ctrl+S)">Save</button>
       <button id="btnGeRun" class="tb primary-tb" title="Save and run the game in the preview">▶ Run</button>
@@ -223,6 +224,14 @@ THE LOBBY (no join codes — players see each other and sit down)
   MindGame.onLobby(fn)        live pool: fires now and on every change;
                               returns an unsubscribe function
 
+RANKED (⚖️ Ranked — server-side rules decide the match, and an Elo ladder)
+  m.ranked                    true when the server is refereeing this match
+  await m.send(move)          rejects if the RULES call the move illegal;
+                              resolves {done, winner, ratings} on the deciding move
+  m.on('end', (winner, info) => …)   info.ratings = [{playerId, before, after, delta}]
+  m.resign()                  the only result a player may declare when ranked
+  Don't call m.end() in a ranked match — the server decides, and it will refuse.
+
 Tips: keep the top-right ~120px clear (the platform draws the score pill
 there). Call gameOver() when a round truly ends. Set "lower is better"
 in Game ▾ for time-based games. Start from the Tic Tac Toe template to
@@ -252,6 +261,7 @@ see the whole multiplayer flow working.</pre>
         <div id="gpBy" class="gedit-state muted"></div>
       </div>
       <button id="btnGpEdit" class="tb" hidden title="Open this game in the editor">✎ Edit</button>
+      <span id="gpRanked" class="ranked-tag" hidden title="Matches in this game are decided by server-side rules">⚔️ Ranked</span>
       <button id="btnGpBoard" class="tb" title="Leaderboard">🏆<span id="gpRank" class="gp-rank" hidden></span></button>
       <button id="btnGpRestart" class="tb" title="Restart the game">↻ Restart</button>
     </div>
@@ -714,6 +724,35 @@ see the whole multiplayer flow working.</pre>
   <div class="sheet-row">
     <button id="gsDelete" class="tb danger">Delete game</button>
     <button id="gsDone" class="tb primary-tb">Save</button>
+  </div>
+</div>
+
+<div id="sheetRules" class="sheet wide" hidden>
+  <div class="sheet-title">⚖️ Ranked play — server-side rules</div>
+  <div class="muted" style="margin-bottom:10px">
+    A casual game trusts whatever the players' browsers report, so its leaderboard is
+    honour-system. A <b>ranked</b> game ships <b>rules that run on our servers</b>: they decide
+    which moves are legal and who won, so a cheating client simply gets refused. Rules run
+    sandboxed — no network, no files, no <code>eval</code> — and must be synchronous.
+  </div>
+  <pre class="rules-doc">const Rules = {
+  seats: 2,                          // players at the table
+  setup(players) { return state },   // starting state (any JSON)
+  move(state, seat, data) {
+    // `seat` is 0,1,… — the server guarantees who really sent this.
+    // Reject:  return { error: 'That square is taken.' }
+    // Accept:  return { state, next: seat, done: true, winner: seat|null }
+  },
+};</pre>
+  <textarea id="rulesCode" spellcheck="false" autocomplete="off" autocapitalize="off" rows="10"
+    placeholder="const Rules = { seats: 2, setup() {…}, move(state, seat, data) {…} };"></textarea>
+  <div id="rulesStatus" class="rules-status"></div>
+  <label class="check"><input type="checkbox" id="rulesRanked"> Rank this game — matches decide an Elo ladder</label>
+  <div class="form-error" id="rulesError"></div>
+  <div class="sheet-row">
+    <button id="rulesCancel" class="tb">Cancel</button>
+    <button id="rulesCheck" class="tb">Check rules</button>
+    <button id="rulesSave" class="tb primary-tb">Save</button>
   </div>
 </div>
 

@@ -1424,7 +1424,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetGameAI'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetGameAI', '#sheetRules'];
 
 function openSheet(sel) {
   closeSheets();
@@ -3515,7 +3515,37 @@ const GAME_TEMPLATES = [
   },
   {
     id: 'ttt',
-    label: '⭕ Tic Tac Toe — multiplayer lobby + AI opponents',
+    label: '⭕ Tic Tac Toe — ranked multiplayer + AI opponents',
+    // Server-side rules make this game RANKED out of the box: the same logic
+    // the browser uses to draw the board also runs on the server, where it —
+    // not the players — decides which moves are legal and who won.
+    rules: [
+      'const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];',
+      '',
+      'const Rules = {',
+      '  seats: 2,',
+      '  setup() {',
+      "    return { board: ['','','','','','','','',''], turn: 0 };",
+      '  },',
+      '  move(state, seat, data) {',
+      '    // `seat` is who the SERVER saw send this move — it cannot be forged.',
+      "    if (seat !== state.turn) return { error: 'It is not your turn.' };",
+      '    const i = data && data.cell;',
+      "    if (typeof i !== 'number' || i < 0 || i > 8) return { error: 'That is not a square.' };",
+      "    if (state.board[i]) return { error: 'That square is already taken.' };",
+      '',
+      "    state.board[i] = seat === 0 ? 'X' : 'O';",
+      '    for (const [a, b, c] of LINES) {',
+      '      if (state.board[a] && state.board[a] === state.board[b] && state.board[b] === state.board[c]) {',
+      '        return { state, done: true, winner: seat };',
+      '      }',
+      '    }',
+      '    if (state.board.every(v => v)) return { state, done: true, winner: null }; // draw',
+      '    state.turn = 1 - seat;',
+      '    return { state, next: 1 - seat };',
+      '  },',
+      '};',
+    ].join('\n'),
     code: [
       '<div id="app">',
       '  <div id="head"><span id="status">Tic Tac Toe</span><button id="quit" hidden>Leave match</button></div>',
@@ -3580,22 +3610,30 @@ const GAME_TEMPLATES = [
       '}',
       '',
       '// Apply a move locally, then see whether the game is decided.',
-      'function apply(i, m) {',
-      '  if (board[i] || over) return;',
+      '// `mine` marks our own move, already acknowledged by the server: in a',
+      '// ranked match the server\'s "end" can beat our own send() reply back to',
+      '// us, and we must still place the move that won the game.',
+      'function apply(i, m, mine) {',
+      '  if (board[i] || (over && !mine)) return;',
       '  board[i] = m;',
       '  var res = winner();',
       '  if (res) {',
       '    over = true;',
       '    winLine = res.line; // remembered so later re-renders keep the highlight',
+      '    myTurn = false;',
       '    render(winLine);',
       '    var iWon = res.mark === mark;',
       '    el("sub").textContent = res.mark === null ? "Draw." : (iWon ? "You win!" : "You lose.");',
       '    MindGame.setScore(res.mark === null ? 1 : (iWon ? 3 : 0)); // 3/1/0 points',
       '    MindGame.gameOver();',
-      '    // Whoever notices first reports it; the server records W/L once.',
-      '    var winnerId = res.mark === null ? null',
-      '      : (iWon ? match.you : (match.players.filter(function (p) { return p.id !== match.you; })[0] || {}).id);',
-      '    match.end({ winner: winnerId });',
+      '    // In a RANKED match the server already reached this verdict from the',
+      '    // moves themselves and has ended the match — clients get no say. In a',
+      '    // casual match, whoever notices first reports it.',
+      '    if (!match.ranked) {',
+      '      var winnerId = res.mark === null ? null',
+      '        : (iWon ? match.you : (match.players.filter(function (p) { return p.id !== match.you; })[0] || {}).id);',
+      '      match.end({ winner: winnerId });',
+      '    }',
       '    return;',
       '  }',
       '  render();',
@@ -3615,7 +3653,7 @@ const GAME_TEMPLATES = [
       '  myTurn = false;',
       '  render(); // lock the board while the move is in flight',
       '  match.send({ cell: i }).then(function () {',
-      '    apply(i, mark);',
+      '    apply(i, mark, true);',
       '    if (!over && match.mode === "vs-ai") setTimeout(aiMove, 500);',
       '  }).catch(function (err) {',
       '    myTurn = true; // the move never landed — let them try again',
@@ -3671,7 +3709,7 @@ const GAME_TEMPLATES = [
       '    mark = myTurn ? "X" : "O";',
       '    el("menu").hidden = true;',
       '    el("boardWrap").hidden = false;',
-      '    el("status").textContent = "vs " + (opp.isAI ? "🤖 " : "@") + (opp.name || opp.username || "opponent");',
+      '    el("status").textContent = (m.ranked ? "⚔️ " : "") + "vs " + (opp.isAI ? "🤖 " : "@") + (opp.name || opp.username || "opponent");',
       '    if (m.persona && m.persona.personality) el("sub").textContent = m.persona.personality;',
       '    render();',
       '    setTimeout(turnText, m.persona ? 1600 : 0);',
@@ -3684,6 +3722,9 @@ const GAME_TEMPLATES = [
       '  });',
       '  m.on("leave", function () {',
       '    if (over) return;',
+      '    // Ranked: the server awards the forfeit itself (after a short grace',
+      '    // period, so a dropped connection can come back). Casual: we claim it.',
+      '    if (m.ranked) { el("sub").textContent = "Your opponent left — waiting for the server to award the match…"; return; }',
       '    over = true;',
       '    el("sub").textContent = "Your opponent left — you win by forfeit.";',
       '    MindGame.setScore(3); MindGame.gameOver();',
@@ -3956,10 +3997,16 @@ function watchLobby(mode, gameId) {
 // Surface a match result in the platform chrome too, so the outcome is visible
 // even if the game's own UI is subtle about it.
 function showMatchOutcome(mode, b, data, ev) {
-  if (ev === 'gone') { gameToast('The match ended — your opponent left.'); b.matchId = null; return; }
+  if (ev === 'gone') { gameToast('The match ended — your opponent left.', 2); b.matchId = null; return; }
   const winner = data && data.winner;
-  gameToast(winner === null || winner === undefined ? '🤝 Match drawn.'
-    : winner === b.you ? '🏆 You won the match!' : 'Match over — better luck next time.');
+  let text = winner === null || winner === undefined ? '🤝 Match drawn.'
+    : winner === b.you ? '🏆 You won the match!' : 'Match over — better luck next time.';
+  if (data && data.forfeitBy && data.forfeitBy !== b.you) text = '🏆 You win — your opponent left.';
+  if (data && data.resigned === b.you) text = 'You resigned.';
+  // ranked matches move an Elo rating; show the change that just happened
+  const mine = data && Array.isArray(data.ratings) && data.ratings.find(r => r.playerId === b.you);
+  if (mine) text += '  ' + (mine.delta >= 0 ? '+' : '') + mine.delta + ' → ' + mine.after;
+  gameToast(text, 2); // the match verdict outranks the round's score message
   b.matchId = null; // finished: nothing to leave
   if (mode === 'play' && gamePlay) refreshLeaderboard(gamePlay.id);
 }
@@ -4019,7 +4066,13 @@ async function onGameOver(mode, gameId, score) {
 
 let gameToastTimer = null;
 let gePreviewToast = null; // the editor stage gets its own toast node on demand
-function gameToast(text) {
+let lastToast = { at: 0, priority: 0 };
+// A round ending can produce two messages at once — the score submission and
+// the match verdict. Priority keeps the more important one on screen instead of
+// letting whichever arrived last win: match results (2) outrank scores (1).
+function gameToast(text, priority = 1) {
+  if (priority < lastToast.priority && Date.now() - lastToast.at < 3000) return;
+  lastToast = { at: Date.now(), priority };
   let box = null;
   if (!$('#view-gameplay').hidden) {
     box = $('#gpToast');
@@ -4082,6 +4135,13 @@ function gameCard(g, opts) {
 
   const actions = document.createElement('div');
   actions.className = 'game-card-actions';
+  if (g.ranked) {
+    const tag = document.createElement('span');
+    tag.className = 'ranked-tag';
+    tag.textContent = '⚔️ Ranked';
+    tag.title = 'Matches are decided by server-side rules and move an Elo ladder';
+    card.appendChild(tag);
+  }
   if (mine) {
     const vis = document.createElement('span');
     vis.className = 'vis-tag';
@@ -4176,6 +4236,9 @@ $('#newGameCreate').addEventListener('click', async () => {
       name: $('#newGameName').value.trim(),
       visibility: vis ? vis.value : 'private',
       code: newGameTemplate.code,
+      // templates may ship server-side rules; ranked switches on if they compile
+      rules: newGameTemplate.rules || '',
+      ranked: !!newGameTemplate.rules,
     });
     closeSheets();
     location.hash = '#/games/edit/' + r.game.id;
@@ -4221,6 +4284,7 @@ async function openGameEditor(gameId) {
     $('#gePreviewEmpty').hidden = false;
     gePreview.src = 'about:blank';
     $('#btnGeAI').hidden = !data.aiEnabled;
+    paintRankedState();
     setGeState('Saved');
     show('gameedit');
   } catch (err) {
@@ -4318,6 +4382,93 @@ $('#gsDelete').addEventListener('click', async () => {
   }
 });
 
+/* ---- ranked play: server-side rules sheet ----
+   The author writes rules here; the server compiles them in its sandbox and
+   only lets the game be ranked once they load and survive a real setup call. */
+function setRulesStatus(text, kind) {
+  const el = $('#rulesStatus');
+  el.textContent = text;
+  el.className = 'rules-status' + (kind ? ' ' + kind : '');
+}
+
+$('#btnGeRules').addEventListener('click', () => {
+  if (!gameEdit) return;
+  const m = gameEdit.meta;
+  $('#rulesCode').value = m.rules || '';
+  $('#rulesRanked').checked = !!m.ranked;
+  $('#rulesError').textContent = '';
+  if (m.rankedAvailable === false) {
+    setRulesStatus('This server can’t run ranked games — the rules sandbox is unavailable.', 'bad');
+    $('#rulesRanked').disabled = true;
+  } else {
+    $('#rulesRanked').disabled = false;
+    setRulesStatus(m.ranked ? 'Ranked is on — these rules decide every match.' : '', m.ranked ? 'good' : '');
+  }
+  openSheet('#sheetRules');
+});
+$('#rulesCancel').addEventListener('click', closeSheets);
+
+// Tab indents in the rules editor too, rather than leaving the field.
+$('#rulesCode').addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const el = e.target, s = el.selectionStart, en = el.selectionEnd;
+  el.value = el.value.slice(0, s) + '  ' + el.value.slice(en);
+  el.selectionStart = el.selectionEnd = s + 2;
+});
+
+async function checkRules() {
+  if (!gameEdit) return false;
+  const rules = $('#rulesCode').value;
+  if (!rules.trim()) { setRulesStatus('Add some rules first.', 'bad'); return false; }
+  setRulesStatus('Compiling in the sandbox…');
+  try {
+    const r = await api('/api/games/' + gameEdit.id + '/rules', 'POST', { rules });
+    if (r.ok) setRulesStatus('✓ Rules compile and run (' + r.seats + ' seats). Ready for ranked play.', 'good');
+    else setRulesStatus('✗ ' + r.error, 'bad');
+    return !!r.ok;
+  } catch (err) {
+    setRulesStatus('✗ ' + err.message, 'bad');
+    return false;
+  }
+}
+$('#rulesCheck').addEventListener('click', checkRules);
+
+$('#rulesSave').addEventListener('click', async () => {
+  if (!gameEdit) return;
+  const wantRanked = $('#rulesRanked').checked;
+  $('#rulesError').textContent = '';
+  try {
+    const r = await api('/api/games/' + gameEdit.id, 'PUT', {
+      rules: $('#rulesCode').value,
+      ranked: wantRanked,
+    });
+    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
+    if (wantRanked && !r.game.ranked) {
+      // saved, but ranked couldn't be turned on — say exactly why
+      $('#rulesRanked').checked = false;
+      setRulesStatus('✗ ' + (r.rulesError || 'The rules did not compile.'), 'bad');
+      $('#rulesError').textContent = 'Rules saved, but ranked stays off until they run.';
+      return;
+    }
+    paintRankedState();
+    closeSheets();
+  } catch (err) {
+    $('#rulesError').textContent = err.message;
+  }
+});
+
+// Reflect ranked status in the editor's toolbar button.
+function paintRankedState() {
+  const on = !!(gameEdit && gameEdit.meta && gameEdit.meta.ranked);
+  const b = $('#btnGeRules');
+  b.classList.toggle('active', on);
+  b.textContent = on ? '⚔️ Ranked' : '⚖️ Ranked';
+  b.title = on
+    ? 'Ranked: this game’s server-side rules decide every match'
+    : 'Server-side rules: make this game ranked';
+}
+
 /* ---- AI game builder sheet ---- */
 $('#btnGeAI').addEventListener('click', () => {
   $('#gameAiError').textContent = '';
@@ -4377,6 +4528,7 @@ async function openGamePlayer(gameId) {
     const ownerName = data.owner.name || '@' + data.owner.username;
     $('#gpBy').textContent = 'by ' + ownerName + ' · ' + fmtScore(data.game.plays || 0) + ' plays';
     $('#btnGpEdit').hidden = !data.isOwner;
+    $('#gpRanked').hidden = !data.game.ranked;
     $('#gpScore').hidden = true;
     $('#gpToast').hidden = true;
     $('#gpRank').hidden = true;
@@ -4447,7 +4599,47 @@ function renderLeaderboard(board) {
     list.appendChild(gap);
     list.appendChild(row(board.mine));
   }
+  renderRankedLadder(board);
   renderMatchRecords(board.matches || []);
+}
+
+// The ranked ladder: Elo from matches the SERVER decided, so unlike the score
+// board above these numbers can't be self-reported.
+function renderRankedLadder(board) {
+  if (!board.ranked) return;
+  const list = $('#gpBoardList');
+  const head = document.createElement('div');
+  head.className = 'board-subhead';
+  head.textContent = '⚔️ Ranked ladder';
+  list.appendChild(head);
+  const rows = board.rankedLadder || [];
+  if (!rows.length) {
+    const e = document.createElement('div');
+    e.className = 'board-empty';
+    e.textContent = 'No ranked matches yet — play someone to start a rating.';
+    list.appendChild(e);
+    return;
+  }
+  for (const r of rows) {
+    const el = document.createElement('div');
+    el.className = 'board-row' + (r.me ? ' me' : '') + (r.rank <= 3 ? ' top' + r.rank : '');
+    const rk = document.createElement('span');
+    rk.className = 'br-rank';
+    rk.textContent = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : '#' + r.rank;
+    const who = document.createElement('span');
+    who.className = 'br-who';
+    who.textContent = (r.name || '@' + r.username) + (r.me ? ' (you)' : '');
+    who.addEventListener('click', () => { location.hash = '#/u/' + r.username; });
+    const sub = document.createElement('span');
+    sub.className = 'br-sub';
+    sub.textContent = r.w + '-' + r.l + (r.d ? '-' + r.d : '') + (r.provisional ? ' ?' : '');
+    sub.title = r.provisional ? 'Provisional — rating still settling (under 10 ranked games)' : '';
+    const rating = document.createElement('span');
+    rating.className = 'br-rating';
+    rating.textContent = r.rating;
+    el.append(rk, who, sub, rating);
+    list.appendChild(el);
+  }
 }
 
 // Head-to-head records from multiplayer matches — humans and AI personas on
