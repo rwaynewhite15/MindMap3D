@@ -1332,7 +1332,7 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
+const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul', 'games', 'gameedit', 'gameplay'];
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
@@ -1356,6 +1356,9 @@ function show(name) {
   if (myMap) { name === 'map' ? myMap.start() : myMap.stop(); }
   if (profileMap) { name === 'profile' ? profileMap.start() : profileMap.stop(); }
   if (name !== 'profile') closeComments(); // the comment panel belongs to the profile viewer
+  // leaving a game view unloads its iframe so games never run in the background
+  if (name !== 'gameplay') stopGamePlayer();
+  if (name !== 'gameedit') stopGamePreview();
 }
 
 function route() {
@@ -1368,10 +1371,12 @@ function route() {
   if (h === 'privacy' || h === 'terms' || h === 'soul') { show(h); window.scrollTo(0, 0); return; }
 
   if (!me) {
-    // anonymous visitors may browse public maps and view public profiles;
+    // anonymous visitors may browse public maps, profiles, and public games;
     // everything else prompts them to sign in
     if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
     if (h === 'browse') { show('browse'); loadBrowse(); return; }
+    if (h === 'games') { show('games'); loadGamesHub(); return; }
+    if (h.startsWith('g/')) { openGamePlayer(h.slice(2)); return; }
     show('auth'); // #/signin, #/map, #/friends, #/settings all land here
     return;
   }
@@ -1379,6 +1384,9 @@ function route() {
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
+  if (h === 'games') { show('games'); loadGamesHub(); return; }
+  if (h.startsWith('games/edit/')) { openGameEditor(h.slice('games/edit/'.length)); return; }
+  if (h.startsWith('g/')) { openGamePlayer(h.slice(2)); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
   show('map');
@@ -1416,7 +1424,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetGameAI'];
 
 function openSheet(sel) {
   closeSheets();
@@ -3405,6 +3413,716 @@ function updateBadge(n) {
 }
 
 /* ================================================================
+   Games — hub, editor, and player.
+   ----------------------------------------------------------------
+   A game is HTML/CSS/JS its author writes (or asks AI to write). It runs
+   inside a sandboxed iframe served by /game-frame (opaque origin, no
+   network) and talks to this page only via postMessage: live score, round
+   over (→ leaderboard submit), and MindGame.ai() relays. This page owns
+   the session, so all API calls happen out here.
+================================================================ */
+
+/* ---------- starter templates ---------- */
+const GAME_TEMPLATES = [
+  {
+    id: 'blank',
+    label: '📄 Blank — a commented scaffold',
+    code: [
+      '<div id="game" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">',
+      '  <h1>My game</h1>',
+      '  <button id="btn" style="font-size:20px;padding:14px 26px;border-radius:12px;border:none;background:#4FD1E0;cursor:pointer">Click me (+1)</button>',
+      '  <button id="end" style="font-size:14px;padding:8px 18px;border-radius:10px;border:1px solid #4FD1E0;background:none;color:#4FD1E0;cursor:pointer">End round</button>',
+      '</div>',
+      '<script>',
+      "// MindGame is the bridge to MindMapShare (see the guide under the editor):",
+      "//   MindGame.addScore(n) / setScore(n)  — live score in the corner",
+      "//   MindGame.gameOver()                 — end the round, submit to the leaderboard",
+      "//   MindGame.ai(prompt)                 — Promise<string> when MindGame.aiAvailable",
+      "MindGame.onReady(function (info) {",
+      "  var hi = info.player ? 'Hello @' + info.player.username + '!' : 'Hello guest!';",
+      "  document.querySelector('h1').textContent = hi;",
+      "});",
+      "document.getElementById('btn').addEventListener('click', function () { MindGame.addScore(1); });",
+      "document.getElementById('end').addEventListener('click', function () { MindGame.gameOver(); });",
+      '<\/script>',
+    ].join('\n'),
+  },
+  {
+    id: 'popper',
+    label: '🫧 Bubble Popper — a 30-second arcade game',
+    code: [
+      '<canvas id="c"></canvas>',
+      '<div id="hud" style="position:absolute;top:10px;left:12px;font-size:14px;opacity:.85">30.0s</div>',
+      '<div id="msg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#10141Dcc">',
+      '  <h1 style="margin:0">🫧 Bubble Popper</h1>',
+      '  <p style="margin:0;opacity:.7">Pop as many bubbles as you can in 30 seconds.</p>',
+      '  <button id="go" style="font-size:18px;padding:12px 26px;border-radius:12px;border:none;background:#4FD1E0;cursor:pointer">Play</button>',
+      '</div>',
+      '<script>',
+      "var cv = document.getElementById('c'), cx = cv.getContext('2d');",
+      "var hud = document.getElementById('hud'), msg = document.getElementById('msg'), go = document.getElementById('go');",
+      'var W, H, bubbles, left, running = false, raf;',
+      'function size() { W = cv.width = innerWidth; H = cv.height = innerHeight; }',
+      "addEventListener('resize', size); size();",
+      'function spawn() {',
+      '  var r = 16 + Math.random() * 26;',
+      '  bubbles.push({ x: r + Math.random() * (W - 2 * r), y: H + r, r: r, v: 60 + Math.random() * 110, hue: 150 + Math.random() * 160 });',
+      '}',
+      'function start() {',
+      '  bubbles = []; left = 30; running = true; msg.style.display = "none";',
+      '  MindGame.setScore(0);',
+      '  var last = performance.now();',
+      '  function tick(now) {',
+      '    var dt = Math.min(0.05, (now - last) / 1000); last = now;',
+      '    left -= dt;',
+      '    if (left <= 0) return end();',
+      '    if (Math.random() < dt * 3.2) spawn();',
+      '    cx.clearRect(0, 0, W, H);',
+      '    bubbles = bubbles.filter(function (b) { return b.y + b.r > 0; });',
+      '    bubbles.forEach(function (b) {',
+      '      b.y -= b.v * dt;',
+      '      cx.beginPath(); cx.arc(b.x, b.y, b.r, 0, 7);',
+      '      cx.fillStyle = "hsla(" + b.hue + ",70%,60%,.85)"; cx.fill();',
+      '      cx.beginPath(); cx.arc(b.x - b.r / 3, b.y - b.r / 3, b.r / 4, 0, 7);',
+      '      cx.fillStyle = "#ffffff88"; cx.fill();',
+      '    });',
+      '    hud.textContent = left.toFixed(1) + "s";',
+      '    raf = requestAnimationFrame(tick);',
+      '  }',
+      '  raf = requestAnimationFrame(tick);',
+      '}',
+      'function end() {',
+      '  running = false; cancelAnimationFrame(raf);',
+      '  cx.clearRect(0, 0, W, H);',
+      '  msg.style.display = "flex"; go.textContent = "Play again";',
+      '  msg.querySelector("p").textContent = "Final score: " + MindGame.getScore();',
+      '  MindGame.gameOver();',
+      '}',
+      "addEventListener('pointerdown', function (e) {",
+      '  if (!running) return;',
+      '  for (var i = bubbles.length - 1; i >= 0; i--) {',
+      '    var b = bubbles[i], dx = e.clientX - b.x, dy = e.clientY - b.y;',
+      '    if (dx * dx + dy * dy <= b.r * b.r * 1.4) {',
+      '      bubbles.splice(i, 1);',
+      '      MindGame.addScore(Math.max(1, Math.round(40 - b.r)));',
+      '      break;',
+      '    }',
+      '  }',
+      '});',
+      "go.addEventListener('click', start);",
+      '<\/script>',
+    ].join('\n'),
+  },
+  {
+    id: 'quiz',
+    label: '🧠 AI Trivia — questions written by AI as you play',
+    code: [
+      '<div style="max-width:520px;margin:0 auto;padding:26px 18px;display:flex;flex-direction:column;gap:14px;height:100%;box-sizing:border-box">',
+      '  <div id="prog" style="opacity:.6;font-size:13px"></div>',
+      '  <h2 id="q" style="margin:0;line-height:1.35">Loading…</h2>',
+      '  <div id="opts" style="display:flex;flex-direction:column;gap:8px"></div>',
+      '  <div id="note" style="opacity:.7;font-size:13px"></div>',
+      '</div>',
+      '<script>',
+      '// 5 rounds; each correct answer = 100 points. With AI available the',
+      '// questions are generated fresh; otherwise a built-in bank is used.',
+      'var BANK = [',
+      '  { q: "Which planet has the most moons?", a: ["Saturn", "Earth", "Mars", "Venus"], c: 0 },',
+      '  { q: "What does CPU stand for?", a: ["Central Processing Unit", "Computer Power Unit", "Core Program Utility", "Control Panel Unit"], c: 0 },',
+      '  { q: "Which ocean is the largest?", a: ["Pacific", "Atlantic", "Indian", "Arctic"], c: 0 },',
+      '  { q: "Who painted the Mona Lisa?", a: ["Leonardo da Vinci", "Michelangelo", "Raphael", "Rembrandt"], c: 0 },',
+      '  { q: "What is the chemical symbol for gold?", a: ["Au", "Ag", "Go", "Gd"], c: 0 },',
+      '];',
+      'var round = 0, total = 5, used = [];',
+      'var qEl = document.getElementById("q"), optsEl = document.getElementById("opts");',
+      'var progEl = document.getElementById("prog"), noteEl = document.getElementById("note");',
+      'function shuffle(item) {',
+      '  var right = item.a[item.c];',
+      '  var a = item.a.slice().sort(function () { return Math.random() - 0.5; });',
+      '  return { q: item.q, a: a, c: a.indexOf(right) };',
+      '}',
+      'function fromBank() {',
+      '  var pool = BANK.filter(function (_, i) { return used.indexOf(i) < 0; });',
+      '  var i = BANK.indexOf(pool[Math.floor(Math.random() * pool.length)]);',
+      '  used.push(i); return shuffle(BANK[i]);',
+      '}',
+      'function nextQuestion() {',
+      '  round++;',
+      '  if (round > total) {',
+      '    qEl.textContent = "Done! Final score: " + MindGame.getScore();',
+      '    optsEl.innerHTML = ""; progEl.textContent = ""; noteEl.textContent = "";',
+      '    MindGame.gameOver();',
+      '    var b = document.createElement("button"); style(b); b.textContent = "Play again";',
+      '    b.onclick = function () { round = 0; used = []; MindGame.setScore(0); nextQuestion(); };',
+      '    optsEl.appendChild(b);',
+      '    return;',
+      '  }',
+      '  progEl.textContent = "Question " + round + " of " + total + " · Score " + MindGame.getScore();',
+      '  qEl.textContent = "Loading…"; optsEl.innerHTML = ""; noteEl.textContent = "";',
+      '  if (MindGame.aiAvailable) {',
+      '    MindGame.ai(',
+      '      "Write one fun multiple-choice trivia question (medium difficulty, any topic). " +',
+      '      "Reply with ONLY this JSON: {\\"q\\":\\"question\\",\\"a\\":[\\"opt1\\",\\"opt2\\",\\"opt3\\",\\"opt4\\"],\\"c\\":indexOfCorrect}"',
+      '    ).then(function (text) {',
+      '      var item; try { item = JSON.parse(text); } catch (e) {}',
+      '      ask(item && item.q && item.a && item.a.length === 4 ? shuffle(item) : fromBank());',
+      '    }).catch(function () { ask(fromBank()); });',
+      '  } else { ask(fromBank()); }',
+      '}',
+      'function style(b) {',
+      '  b.style.cssText = "text-align:left;font-size:15px;padding:12px 14px;border-radius:10px;border:1px solid #2a3550;background:#141926;color:#E8ECF4;cursor:pointer";',
+      '}',
+      'function ask(item) {',
+      '  qEl.textContent = item.q;',
+      '  item.a.forEach(function (opt, i) {',
+      '    var b = document.createElement("button"); style(b); b.textContent = opt;',
+      '    b.onclick = function () {',
+      '      var right = i === item.c;',
+      '      if (right) MindGame.addScore(100);',
+      '      noteEl.textContent = right ? "✓ Correct!" : "✗ It was: " + item.a[item.c];',
+      '      Array.prototype.forEach.call(optsEl.children, function (x) { x.disabled = true; });',
+      '      setTimeout(nextQuestion, 1100);',
+      '    };',
+      '    optsEl.appendChild(b);',
+      '  });',
+      '}',
+      'MindGame.onReady(function () { MindGame.setScore(0); nextQuestion(); });',
+      '<\/script>',
+    ].join('\n'),
+  },
+];
+
+/* ---------- shared state ---------- */
+let gameEdit = null;   // { id, meta } — the game open in the editor
+let gameEditDirty = false;
+let gamePlay = null;   // { id, meta, owner, isOwner, signedIn, src } — the game open in the player
+let gamePreviewOn = false; // the editor preview is running the saved code
+
+const gpFrame = $('#gpFrame');
+const gePreview = $('#gePreview');
+
+function playerRef() {
+  if (!me) return null;
+  return { username: me.username, name: me.showDisplayName && me.displayName ? me.displayName : null };
+}
+
+function fmtScore(n) {
+  n = Number(n) || 0;
+  return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/* ---------- the postMessage bridge (player + editor preview) ---------- */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (!d || typeof d !== 'object' || !d.mg) return;
+  // only trust our own two frames, and only while their game is open
+  let mode = null, gameId = null;
+  if (gamePlay && e.source === gpFrame.contentWindow) { mode = 'play'; gameId = gamePlay.id; }
+  else if (gameEdit && gamePreviewOn && e.source === gePreview.contentWindow) { mode = 'preview'; gameId = gameEdit.id; }
+  if (!mode) return;
+  const reply = msg => { try { e.source.postMessage(msg, '*'); } catch { /* frame gone */ } };
+
+  if (d.mg === 'ready') {
+    reply({ mg: 'init', player: playerRef(), aiAvailable: !!(me && me.aiEnabled) });
+  } else if (d.mg === 'score') {
+    setGameScorePill(mode, Number(d.value) || 0);
+  } else if (d.mg === 'over') {
+    onGameOver(mode, gameId, Number(d.score) || 0);
+  } else if (d.mg === 'ai') {
+    relayGameAi(gameId, d, reply);
+  }
+});
+
+function setGameScorePill(mode, value) {
+  const pill = mode === 'play' ? $('#gpScore') : $('#geScore');
+  pill.hidden = false;
+  pill.textContent = 'Score: ' + fmtScore(value);
+}
+
+async function relayGameAi(gameId, d, reply) {
+  const fail = err => reply({ mg: 'ai-result', id: d.id, ok: false, error: err });
+  if (!me) return fail('Sign in to use AI in games.');
+  try {
+    const r = await api('/api/games/' + gameId + '/ai', 'POST', {
+      prompt: String(d.prompt || '').slice(0, 4000),
+      system: String(d.system || '').slice(0, 2000),
+    });
+    reply({ mg: 'ai-result', id: d.id, ok: true, text: r.text });
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+// A round ended. In the player, submit to the leaderboard (signed-in) and show
+// where the score landed; in the editor preview, just report — test runs while
+// building a game shouldn't pollute its leaderboard.
+async function onGameOver(mode, gameId, score) {
+  setGameScorePill(mode, score);
+  if (mode === 'preview') {
+    gameToast('Round over — score ' + fmtScore(score) + '. (Preview runs don\'t post to the leaderboard.)');
+    return;
+  }
+  if (!me) {
+    gameToast('Round over — score ' + fmtScore(score) + '. Sign in to get on the leaderboard!');
+    return;
+  }
+  try {
+    const r = await api('/api/games/' + gameId + '/score', 'POST', { score });
+    renderLeaderboard(r.leaderboard);
+    const mine = r.leaderboard.mine;
+    gameToast(r.improved
+      ? '🏆 New personal best: ' + fmtScore(score) + (mine ? ' — rank #' + mine.rank : '')
+      : 'Round over — score ' + fmtScore(score) + (mine ? '. Your best: ' + fmtScore(mine.best) + ' (#' + mine.rank + ')' : ''));
+  } catch (err) {
+    gameToast('Score not saved: ' + err.message);
+  }
+}
+
+let gameToastTimer = null;
+let gePreviewToast = null; // the editor stage gets its own toast node on demand
+function gameToast(text) {
+  let box = null;
+  if (!$('#view-gameplay').hidden) {
+    box = $('#gpToast');
+  } else if (!$('#view-gameedit').hidden) {
+    if (!gePreviewToast) {
+      gePreviewToast = document.createElement('div');
+      gePreviewToast.className = 'game-toast';
+      document.querySelector('#view-gameedit .game-stage').appendChild(gePreviewToast);
+    }
+    box = gePreviewToast;
+  }
+  if (!box) return;
+  box.textContent = text;
+  box.hidden = false;
+  clearTimeout(gameToastTimer);
+  gameToastTimer = setTimeout(() => { box.hidden = true; }, 4200);
+}
+
+/* ---------- games hub ---------- */
+function gameCard(g, opts) {
+  const mine = !!(opts && opts.mine);
+  const card = document.createElement('div');
+  card.className = 'game-card';
+
+  const title = document.createElement('div');
+  title.className = 'game-card-title';
+  title.textContent = g.name;
+  card.appendChild(title);
+
+  if (!mine && g.owner) {
+    const by = document.createElement('div');
+    by.className = 'game-card-by';
+    by.textContent = 'by ' + (g.owner.name || '@' + g.owner.username);
+    by.addEventListener('click', () => { location.hash = '#/u/' + g.owner.username; });
+    card.appendChild(by);
+  }
+  if (g.description) {
+    const desc = document.createElement('div');
+    desc.className = 'game-card-desc';
+    desc.textContent = g.description;
+    card.appendChild(desc);
+  }
+
+  const stats = document.createElement('div');
+  stats.className = 'game-card-stats';
+  const bits = ['▶ ' + fmtScore(g.plays || 0) + ' play' + (g.plays === 1 ? '' : 's'),
+                '🏆 ' + fmtScore(g.playerCount || 0) + ' on the board'];
+  if (g.updatedAt) bits.push(timeAgo(g.updatedAt));
+  stats.textContent = bits.join(' · ');
+  card.appendChild(stats);
+
+  const actions = document.createElement('div');
+  actions.className = 'game-card-actions';
+  if (mine) {
+    const vis = document.createElement('span');
+    vis.className = 'vis-tag';
+    vis.textContent = g.visibility === 'public' ? 'Public' : g.visibility === 'friends' ? 'Friends' : 'Private';
+    stats.appendChild(vis);
+    const edit = document.createElement('button');
+    edit.className = 'tb';
+    edit.textContent = '✎ Edit';
+    edit.addEventListener('click', () => { location.hash = '#/games/edit/' + g.id; });
+    actions.appendChild(edit);
+  }
+  const play = document.createElement('button');
+  play.className = 'tb primary-tb';
+  play.textContent = '▶ Play';
+  if (!g.hasCode && mine) { play.textContent = '▶ Play (no code yet)'; play.disabled = true; }
+  play.addEventListener('click', () => { location.hash = '#/g/' + g.id; });
+  actions.appendChild(play);
+  card.appendChild(actions);
+  return card;
+}
+
+async function loadGamesHub() {
+  $('#btnNewGame').hidden = !me;
+  $('#gamesSignin').hidden = !!me;
+  $('#myGamesWrap').hidden = !me;
+  const mineList = $('#myGamesList');
+  const discList = $('#gameDiscoverList');
+  discList.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const [mineRes, discRes] = await Promise.all([
+      me ? api('/api/games') : Promise.resolve({ games: [] }),
+      api('/api/games/discover'),
+    ]);
+    if (me) {
+      mineList.innerHTML = '';
+      if (!mineRes.games.length) {
+        const d = document.createElement('div');
+        d.className = 'empty';
+        d.textContent = 'No games yet — hit “+ Create a game” and start from a template, or let AI build one.';
+        mineList.appendChild(d);
+      } else {
+        for (const g of mineRes.games) mineList.appendChild(gameCard(g, { mine: true }));
+      }
+    }
+    discList.innerHTML = '';
+    const myName = me && me.username;
+    const discover = discRes.games.filter(g => !g.owner || g.owner.username !== myName);
+    if (!discover.length) {
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = 'No public games yet. Be the first to publish one!';
+      discList.appendChild(d);
+    } else {
+      for (const g of discover) discList.appendChild(gameCard(g, {}));
+    }
+  } catch (err) {
+    discList.innerHTML = '';
+    const d = document.createElement('div'); d.className = 'empty'; d.textContent = err.message;
+    discList.appendChild(d);
+  }
+}
+
+/* ---------- create game (template sheet) ---------- */
+let newGameTemplate = GAME_TEMPLATES[0];
+
+function renderGameTemplates() {
+  const wrap = $('#newGameTemplates');
+  wrap.innerHTML = '';
+  for (const t of GAME_TEMPLATES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tb' + (t === newGameTemplate ? ' active' : '');
+    b.textContent = t.label;
+    b.addEventListener('click', () => { newGameTemplate = t; renderGameTemplates(); });
+    wrap.appendChild(b);
+  }
+}
+
+$('#btnNewGame').addEventListener('click', () => {
+  $('#newGameName').value = '';
+  $('#newGameError').textContent = '';
+  newGameTemplate = GAME_TEMPLATES[0];
+  renderGameTemplates();
+  openSheet('#sheetNewGame');
+  $('#newGameName').focus();
+});
+$('#newGameCancel').addEventListener('click', closeSheets);
+$('#newGameCreate').addEventListener('click', async () => {
+  const vis = document.querySelector('input[name="newGameVis"]:checked');
+  try {
+    const r = await api('/api/games', 'POST', {
+      name: $('#newGameName').value.trim(),
+      visibility: vis ? vis.value : 'private',
+      code: newGameTemplate.code,
+    });
+    closeSheets();
+    location.hash = '#/games/edit/' + r.game.id;
+  } catch (err) {
+    $('#newGameError').textContent = err.message;
+  }
+});
+
+/* ---------- editor ---------- */
+function setGeState(text) { $('#geState').textContent = text; }
+
+function markGameDirty() {
+  if (!gameEditDirty) { gameEditDirty = true; setGeState('Unsaved changes'); }
+}
+$('#geCode').addEventListener('input', markGameDirty);
+
+// Tab inserts two spaces instead of leaving the editor
+$('#geCode').addEventListener('keydown', e => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const el = e.target, s = el.selectionStart, epos = el.selectionEnd;
+    el.value = el.value.slice(0, s) + '  ' + el.value.slice(epos);
+    el.selectionStart = el.selectionEnd = s + 2;
+    markGameDirty();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    saveGameCode();
+  }
+});
+
+async function openGameEditor(gameId) {
+  if (!me) { show('auth'); return; }
+  try {
+    const data = await api('/api/games/' + gameId);
+    if (!data.isOwner) { location.hash = '#/g/' + gameId; return; } // not yours → play it
+    gameEdit = { id: gameId, meta: data.game };
+    gameEditDirty = false;
+    gamePreviewOn = false;
+    $('#geName').textContent = data.game.name;
+    $('#geCode').value = data.game.code || '';
+    $('#geScore').hidden = true;
+    $('#gePreviewEmpty').hidden = false;
+    gePreview.src = 'about:blank';
+    $('#btnGeAI').hidden = !data.aiEnabled;
+    setGeState('Saved');
+    show('gameedit');
+  } catch (err) {
+    alert(err.message);
+    location.hash = '#/games';
+  }
+}
+
+async function saveGameCode() {
+  if (!gameEdit) return false;
+  setGeState('Saving…');
+  try {
+    const r = await api('/api/games/' + gameEdit.id, 'PUT', { code: $('#geCode').value });
+    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
+    gameEditDirty = false;
+    setGeState('Saved');
+    return true;
+  } catch (err) {
+    setGeState('Save failed: ' + err.message);
+    return false;
+  }
+}
+
+async function runGamePreview() {
+  if (!gameEdit) return;
+  if (!(await saveGameCode())) return;
+  try {
+    const r = await api('/api/games/' + gameEdit.id + '/play', 'POST');
+    gamePreviewOn = true;
+    $('#gePreviewEmpty').hidden = true;
+    $('#geScore').hidden = false;
+    $('#geScore').textContent = 'Score: 0';
+    gePreview.src = r.src + '&r=' + Date.now(); // cache-buster forces a fresh run
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function stopGamePreview() {
+  if (!gamePreviewOn) return;
+  gamePreviewOn = false;
+  gePreview.src = 'about:blank';
+}
+
+$('#btnGeBack').addEventListener('click', () => { location.hash = '#/games'; });
+$('#btnGeSave').addEventListener('click', saveGameCode);
+$('#btnGeRun').addEventListener('click', runGamePreview);
+$('#btnGeOpen').addEventListener('click', async () => {
+  if (!gameEdit) return;
+  if (gameEditDirty && !(await saveGameCode())) return;
+  location.hash = '#/g/' + gameEdit.id;
+});
+
+/* ---- game settings sheet ---- */
+$('#btnGeSettings').addEventListener('click', () => {
+  if (!gameEdit) return;
+  const m = gameEdit.meta;
+  $('#gsName').value = m.name;
+  $('#gsDesc').value = m.description || '';
+  $('#gsError').textContent = '';
+  for (const r of document.querySelectorAll('input[name="gsVis"]')) r.checked = r.value === m.visibility;
+  for (const r of document.querySelectorAll('input[name="gsOrder"]')) r.checked = r.value === (m.scoreOrder || 'desc');
+  openSheet('#sheetGameSettings');
+});
+$('#gsDone').addEventListener('click', async () => {
+  if (!gameEdit) return;
+  const vis = document.querySelector('input[name="gsVis"]:checked');
+  const ord = document.querySelector('input[name="gsOrder"]:checked');
+  try {
+    const r = await api('/api/games/' + gameEdit.id, 'PUT', {
+      name: $('#gsName').value.trim(),
+      description: $('#gsDesc').value.trim(),
+      visibility: vis ? vis.value : 'private',
+      scoreOrder: ord ? ord.value : 'desc',
+    });
+    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
+    $('#geName').textContent = r.game.name;
+    closeSheets();
+  } catch (err) {
+    $('#gsError').textContent = err.message;
+  }
+});
+$('#gsDelete').addEventListener('click', async () => {
+  if (!gameEdit) return;
+  if (!confirm('Delete “' + gameEdit.meta.name + '” and its leaderboard for good?')) return;
+  try {
+    await api('/api/games/' + gameEdit.id, 'DELETE');
+    gameEdit = null;
+    closeSheets();
+    location.hash = '#/games';
+  } catch (err) {
+    $('#gsError').textContent = err.message;
+  }
+});
+
+/* ---- AI game builder sheet ---- */
+$('#btnGeAI').addEventListener('click', () => {
+  $('#gameAiError').textContent = '';
+  $('#gameAiEdit').disabled = !$('#geCode').value.trim();
+  openSheet('#sheetGameAI');
+  $('#gameAiPrompt').focus();
+});
+$('#gameAiCancel').addEventListener('click', closeSheets);
+
+async function generateGame(mode) {
+  if (!gameEdit) return;
+  const prompt = $('#gameAiPrompt').value.trim();
+  if (prompt.length < 3) { $('#gameAiError').textContent = 'Describe the game you want first.'; return; }
+  const btns = [$('#gameAiNew'), $('#gameAiEdit'), $('#gameAiCancel')];
+  btns.forEach(b => { b.disabled = true; });
+  const runBtn = mode === 'edit' ? $('#gameAiEdit') : $('#gameAiNew');
+  const oldLabel = runBtn.textContent;
+  runBtn.textContent = '✨ Building… (can take a minute)';
+  $('#gameAiError').textContent = '';
+  try {
+    const r = await api('/api/games/' + gameEdit.id + '/generate', 'POST', { prompt, mode });
+    $('#geCode').value = r.code;
+    markGameDirty();
+    // a fresh AI build names the game too (kept only while it's still untitled)
+    if (mode === 'new' && r.name && /^untitled game$/i.test(gameEdit.meta.name)) {
+      const upd = await api('/api/games/' + gameEdit.id, 'PUT', { name: r.name });
+      gameEdit.meta = Object.assign({}, gameEdit.meta, upd.game);
+      $('#geName').textContent = upd.game.name;
+    }
+    closeSheets();
+    runGamePreview();
+  } catch (err) {
+    $('#gameAiError').textContent = err.message;
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+    runBtn.textContent = oldLabel;
+    $('#gameAiEdit').disabled = !$('#geCode').value.trim();
+  }
+}
+$('#gameAiNew').addEventListener('click', () => generateGame('new'));
+$('#gameAiEdit').addEventListener('click', () => generateGame('edit'));
+
+/* ---------- player ---------- */
+async function openGamePlayer(gameId) {
+  gpFrame.src = 'about:blank'; // never let a previous game linger while loading
+  try {
+    const data = await api('/api/games/' + gameId);
+    gamePlay = {
+      id: gameId,
+      meta: data.game,
+      owner: data.owner,
+      isOwner: data.isOwner,
+      signedIn: data.signedIn,
+      src: null,
+    };
+    $('#gpName').textContent = data.game.name;
+    const ownerName = data.owner.name || '@' + data.owner.username;
+    $('#gpBy').textContent = 'by ' + ownerName + ' · ' + fmtScore(data.game.plays || 0) + ' plays';
+    $('#btnGpEdit').hidden = !data.isOwner;
+    $('#gpScore').hidden = true;
+    $('#gpToast').hidden = true;
+    $('#gpRank').hidden = true;
+    $('#gpBoardSignin').hidden = !!me;
+    $('#gpBoardPanel').hidden = window.innerWidth <= 900; // open beside the game on desktop
+    $('#gpBoardList').innerHTML = '<div class="board-empty">Loading…</div>';
+    show('gameplay');
+    // start the play session + fetch the board in parallel
+    const [playRes, boardRes] = await Promise.all([
+      api('/api/games/' + gameId + '/play', 'POST'),
+      api('/api/games/' + gameId + '/leaderboard'),
+    ]);
+    if (!gamePlay || gamePlay.id !== gameId) return; // navigated away meanwhile
+    gamePlay.src = playRes.src;
+    gpFrame.src = playRes.src;
+    renderLeaderboard(boardRes.leaderboard);
+  } catch (err) {
+    alert(err.message);
+    location.hash = '#/games';
+  }
+}
+
+function stopGamePlayer() {
+  if (!gamePlay) return;
+  gamePlay = null;
+  gpFrame.src = 'about:blank';
+}
+
+function renderLeaderboard(board) {
+  const list = $('#gpBoardList');
+  const meta = $('#gpBoardMeta');
+  list.innerHTML = '';
+  meta.textContent = fmtScore(board.totalPlays) + ' plays · ' + fmtScore(board.totalPlayers) +
+    ' player' + (board.totalPlayers === 1 ? '' : 's') +
+    (board.scoreOrder === 'asc' ? ' · lower is better' : '');
+  const rank = $('#gpRank');
+  if (board.mine) { rank.hidden = false; rank.textContent = '#' + board.mine.rank; }
+  else rank.hidden = true;
+
+  if (!board.entries.length) {
+    const d = document.createElement('div');
+    d.className = 'board-empty';
+    d.textContent = 'No scores yet — set the first one!';
+    list.appendChild(d);
+    return;
+  }
+  const row = e => {
+    const r = document.createElement('div');
+    r.className = 'board-row' + (e.me ? ' me' : '') + (e.rank <= 3 ? ' top' + e.rank : '');
+    const rk = document.createElement('span'); rk.className = 'br-rank';
+    rk.textContent = e.rank === 1 ? '🥇' : e.rank === 2 ? '🥈' : e.rank === 3 ? '🥉' : '#' + e.rank;
+    const who = document.createElement('span'); who.className = 'br-who';
+    who.textContent = (e.name || '@' + e.username) + (e.me ? ' (you)' : '');
+    if (e.username !== '(deleted)') {
+      who.addEventListener('click', () => { location.hash = '#/u/' + e.username; });
+    }
+    const sc = document.createElement('span'); sc.className = 'br-score';
+    sc.textContent = fmtScore(e.best);
+    r.append(rk, who, sc);
+    return r;
+  };
+  for (const e of board.entries) list.appendChild(row(e));
+  if (board.mine && board.mine.rank > board.entries.length) {
+    const gap = document.createElement('div');
+    gap.className = 'board-gap';
+    gap.textContent = '⋯';
+    list.appendChild(gap);
+    list.appendChild(row(board.mine));
+  }
+}
+
+$('#btnGpBack').addEventListener('click', () => {
+  location.hash = '#/games'; // the hub works for guests too (discover)
+});
+$('#btnGpEdit').addEventListener('click', () => {
+  if (gamePlay) location.hash = '#/games/edit/' + gamePlay.id;
+});
+$('#btnGpRestart').addEventListener('click', () => {
+  if (!gamePlay || !gamePlay.src) return;
+  $('#gpScore').hidden = true;
+  $('#gpToast').hidden = true;
+  gpFrame.src = gamePlay.src + '&r=' + Date.now(); // reload = fresh round
+});
+$('#btnGpBoard').addEventListener('click', async () => {
+  const panel = $('#gpBoardPanel');
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden && gamePlay) {
+    try {
+      const r = await api('/api/games/' + gamePlay.id + '/leaderboard');
+      renderLeaderboard(r.leaderboard);
+    } catch { /* keep whatever is shown */ }
+  }
+});
+$('#btnGpBoardClose').addEventListener('click', () => { $('#gpBoardPanel').hidden = true; });
+
+/* ================================================================
    Notifications (bell feed + Web Push)
    ----------------------------------------------------------------
    A per-user SSE stream feeds a bell dropdown live; the same events also
@@ -3456,6 +4174,7 @@ function renderNotifs() {
       chat: ' chatted in ',
       edit: ' edited ',
       newmap: ' posted a new map ',
+      newgame: ' published a game ',
     };
     const verb = verbs[n.kind] || ' updated ';
     const title = document.createElement('div');
@@ -3481,9 +4200,16 @@ function renderNotifs() {
   }
 }
 
-// Jump to the map the notification is about (reuses the profile map viewer).
+// Jump to what the notification is about: the game player for game alerts,
+// otherwise the map (via the profile map viewer).
 function openNotifTarget(n) {
   closeNotifPanel();
+  if (n.kind === 'newgame') {
+    const target = '#/g/' + n.mapId; // game alerts store the game id here
+    if (location.hash === target) openGamePlayer(n.mapId); // same hash won't refire route()
+    else location.hash = target;
+    return;
+  }
   pendingProfileMapId = n.mapId;
   const target = '#/u/' + n.mapOwner;
   if (location.hash === target) openProfile(n.mapOwner); // same hash won't refire route()

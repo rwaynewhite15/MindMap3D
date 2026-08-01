@@ -68,6 +68,7 @@ function pgStore() {
     pushSubs: r.push_subs,
     map: r.map,
     maps: r.maps,
+    games: r.games,
   });
 
   return {
@@ -97,6 +98,8 @@ function pgStore() {
       // notification bell feed + Web Push subscriptions
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications JSONB NOT NULL DEFAULT '[]'`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_subs JSONB NOT NULL DEFAULT '[]'`);
+      // user-authored games (editor + player + leaderboards)
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS games JSONB NOT NULL DEFAULT '[]'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -148,33 +151,42 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers, notifications, push_subs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb)`,
+                            following, followers, notifications, push_subs, games)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
-         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
+         JSON.stringify(u.games || [])]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
                           following=$10::jsonb, followers=$11::jsonb,
-                          notifications=$12::jsonb, push_subs=$13::jsonb
+                          notifications=$12::jsonb, push_subs=$13::jsonb, games=$14::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
-         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
+         JSON.stringify(u.games || [])]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
         `SELECT * FROM users
          WHERE jsonb_path_exists(maps, '$[*] ? (@.id == $mid)', jsonb_build_object('mid', $1::text))
          LIMIT 1`, [mapId]);
+      return rowToUser(rows[0]);
+    },
+    async getUserByGameId(gameId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE jsonb_path_exists(games, '$[*] ? (@.id == $gid)', jsonb_build_object('gid', $1::text))
+         LIMIT 1`, [gameId]);
       return rowToUser(rows[0]);
     },
     async getUsersWithEditor(userId) {
@@ -231,6 +243,20 @@ function pgStore() {
           }));
           await client.query('UPDATE users SET maps = $2::jsonb WHERE id = $1',
             [r.id, JSON.stringify(maps)]);
+        }
+        // and their leaderboard entries from any game on other accounts
+        const gr = await client.query(
+          `SELECT id, games FROM users
+           WHERE jsonb_path_exists(games, '$[*].scores[*] ? (@.userId == $u)', jsonb_build_object('u', $1::text))`,
+          [userId]);
+        for (const r of gr.rows) {
+          if (r.id === userId) continue;
+          const games = r.games.map(g => ({
+            ...g,
+            scores: (g.scores || []).filter(s => s.userId !== userId),
+          }));
+          await client.query('UPDATE users SET games = $2::jsonb WHERE id = $1',
+            [r.id, JSON.stringify(games)]);
         }
         await client.query('DELETE FROM users WHERE id = $1', [userId]); // sessions cascade
         await client.query('COMMIT');
@@ -300,6 +326,9 @@ function fileStore() {
     async getUserByMapId(mapId) {
       return Object.values(db.users).find(u => (u.maps || []).some(m => m.id === mapId)) || null;
     },
+    async getUserByGameId(gameId) {
+      return Object.values(db.users).find(u => (u.games || []).some(g => g.id === gameId)) || null;
+    },
     async getUsersWithEditor(userId) {
       return Object.values(db.users).filter(u => (u.maps || []).some(m => (m.editors || []).includes(userId)));
     },
@@ -323,6 +352,9 @@ function fileStore() {
         for (const m of u.maps || []) {
           m.editors = rm(m.editors);
           if (Array.isArray(m.likes)) m.likes = rm(m.likes);
+        }
+        for (const g of u.games || []) {
+          if (Array.isArray(g.scores)) g.scores = g.scores.filter(s => s.userId !== userId);
         }
       }
       delete db.users[userId];
@@ -374,6 +406,28 @@ const MAX_COMMENTS = 500; // per map; oldest entries roll off
 const MAX_NOTIFS = 100; // per user; oldest entries roll off
 const MAX_PUSH_SUBS = 20; // per user; browsers/devices they enabled push on
 
+const MAX_GAMES = 20;
+const MAX_GAME_CODE = 200 * 1024; // per game, characters of HTML/CSS/JS
+const MAX_GAME_SCORES = 500; // leaderboard entries kept per game (one per player)
+const LEADERBOARD_TOP = 25; // entries returned to clients
+
+function makeGame(name, visibility) {
+  const now = Date.now();
+  return {
+    id: newId(),
+    name: String(name || '').trim().slice(0, 60) || 'Untitled game',
+    description: '',
+    visibility: normVisibility(visibility),
+    code: '',
+    scoreOrder: 'desc', // 'desc' = higher is better, 'asc' = lower is better (times, golf)
+    scores: [],         // [{ userId, best, plays, ts }] — one entry per player
+    plays: 0,
+    announced: false,   // has "posted a new game" gone out to friends/followers yet?
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 // Legacy users carry a single `map`; wrap it into the multi-map shape in place.
 function normalizeUser(u) {
   if (!u) return u;
@@ -399,6 +453,15 @@ function normalizeUser(u) {
     if (!Array.isArray(m.chat)) m.chat = [];
     if (!Array.isArray(m.comments)) m.comments = []; // viewer comments (any signed-in viewer)
     if (!Array.isArray(m.likes)) m.likes = []; // user ids who liked this map
+  }
+  if (!Array.isArray(u.games)) u.games = [];
+  for (const g of u.games) {
+    g.visibility = normVisibility(g.visibility);
+    if (typeof g.code !== 'string') g.code = '';
+    if (typeof g.description !== 'string') g.description = '';
+    if (g.scoreOrder !== 'asc') g.scoreOrder = 'desc';
+    if (!Array.isArray(g.scores)) g.scores = [];
+    if (typeof g.plays !== 'number' || !isFinite(g.plays)) g.plays = 0;
   }
   delete u.map;
   return u;
@@ -489,6 +552,249 @@ function mapMetaFor(m, viewer, extra) {
 
 function ownerRef(u, viewer) {
   return { username: u.username, name: nameFor(u, viewer) };
+}
+
+/* ================================================================
+   Games — user-authored HTML/JS games (and widgets) with scores,
+   leaderboards, and optional AI hooks.
+   ----------------------------------------------------------------
+   The code itself never runs on the server and never runs with the
+   app's origin: it is served by /game-frame/<id> into a sandboxed
+   iframe (opaque origin, no cookies, no network — see serveGameFrame)
+   and talks to the app only through a postMessage bridge.
+================================================================ */
+// Same tiers as maps, minus editors: games are owner-edited only.
+function canViewGameObj(g, owner, viewer) {
+  if (viewer && viewer.id === owner.id) return true;
+  if (g.visibility === 'private') return false;
+  if (g.visibility === 'public') return true;
+  return g.visibility === 'friends' && relationTo(viewer, owner) === 'friends';
+}
+
+function visibleGamesOf(owner, viewer) {
+  return (owner.games || []).filter(g => canViewGameObj(g, owner, viewer));
+}
+
+function gameMeta(g, extra) {
+  return Object.assign({
+    id: g.id,
+    name: g.name,
+    description: g.description || '',
+    visibility: g.visibility,
+    scoreOrder: g.scoreOrder === 'asc' ? 'asc' : 'desc',
+    plays: g.plays || 0,
+    playerCount: (g.scores || []).length,
+    hasCode: !!(g.code && g.code.trim()),
+    updatedAt: g.updatedAt || 0,
+  }, extra || {});
+}
+
+// Better = strictly better under the game's score order.
+function betterScore(g, a, b) {
+  return g.scoreOrder === 'asc' ? a < b : a > b;
+}
+
+// Record a finished round for `player` on game `g`: bump their play count and
+// keep their best score. One leaderboard entry per player; when the table is
+// full the worst entry rolls off (never the one just improved).
+function recordScore(g, player, score) {
+  if (!Array.isArray(g.scores)) g.scores = [];
+  let entry = g.scores.find(s => s.userId === player.id);
+  let improved = false;
+  if (!entry) {
+    entry = { userId: player.id, best: score, plays: 1, ts: Date.now() };
+    g.scores.push(entry);
+    improved = true;
+  } else {
+    entry.plays++;
+    if (betterScore(g, score, entry.best)) {
+      entry.best = score;
+      entry.ts = Date.now();
+      improved = true;
+    }
+  }
+  if (g.scores.length > MAX_GAME_SCORES) {
+    g.scores.sort((a, b) => (g.scoreOrder === 'asc' ? a.best - b.best : b.best - a.best));
+    g.scores.length = MAX_GAME_SCORES;
+  }
+  return { entry, improved };
+}
+
+// The leaderboard as sent to clients: top entries with usernames resolved,
+// plus the viewer's own row (with rank) even when they're outside the top.
+async function leaderboardOut(g, viewer) {
+  const sorted = (g.scores || []).slice()
+    .sort((a, b) => (g.scoreOrder === 'asc' ? a.best - b.best : b.best - a.best) || a.ts - b.ts);
+  const top = sorted.slice(0, LEADERBOARD_TOP);
+  const myIndex = viewer ? sorted.findIndex(s => s.userId === viewer.id) : -1;
+  const needIds = new Set(top.map(s => s.userId));
+  if (myIndex >= 0) needIds.add(viewer.id);
+  const users = await store.getUsersByIds([...needIds]);
+  const byId = new Map(users.map(u => [u.id, u]));
+  const rowOut = (s, i) => {
+    const u = byId.get(s.userId);
+    return {
+      rank: i + 1,
+      username: u ? u.username : '(deleted)',
+      name: u ? nameFor(u, viewer) : null,
+      best: s.best,
+      plays: s.plays,
+      ts: s.ts,
+      me: !!viewer && s.userId === viewer.id,
+    };
+  };
+  return {
+    scoreOrder: g.scoreOrder === 'asc' ? 'asc' : 'desc',
+    totalPlayers: sorted.length,
+    totalPlays: g.plays || 0,
+    entries: top.map(rowOut),
+    mine: myIndex >= 0 ? rowOut(sorted[myIndex], myIndex) : null,
+  };
+}
+
+/* ---------- play tokens ----------
+   The sandboxed iframe can't (and shouldn't) present the session cookie, so
+   /game-frame/<id> authenticates with a short-lived HMAC token instead, minted
+   by POST /api/games/<id>/play only after the usual visibility check. The key
+   is per-boot: a restart just means open players re-mint on reload. */
+const FRAME_SECRET = crypto.randomBytes(32);
+const FRAME_TOKEN_TTL = 6 * 60 * 60 * 1000; // long enough for a long session
+
+function signFrameToken(gameId, exp) {
+  return crypto.createHmac('sha256', FRAME_SECRET).update(gameId + ':' + exp).digest('hex');
+}
+function makeFrameToken(gameId) {
+  const exp = Date.now() + FRAME_TOKEN_TTL;
+  return exp + '.' + signFrameToken(gameId, exp);
+}
+function verifyFrameToken(token, gameId) {
+  const dot = String(token || '').indexOf('.');
+  if (dot < 0) return false;
+  const exp = Number(token.slice(0, dot));
+  if (!Number.isFinite(exp) || Date.now() > exp) return false;
+  const got = Buffer.from(token.slice(dot + 1));
+  const expected = Buffer.from(signFrameToken(gameId, exp));
+  return got.length === expected.length && crypto.timingSafeEqual(got, expected);
+}
+
+/* ---------- the sandboxed game document ----------
+   A tiny SDK is injected ahead of the author's code. Everything the game may
+   do beyond drawing — live score, submitting a result, asking the AI — goes
+   through postMessage to the parent page, which owns the session and the API
+   calls. The response headers pin a CSP with no network access at all, so
+   game code cannot call our API or exfiltrate anywhere; combined with the
+   parent's sandbox="allow-scripts" the document runs with an opaque origin. */
+const GAME_FRAME_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "font-src data:",
+  "connect-src 'none'",
+  "frame-ancestors 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
+const GAME_SDK = `
+'use strict';
+// MindGame — the bridge between your game and MindMapShare.
+window.MindGame = (function () {
+  var score = 0, ready = false, readyFns = [], aiCalls = {}, aiSeq = 0;
+  var info = { player: null, aiAvailable: false };
+  function post(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  window.addEventListener('message', function (e) {
+    if (e.source !== window.parent || !e.data || typeof e.data !== 'object') return;
+    var d = e.data;
+    if (d.mg === 'init') {
+      info.player = d.player || null;
+      info.aiAvailable = !!d.aiAvailable;
+      ready = true;
+      var fns = readyFns; readyFns = [];
+      fns.forEach(function (fn) { try { fn(info); } catch (err) { console.error(err); } });
+    } else if (d.mg === 'ai-result' && aiCalls[d.id]) {
+      var call = aiCalls[d.id]; delete aiCalls[d.id];
+      d.ok ? call.resolve(String(d.text || '')) : call.reject(new Error(d.error || 'AI unavailable'));
+    }
+  });
+  post({ mg: 'ready' });
+  return {
+    // The signed-in player ({username, name}) or null for guests.
+    get player() { return info.player; },
+    // Whether MindGame.ai() can work (server AI on + player signed in).
+    get aiAvailable() { return info.aiAvailable; },
+    // Run fn once the bridge is up (immediately if it already is).
+    onReady: function (fn) { ready ? fn(info) : readyFns.push(fn); },
+    // Live score shown in the player chrome around your game.
+    setScore: function (n) { score = Number(n) || 0; post({ mg: 'score', value: score }); },
+    addScore: function (n) { this.setScore(score + (Number(n) || 0)); },
+    getScore: function () { return score; },
+    // End the round: submits the score to the leaderboard (signed-in players).
+    // You can call it again after a restart for multi-round games.
+    gameOver: function (finalScore) {
+      if (finalScore !== undefined) this.setScore(finalScore);
+      post({ mg: 'over', score: score });
+    },
+    // Ask the AI. Returns a Promise of the reply text.
+    //   MindGame.ai('Give me a trivia question about space')
+    //   MindGame.ai(prompt, { system: 'You are a pirate NPC.' })
+    ai: function (prompt, opts) {
+      var id = ++aiSeq;
+      return new Promise(function (resolve, reject) {
+        aiCalls[id] = { resolve: resolve, reject: reject };
+        post({ mg: 'ai', id: id, prompt: String(prompt || ''), system: opts && opts.system ? String(opts.system) : '' });
+        setTimeout(function () {
+          if (aiCalls[id]) { delete aiCalls[id]; reject(new Error('AI request timed out')); }
+        }, 60000);
+      });
+    },
+  };
+})();
+`;
+
+function gameFrameHtml(g) {
+  // The author's code is the document: their HTML/CSS/JS is embedded verbatim
+  // after the SDK. No escaping is needed — the whole document belongs to them,
+  // and the sandbox + CSP (not markup hygiene) are what contain it.
+  return '<!DOCTYPE html>\n<html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">' +
+    '<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#10141D;color:#E8ECF4;' +
+    'font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}</style>' +
+    '<script>' + GAME_SDK + '</script>' +
+    '</head><body>\n' + (g.code || '<p style="padding:20px;opacity:.6">This game has no code yet.</p>') +
+    '\n</body></html>';
+}
+
+// GET /game-frame/<id>?t=<token> — the only route that serves author code.
+// It deliberately overrides the app-wide security headers: this document gets
+// its own no-network CSP and must be frameable by the app itself.
+async function serveGameFrame(req, res, pathname) {
+  // every response here (errors included) renders inside our iframe, so all of
+  // them swap the app-wide DENY/CSP for the frame's own no-network policy
+  res.removeHeader('X-Frame-Options');
+  const headers = status => {
+    res.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': GAME_FRAME_CSP,
+      'Cache-Control': 'no-store',
+    });
+  };
+  const m = pathname.match(/^\/game-frame\/([A-Za-z0-9]{1,40})$/);
+  const token = new URL(req.url, 'http://x').searchParams.get('t');
+  const gameId = m && m[1];
+  if (!gameId || !verifyFrameToken(token, gameId)) {
+    headers(403);
+    return res.end('<p style="font-family:system-ui;padding:20px">This play session has expired — reload the page to keep playing.</p>');
+  }
+  const owner = await store.getUserByGameId(gameId);
+  const g = owner && owner.games.find(x => x.id === gameId);
+  if (!g) {
+    headers(404);
+    return res.end('<p style="font-family:system-ui;padding:20px">This game no longer exists.</p>');
+  }
+  headers(200);
+  res.end(gameFrameHtml(g));
 }
 
 function publicUser(u, viewer) {
@@ -725,12 +1031,14 @@ function sendWebPush(user, notif) {
     case 'comment': title = `${actor} commented on “${notif.mapName}”`; break;
     case 'edit':    title = `${actor} edited “${notif.mapName}”`; break;
     case 'newmap':  title = `${actor} posted a new map: “${notif.mapName}”`; break;
+    case 'newgame': title = `${actor} published a game: “${notif.mapName}”`; break;
     default:        title = `${actor} chatted in “${notif.mapName}”`;
   }
   const payload = JSON.stringify({
     title,
     body: notif.text || '',
-    url: '/#/u/' + notif.mapOwner,
+    // game alerts open the game player; everything else opens the owner's maps
+    url: notif.kind === 'newgame' ? '/#/g/' + notif.mapId : '/#/u/' + notif.mapOwner,
     tag: 'map-' + notif.mapId,
   });
   let pruned = false;
@@ -838,6 +1146,28 @@ async function notifyNewMap(creator, m) {
   };
   for (const target of targets) {
     if (!canViewMapObj(m, creator, target)) continue; // respect the map's visibility
+    deliverNotif(target, base);
+    await store.saveUser(target);
+  }
+}
+
+// Same announcement for a game, fired the first time it becomes visible to
+// others (created non-private, or later flipped from private) — see g.announced.
+async function notifyNewGame(creator, g) {
+  const candidateIds = new Set([...(creator.friends || []), ...(creator.followers || [])]);
+  candidateIds.delete(creator.id);
+  if (!candidateIds.size) return;
+  const targets = await store.getUsersByIds([...candidateIds]);
+  const base = {
+    kind: 'newgame',
+    mapId: g.id, // notifications reuse the map fields; the kind disambiguates
+    mapOwner: creator.username,
+    mapName: g.name,
+    actor: actorRef(creator),
+    text: g.description || '',
+  };
+  for (const target of targets) {
+    if (!canViewGameObj(g, creator, target)) continue;
     deliverNotif(target, base);
     await store.saveUser(target);
   }
@@ -1174,6 +1504,105 @@ function openSpotRightOf(existingNodes, added) {
 }
 
 /* ================================================================
+   AI for games (optional — requires ANTHROPIC_API_KEY at runtime)
+   ----------------------------------------------------------------
+   Two very different calls:
+     - generateGameFromPrompt: the editor's "✨ AI" writes or reworks a whole
+       game (big, rare, owner-only) on the same model as map generation.
+     - gameAiAsk: a game calls MindGame.ai() mid-play (small, frequent) on a
+       fast model.
+================================================================ */
+const GAME_AI_MODEL = 'claude-haiku-4-5-20251001'; // in-game runtime calls
+
+const GAME_AI_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'A short, catchy title for the game.' },
+    code: { type: 'string', description: 'The complete HTML/CSS/JS for the game body.' },
+  },
+  required: ['name', 'code'],
+};
+
+const GAME_SDK_DOC =
+  'The game runs inside a sandboxed iframe on MindMapShare. Your output is the BODY ' +
+  'content of an HTML document (markup, <style>, and <script> tags — no <html>/<head>/<body> ' +
+  'wrapper needed). A `MindGame` bridge object is already defined before your code runs:\n' +
+  '  MindGame.onReady(fn)      — fn({player, aiAvailable}) once the bridge is up; player is {username, name} or null for guests\n' +
+  '  MindGame.setScore(n) / MindGame.addScore(n) / MindGame.getScore()\n' +
+  '  MindGame.gameOver(finalScore?) — ends the round and submits the score to the leaderboard\n' +
+  '  MindGame.ai(prompt, {system}) — Promise<string>; only when MindGame.aiAvailable is true\n' +
+  'Hard constraints: NO network access of any kind (no fetch/XHR/WebSocket, no external ' +
+  'scripts, stylesheets, images, or fonts — inline everything; images only as data: URIs or ' +
+  'canvas drawing), no cookies or storage. The page background is dark (#10141D) with light ' +
+  'text; design for both mouse and touch, and make the game fill the frame responsively.';
+
+async function generateGameFromPrompt(prompt, existingCode) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const e = new Error('AI game generation isn’t configured on this server. Set ANTHROPIC_API_KEY to enable it.');
+    e.status = 503; throw e;
+  }
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch { const e = new Error('AI generation is unavailable (the Anthropic SDK is not installed).'); e.status = 503; throw e; }
+  const client = new Anthropic();
+  const editing = !!(existingCode && existingCode.trim());
+  const system =
+    'You build small, polished, genuinely fun browser games (or interactive widgets) as ' +
+    'self-contained HTML/CSS/JS. Keep the score meaningful and call MindGame.gameOver() when a ' +
+    'round ends so leaderboards work.\n\n' + GAME_SDK_DOC +
+    (editing
+      ? '\n\nYou are MODIFYING the player’s existing game: keep everything that works and apply their request. Return the complete updated code, not a diff.'
+      : '');
+  const userContent = editing
+    ? 'Here is my current game code:\n\n```html\n' + existingCode.slice(0, 60000) + '\n```\n\nChange it as follows:\n\n' + prompt
+    : 'Build this game:\n\n' + prompt;
+  const response = await client.messages.create({
+    model: AI_MODEL,
+    max_tokens: 32000,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: GAME_AI_SCHEMA } },
+    system,
+    messages: [{ role: 'user', content: userContent }],
+  });
+  if (response.stop_reason === 'refusal') {
+    const e = new Error('The AI declined to generate that game.'); e.status = 422; throw e;
+  }
+  const textBlock = (response.content || []).find(b => b.type === 'text');
+  let data;
+  try { data = JSON.parse(textBlock ? textBlock.text : '{}'); }
+  catch { const e = new Error('The AI returned an unexpected response. Please try again.'); e.status = 502; throw e; }
+  const code = String(data.code || '').slice(0, MAX_GAME_CODE);
+  if (!code.trim()) { const e = new Error('The AI returned no code. Please try again.'); e.status = 502; throw e; }
+  return { code, name: String(data.name || '').trim().slice(0, 60) };
+}
+
+// One MindGame.ai() call from inside a running game. Small and fast; the reply
+// goes only back into the sandbox that asked.
+async function gameAiAsk(prompt, systemExtra) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const e = new Error('AI isn’t enabled on this server.'); e.status = 503; throw e;
+  }
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch { const e = new Error('AI is unavailable.'); e.status = 503; throw e; }
+  const client = new Anthropic();
+  const system =
+    'You are the AI helper inside a small user-made browser game on MindMapShare. Answer the ' +
+    'game’s request directly and concisely with plain text (or exactly the JSON it asks for). ' +
+    'No preamble, no markdown fences.' +
+    (systemExtra ? '\n\nThe game adds these instructions:\n' + systemExtra : '');
+  const response = await client.messages.create({
+    model: GAME_AI_MODEL,
+    max_tokens: 1024,
+    system,
+    messages: [{ role: 'user', content: String(prompt || '').slice(0, 4000) }],
+  });
+  const textBlock = (response.content || []).find(b => b.type === 'text');
+  return textBlock ? textBlock.text : '';
+}
+
+/* ================================================================
    Sessions, cookies, rate limiting
 ================================================================ */
 function parseCookies(req) {
@@ -1369,6 +1798,7 @@ async function handleApi(req, res, pathname) {
       following: [], followers: [],
       notifications: [], pushSubs: [],
       maps: [makeMap('My Map', body.visibility, displayName || username)],
+      games: [],
     };
     try {
       await store.createUser(u);
@@ -1436,6 +1866,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, {
       user: publicUser(target, user),
       maps: visibleMapsOf(target, user).map(m => mapMeta(m)),
+      games: visibleGamesOf(target, user).filter(g => g.code && g.code.trim()).map(g => gameMeta(g)),
     });
   }
 
@@ -1476,6 +1907,55 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  // --- games: public, read-only browsing + playing (guests welcome on public games) ---
+  // Discover public games from everyone, freshest first.
+  if (req.method === 'GET' && pathname === '/api/games/discover') {
+    const everyone = await store.searchUsers('');
+    const pool = [];
+    for (const other of everyone) {
+      for (const g of other.games || []) {
+        if (g.visibility === 'public' && g.code && g.code.trim()) {
+          pool.push(gameMeta(g, { owner: ownerRef(other, user) }));
+        }
+      }
+    }
+    pool.sort((a, b) => b.updatedAt - a.updatedAt);
+    return sendJSON(res, 200, { games: pool.slice(0, 60) });
+  }
+
+  // A single game: meta for anyone who may view it; the code only for its owner
+  // (players get the code via the sandboxed /game-frame document instead).
+  const pubGameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(leaderboard|play))?$/);
+  if (pubGameMatch && (req.method === 'GET' || (pubGameMatch[2] === 'play' && req.method === 'POST'))) {
+    const gameId = pubGameMatch[1], gsub = pubGameMatch[2];
+    const gOwner = user && user.games.some(g => g.id === gameId) ? user : await store.getUserByGameId(gameId);
+    const g = gOwner && gOwner.games.find(x => x.id === gameId);
+    if (!g || !canViewGameObj(g, gOwner, user)) return sendJSON(res, 404, { error: 'No such game.' });
+    const gIsOwner = !!user && gOwner.id === user.id;
+
+    if (!gsub && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        game: gameMeta(g, gIsOwner ? { code: g.code } : {}),
+        owner: ownerRef(gOwner, user),
+        isOwner: gIsOwner,
+        aiEnabled: aiConfigured(),
+        signedIn: !!user, // guests can play but not save scores
+      });
+    }
+    if (gsub === 'leaderboard' && req.method === 'GET') {
+      return sendJSON(res, 200, { leaderboard: await leaderboardOut(g, user) });
+    }
+    // Start a play session: counts a play and mints the token the sandboxed
+    // iframe presents to /game-frame (it can't send the session cookie).
+    if (gsub === 'play' && req.method === 'POST') {
+      g.plays = (g.plays || 0) + 1;
+      await store.saveUser(gOwner);
+      return sendJSON(res, 200, {
+        src: '/game-frame/' + g.id + '?t=' + encodeURIComponent(makeFrameToken(g.id)),
+      });
+    }
+  }
+
   // --- admin console (separate auth: ADMIN_PASSWORD env var, not a user account) ---
   if (pathname === '/api/admin/login' && req.method === 'POST') {
     const ip = clientIp(req);
@@ -1514,12 +1994,13 @@ async function handleApi(req, res, pathname) {
       const now = Date.now();
       const dayAgo = now - 24 * 60 * 60 * 1000;
       const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-      let totalMaps = 0, totalNodes = 0, newToday = 0, newWeek = 0;
+      let totalMaps = 0, totalNodes = 0, totalGames = 0, newToday = 0, newWeek = 0;
       const list = users.map(u => {
         const maps = u.maps || [];
         const nodes = maps.reduce((s, m) => s + Object.keys(m.nodes || {}).length, 0);
         totalMaps += maps.length;
         totalNodes += nodes;
+        totalGames += (u.games || []).length;
         if (u.createdAt >= dayAgo) newToday++;
         if (u.createdAt >= weekAgo) newWeek++;
         return {
@@ -1537,7 +2018,7 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, {
         storage: store.kind,
         aiEnabled: aiConfigured(),
-        totals: { users: users.length, maps: totalMaps, nodes: totalNodes, newToday, newWeek },
+        totals: { users: users.length, maps: totalMaps, nodes: totalNodes, games: totalGames, newToday, newWeek },
         users: list,
       });
     }
@@ -1604,6 +2085,14 @@ async function handleApi(req, res, pathname) {
         updatedAt: m.updatedAt ? new Date(m.updatedAt).toISOString() : null,
         nodes: m.nodes, edges: m.edges, anchorId: m.anchorId || null,
         chat: m.chat || [],
+      })),
+      games: (user.games || []).map(g => ({
+        id: g.id, name: g.name, description: g.description || '',
+        visibility: g.visibility, scoreOrder: g.scoreOrder,
+        plays: g.plays || 0,
+        createdAt: g.createdAt ? new Date(g.createdAt).toISOString() : null,
+        updatedAt: g.updatedAt ? new Date(g.updatedAt).toISOString() : null,
+        code: g.code || '',
       })),
     };
     const body = JSON.stringify(data, null, 2);
@@ -1963,6 +2452,116 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 404, { error: 'Not found.' });
   }
 
+  // --- games: create, edit, score, AI (sign-in required) ---
+  if (route === 'GET /api/games') {
+    return sendJSON(res, 200, { games: user.games.map(g => gameMeta(g)) });
+  }
+
+  if (route === 'POST /api/games') {
+    if (user.games.length >= MAX_GAMES) return sendJSON(res, 400, { error: `You can have up to ${MAX_GAMES} games.` });
+    const body = await readBody(req);
+    const g = makeGame(body.name, body.visibility);
+    if (typeof body.code === 'string') g.code = body.code.slice(0, MAX_GAME_CODE);
+    if ('description' in body) g.description = String(body.description || '').trim().slice(0, 500);
+    if (body.scoreOrder === 'asc') g.scoreOrder = 'asc';
+    user.games.push(g);
+    if (g.visibility !== 'private' && g.code.trim()) {
+      g.announced = true;
+      await notifyNewGame(user, g);
+    }
+    await store.saveUser(user);
+    return sendJSON(res, 200, { game: gameMeta(g, { code: g.code }) });
+  }
+
+  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate))?$/);
+  if (gameMatch) {
+    const gameId = gameMatch[1], sub = gameMatch[2];
+    const owner = user.games.some(g => g.id === gameId) ? user : await store.getUserByGameId(gameId);
+    const g = owner && owner.games.find(x => x.id === gameId);
+    if (!g || !canViewGameObj(g, owner, user)) return sendJSON(res, 404, { error: 'No such game.' });
+    const isOwner = owner.id === user.id;
+
+    if (!sub && req.method === 'PUT') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can edit a game.' });
+      const body = await readBody(req);
+      if ('name' in body) g.name = String(body.name || '').trim().slice(0, 60) || 'Untitled game';
+      if ('description' in body) g.description = String(body.description || '').trim().slice(0, 500);
+      if ('visibility' in body) g.visibility = normVisibility(body.visibility);
+      if ('scoreOrder' in body) g.scoreOrder = body.scoreOrder === 'asc' ? 'asc' : 'desc';
+      if (typeof body.code === 'string') g.code = body.code.slice(0, MAX_GAME_CODE);
+      g.updatedAt = Date.now();
+      // first time it's shareable and has something to play → tell friends/followers
+      if (!g.announced && g.visibility !== 'private' && g.code.trim()) {
+        g.announced = true;
+        await notifyNewGame(user, g);
+      }
+      await store.saveUser(user);
+      return sendJSON(res, 200, { game: gameMeta(g, { code: g.code }) });
+    }
+
+    if (!sub && req.method === 'DELETE') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete a game.' });
+      user.games = user.games.filter(x => x.id !== gameId);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    // A finished round from the player page (the game itself can't reach the
+    // API — its sandbox has no network and no cookies; the parent submits).
+    if (sub === 'score' && req.method === 'POST') {
+      if (tooMany('score:' + user.id, 240, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many scores this hour. Take a breather!' });
+      }
+      const body = await readBody(req);
+      let score = Number(body.score);
+      if (!Number.isFinite(score)) return sendJSON(res, 400, { error: 'Invalid score.' });
+      score = Math.max(-1e12, Math.min(1e12, Math.round(score * 100) / 100));
+      const { improved } = recordScore(g, user, score);
+      await store.saveUser(owner);
+      return sendJSON(res, 200, {
+        improved,
+        leaderboard: await leaderboardOut(g, user),
+      });
+    }
+
+    // One MindGame.ai() call, relayed by the player page on the game's behalf.
+    if (sub === 'ai' && req.method === 'POST') {
+      if (!aiConfigured()) return sendJSON(res, 503, { error: 'AI isn’t enabled on this server.' });
+      if (tooMany('gameai:' + user.id, 60, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many AI requests this hour. Try again later.' });
+      }
+      const body = await readBody(req);
+      const prompt = String(body.prompt || '').trim().slice(0, 4000);
+      if (!prompt) return sendJSON(res, 400, { error: 'Empty prompt.' });
+      try {
+        const text = await gameAiAsk(prompt, String(body.system || '').slice(0, 2000));
+        return sendJSON(res, 200, { text });
+      } catch (err) {
+        return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'AI request failed.' });
+      }
+    }
+
+    // ✨ AI writes (or reworks) the game's code from a description.
+    if (sub === 'generate' && req.method === 'POST') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can generate code for a game.' });
+      if (tooMany('ggen:' + user.id, 20, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many generations this hour. Try again later.' });
+      }
+      const body = await readBody(req);
+      const prompt = String(body.prompt || '').trim().slice(0, 2000);
+      if (prompt.length < 3) return sendJSON(res, 400, { error: 'Describe the game you want in a few words.' });
+      const existing = body.mode === 'edit' ? g.code : '';
+      try {
+        const result = await generateGameFromPrompt(prompt, existing);
+        return sendJSON(res, 200, result); // { code, name } — client decides what to keep
+      } catch (err) {
+        return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
+      }
+    }
+
+    return sendJSON(res, 404, { error: 'Not found.' });
+  }
+
   // (GET /api/users and GET /api/users/:username are served by the public
   //  read-only routes above, which also handle the signed-in case.)
 
@@ -2142,6 +2741,8 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 403, { error: 'Cross-site request blocked.' });
       }
       await handleApi(req, res, pathname);
+    } else if (pathname.startsWith('/game-frame/')) {
+      await serveGameFrame(req, res, pathname);
     } else serveStatic(req, res, pathname);
   } catch (err) {
     if (err.message === 'too large') return sendJSON(res, 413, { error: 'Request too large.' });

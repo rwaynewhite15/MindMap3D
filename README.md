@@ -15,6 +15,11 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **🎮 Games!** — a built-in **game editor and arcade**. Write small HTML/JS games (or any
+  interactive widget) right in the browser, or describe one and **let AI build it**. Games
+  run safely sandboxed, keep score, post to **per-game leaderboards**, and can even **call
+  the AI mid-play** (think AI-written trivia questions or NPC dialogue). Publish to friends
+  or everyone and discover other people's games on the new **Games** page.
 - **AI can expand a map, not just replace it** — the ✨ AI panel now offers **Add to map**
   (reads your current map as context and adds new, connected ideas beside it — nothing
   removed) alongside **Begin new map** (the original replace behavior).
@@ -192,6 +197,35 @@ of nested ideas.
 Export options make maps portable for docs, planning workflows, and external knowledge
 tools.
 
+### Games — build, play, compete
+
+MindMapShare includes a small arcade: anyone can **create games** (or other interactive
+widgets) and share them the same way maps are shared.
+
+- **The Games page** (🎮 in the nav) lists **your games** and a **Discover** feed of public
+  games from the whole community. Signed-out visitors can browse and play public games too.
+- **The editor** is a split view: your **HTML/CSS/JS code on the left, a live preview on
+  the right** — press **▶ Run** to save and play instantly. Start from a template (a blank
+  scaffold, an arcade game, or an AI trivia quiz), or open **✨ AI** and just *describe* the
+  game — the AI writes the whole thing, and can also **improve your existing code** on
+  request ("add sound-free juice", "make it harder over time", …).
+- **Scores & leaderboards** — games report scores through a tiny `MindGame` API
+  (`setScore`, `addScore`, `gameOver`). Each game keeps a **leaderboard of every player's
+  personal best** (with play counts), shown beside the game with medals for the top three
+  and your own rank pinned. A game can rank **higher-is-better or lower-is-better** (for
+  time-based or golf-style games).
+- **AI inside games** *(when the server has AI enabled)* — game code can call
+  `MindGame.ai(prompt)` to get AI answers mid-play: generated quiz questions, NPC
+  dialogue, hints, opponents. Requests are relayed and rate-limited by the server; the
+  game code never sees any credentials.
+- **Same privacy tiers as maps** — every game is **Private**, **Friends only**, or
+  **Public**. Publishing a playable game notifies your friends and followers (bell and
+  push), and tapping the alert drops them straight into the game.
+- **Safety** — game code runs in a **sandboxed iframe with a locked-down Content Security
+  Policy**: an opaque origin, no cookies, and **no network access at all**. Games talk to
+  the app only through a narrow `postMessage` bridge (score, round-over, AI ask), and
+  score submission is authenticated by the page around the game — never by game code.
+
 ### Sharing & real-time collaboration
 - **Grant edit access** to friends from **Map ▾ → "Who can edit this map?"**. Maps shared
   with you appear in your map dropdown under **Shared with me**.
@@ -267,6 +301,12 @@ model returns only additions, which are merged in beside your current content (n
 can even connect to existing ones). Without the key the app runs normally and the button
 stays hidden. Requests are rate-limited per user.
 
+The same key also powers the game features: the game editor's **✨ AI** (which writes or
+reworks whole games on the same model) and the in-game `MindGame.ai()` calls (served by
+the fast `claude-haiku-4-5` model, rate-limited per user). Without the key, games still
+work — the AI buttons hide and `MindGame.aiAvailable` is `false` so well-written games
+fall back gracefully.
+
 ### Admin console
 
 Setting `ADMIN_PASSWORD` turns on an admin dashboard at **`/admin`**, separate from
@@ -299,7 +339,7 @@ is required for them.
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, live SSE + chat, AI generation, games (sandboxed serving, leaderboards, AI relay), static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |
