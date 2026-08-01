@@ -16,10 +16,10 @@ and turns on **AI generation** simply by setting environment variables.
 ## What's new
 
 - **🎮 Games!** — a built-in **game editor and arcade**. Write small HTML/JS games (or any
-  interactive widget) right in the browser, or describe one and **let AI build it**. Games
-  run safely sandboxed, keep score, post to **per-game leaderboards**, and can even **call
-  the AI mid-play** (think AI-written trivia questions or NPC dialogue). Publish to friends
-  or everyone and discover other people's games on the new **Games** page.
+  interactive widget) right in the browser, starting from a template. Games run safely
+  sandboxed, keep score, post to **per-game leaderboards**, and can even **call the AI
+  mid-play** (think AI-written trivia questions or NPC dialogue). Publish to friends or
+  everyone and discover other people's games on the new **Games** page.
 - **Ranked play, decided by the server** — a game can ship **rules that run on our servers**,
   so matches stop being self-reported: illegal moves are refused before they reach your
   opponent, the winner is worked out from the moves themselves, and a client that claims a
@@ -217,11 +217,8 @@ widgets) and share them the same way maps are shared.
 - **The Games page** (🎮 in the nav) lists **your games** and a **Discover** feed of public
   games from the whole community. Signed-out visitors can browse and play public games too.
 - **The editor** is a split view: your **HTML/CSS/JS code on the left, a live preview on
-  the right** — press **▶ Run** to save and play instantly. Start from a template (a blank
-  scaffold, an arcade game, a multiplayer Tic Tac Toe, or an AI trivia quiz), or open
-  **✨ AI** and just *describe* the game — the AI writes the whole thing, and can also
-  **improve your existing code** on request ("add sound-free juice", "make it harder over
-  time", …).
+  the right** — press **▶ Run** to save and play instantly. Start from a template: a blank
+  scaffold, an arcade game, a multiplayer Tic Tac Toe, or an AI trivia quiz.
 - **Scores & leaderboards** — games report scores through a tiny `MindGame` API
   (`setScore`, `addScore`, `gameOver`). Each game keeps a **leaderboard of every player's
   personal best** (with play counts), shown beside the game with medals for the top three
@@ -408,11 +405,11 @@ model returns only additions, which are merged in beside your current content (n
 can even connect to existing ones). Without the key the app runs normally and the button
 stays hidden. Requests are rate-limited per user.
 
-The same key also powers the game features: the game editor's **✨ AI** (which writes or
-reworks whole games on the same model) and the in-game `MindGame.ai()` calls (served by
-the fast `claude-haiku-4-5` model, rate-limited per user). Without the key, games still
-work — the AI buttons hide and `MindGame.aiAvailable` is `false` so well-written games
-fall back gracefully.
+The same key also powers AI inside games: the `MindGame.ai()` calls a running game makes,
+and the AI opponent personas that multiplayer invents — both served by the fast
+`claude-haiku-4-5` model and rate-limited per user. Without the key, games still work:
+`MindGame.aiAvailable` is `false` so well-written games fall back gracefully, and personas
+are drawn from a built-in cast instead.
 
 ### Admin console
 

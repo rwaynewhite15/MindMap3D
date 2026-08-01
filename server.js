@@ -2274,94 +2274,11 @@ function openSpotRightOf(existingNodes, added) {
 /* ================================================================
    AI for games (optional — requires ANTHROPIC_API_KEY at runtime)
    ----------------------------------------------------------------
-   Two very different calls:
-     - generateGameFromPrompt: the editor's "✨ AI" writes or reworks a whole
-       game (big, rare, owner-only) on the same model as map generation.
-     - gameAiAsk: a game calls MindGame.ai() mid-play (small, frequent) on a
-       fast model.
+   A game calls MindGame.ai() mid-play and the request is relayed here:
+   small, frequent, and answered on a fast model. Also used to invent the
+   AI opponent personas that multiplayer seats in vs-AI matches.
 ================================================================ */
 const GAME_AI_MODEL = 'claude-haiku-4-5-20251001'; // in-game runtime calls
-
-const GAME_AI_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    name: { type: 'string', description: 'A short, catchy title for the game.' },
-    code: { type: 'string', description: 'The complete HTML/CSS/JS for the game body.' },
-  },
-  required: ['name', 'code'],
-};
-
-const GAME_SDK_DOC =
-  'The game runs inside a sandboxed iframe on MindMapShare. Your output is the BODY ' +
-  'content of an HTML document (markup, <style>, and <script> tags — no <html>/<head>/<body> ' +
-  'wrapper needed). A `MindGame` bridge object is already defined before your code runs:\n' +
-  '  MindGame.onReady(fn)      — fn({player, aiAvailable}) once the bridge is up; player is {username, name} or null for guests\n' +
-  '  MindGame.setScore(n) / MindGame.addScore(n) / MindGame.getScore()\n' +
-  '  MindGame.gameOver(finalScore?) — ends the round and submits the score to the leaderboard\n' +
-  '  MindGame.ai(prompt, {system, as}) — Promise<string>; only when MindGame.aiAvailable is true.\n' +
-  '      {as: personaId} makes the reply come from that AI character, in voice.\n' +
-  'MULTIPLAYER (only if the request calls for it — the platform owns identity and transport, ' +
-  'so game code just sends and receives moves; the server stamps the verified sender and ' +
-  'enforces turn order):\n' +
-  '  const m = await MindGame.match({mode:"pvp"})   — quick match: joins the longest-waiting\n' +
-  '      open table in this game\'s lobby, or opens one and waits ("waiting" status).\n' +
-  '      {mode:"pvp", host:true} always opens a new table; {mode:"pvp", join:tableId} sits at\n' +
-  '      a specific one; {mode:"vs-ai"} plays an AI character (m.persona = {id,name,personality,style}).\n' +
-  '  m.status / m.players ([{id,username,name,isAI}]) / m.you / m.turn / m.isMyTurn\n' +
-  '  await m.send(data) — relay a move; AWAIT IT before applying a move that ends the match,\n' +
-  '      so the opponent receives the move before the result.\n' +
-  '  m.on("start"|"message"|"leave"|"end", fn) — message gives (fromPlayerId, data)\n' +
-  '  m.end({winner: playerId|null}) — records W/L/D; m.leave() gets up from the table\n' +
-  '  MindGame.lobby() / MindGame.onLobby(fn) — the pool of open tables ({id, host, seated,\n' +
-  '      seats, waitingSince}); onLobby fires live on every change and returns an unsubscribe fn.\n' +
-  '      There are no join codes: players see open tables and sit down. Multiplayer needs a\n' +
-  '      signed-in player, so handle the guest case (MindGame.player === null).\n' +
-  'Hard constraints: NO network access of any kind (no fetch/XHR/WebSocket, no external ' +
-  'scripts, stylesheets, images, or fonts — inline everything; images only as data: URIs or ' +
-  'canvas drawing), no cookies or storage. The page background is dark (#10141D) with light ' +
-  'text; design for both mouse and touch, make the game fill the frame responsively, and keep ' +
-  'the top-right ~120px clear (the platform draws a score pill there).';
-
-async function generateGameFromPrompt(prompt, existingCode) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    const e = new Error('AI game generation isn’t configured on this server. Set ANTHROPIC_API_KEY to enable it.');
-    e.status = 503; throw e;
-  }
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch { const e = new Error('AI generation is unavailable (the Anthropic SDK is not installed).'); e.status = 503; throw e; }
-  const client = new Anthropic();
-  const editing = !!(existingCode && existingCode.trim());
-  const system =
-    'You build small, polished, genuinely fun browser games (or interactive widgets) as ' +
-    'self-contained HTML/CSS/JS. Keep the score meaningful and call MindGame.gameOver() when a ' +
-    'round ends so leaderboards work.\n\n' + GAME_SDK_DOC +
-    (editing
-      ? '\n\nYou are MODIFYING the player’s existing game: keep everything that works and apply their request. Return the complete updated code, not a diff.'
-      : '');
-  const userContent = editing
-    ? 'Here is my current game code:\n\n```html\n' + existingCode.slice(0, 60000) + '\n```\n\nChange it as follows:\n\n' + prompt
-    : 'Build this game:\n\n' + prompt;
-  const response = await client.messages.create({
-    model: AI_MODEL,
-    max_tokens: 32000,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: GAME_AI_SCHEMA } },
-    system,
-    messages: [{ role: 'user', content: userContent }],
-  });
-  if (response.stop_reason === 'refusal') {
-    const e = new Error('The AI declined to generate that game.'); e.status = 422; throw e;
-  }
-  const textBlock = (response.content || []).find(b => b.type === 'text');
-  let data;
-  try { data = JSON.parse(textBlock ? textBlock.text : '{}'); }
-  catch { const e = new Error('The AI returned an unexpected response. Please try again.'); e.status = 502; throw e; }
-  const code = String(data.code || '').slice(0, MAX_GAME_CODE);
-  if (!code.trim()) { const e = new Error('The AI returned no code. Please try again.'); e.status = 502; throw e; }
-  return { code, name: String(data.name || '').trim().slice(0, 60) };
-}
 
 // One MindGame.ai() call from inside a running game. Small and fast; the reply
 // goes only back into the sandbox that asked.
@@ -3269,7 +3186,7 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { game: gameMeta(g, { code: g.code, rules: g.rules }) });
   }
 
-  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate|match|personas|rules|lobby|lobby\/stream))?$/);
+  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|match|personas|rules|lobby|lobby\/stream))?$/);
   if (gameMatch) {
     const gameId = gameMatch[1], sub = gameMatch[2];
     const owner = user.games.some(g => g.id === gameId) ? user : await store.getUserByGameId(gameId);
@@ -3456,24 +3373,6 @@ async function handleApi(req, res, pathname) {
       reapLater(m, MATCH_WAIT_TTL);
       broadcastLobby(g.id); // a new table is open in the pool
       return sendJSON(res, 200, { match: matchOut(m, user) });
-    }
-
-    // ✨ AI writes (or reworks) the game's code from a description.
-    if (sub === 'generate' && req.method === 'POST') {
-      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can generate code for a game.' });
-      if (tooMany('ggen:' + user.id, 20, 60 * 60 * 1000)) {
-        return sendJSON(res, 429, { error: 'Too many generations this hour. Try again later.' });
-      }
-      const body = await readBody(req);
-      const prompt = String(body.prompt || '').trim().slice(0, 2000);
-      if (prompt.length < 3) return sendJSON(res, 400, { error: 'Describe the game you want in a few words.' });
-      const existing = body.mode === 'edit' ? g.code : '';
-      try {
-        const result = await generateGameFromPrompt(prompt, existing);
-        return sendJSON(res, 200, result); // { code, name } — client decides what to keep
-      } catch (err) {
-        return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
-      }
     }
 
     return sendJSON(res, 404, { error: 'Not found.' });
