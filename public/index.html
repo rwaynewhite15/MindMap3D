@@ -34,6 +34,7 @@
   <nav id="mainNav">
     <a href="#/home" data-nav="home" data-auth>Home</a>
     <a href="#/map" data-nav="map" data-auth>My Maps</a>
+    <a href="#/games" data-nav="games">Games</a>
     <a href="#/browse" data-nav="browse">Browse</a>
     <a href="#/friends" data-nav="friends" data-auth>Friends<span id="friendBadge" class="badge" hidden></span></a>
     <a href="#/settings" data-nav="settings" data-auth>Settings</a>
@@ -145,6 +146,104 @@
         <div class="section-title">Discover public maps</div>
         <div id="feedDiscoverList" class="feed-list"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- ============ GAMES HUB ============ -->
+  <section id="view-games" hidden>
+    <div class="page">
+      <div class="feed-head games-head">
+        <div>
+          <h1>Games</h1>
+          <div class="muted">Play games made by the community — or build your own</div>
+        </div>
+        <button id="btnNewGame" class="tb primary-tb" data-auth hidden>+ Create a game</button>
+      </div>
+      <div id="myGamesWrap" hidden>
+        <div class="section-title">My games</div>
+        <div id="myGamesList" class="game-grid"></div>
+      </div>
+      <div class="section-title">Discover</div>
+      <div id="gameDiscoverList" class="game-grid"></div>
+      <a id="gamesSignin" class="comments-signin" href="#/signin" hidden>Sign in to create your own games →</a>
+    </div>
+  </section>
+
+  <!-- ============ GAME EDITOR ============ -->
+  <section id="view-gameedit" hidden>
+    <div class="gedit-bar">
+      <button id="btnGeBack" class="tb icon" title="Back to games">←</button>
+      <div class="gedit-name-wrap">
+        <div id="geName" class="gedit-name">Untitled game</div>
+        <div id="geState" class="gedit-state muted">Saved</div>
+      </div>
+      <button id="btnGeAI" class="tb" hidden title="Let AI write or rework this game from a description">✨ AI</button>
+      <button id="btnGeSettings" class="tb" title="Name, description, visibility, scoring, delete">Game ▾</button>
+      <button id="btnGeSave" class="tb" title="Save the code (Ctrl+S)">Save</button>
+      <button id="btnGeRun" class="tb primary-tb" title="Save and run the game in the preview">▶ Run</button>
+    </div>
+    <div class="gedit-split">
+      <div class="gedit-code-pane">
+        <textarea id="geCode" spellcheck="false" autocomplete="off" autocapitalize="off"
+          placeholder="Write your game here — HTML, <style> and <script> tags. It runs in a sandboxed frame with the MindGame bridge (see the guide below)."></textarea>
+        <details class="gedit-help">
+          <summary>MindGame API — how scores, leaderboards &amp; AI work</summary>
+          <pre>Your code is the body of a sandboxed page (no network, no cookies —
+inline everything). A MindGame object is defined before your code runs:
+
+  MindGame.onReady(fn)        fn({player, aiAvailable}); player = {username, name} or null (guest)
+  MindGame.setScore(n)        show + track the live score
+  MindGame.addScore(n)        increment it
+  MindGame.getScore()         current score
+  MindGame.gameOver(score?)   end the round — submits the score to the leaderboard
+  MindGame.ai(prompt, {system})   Promise&lt;string&gt; — ask the AI (when MindGame.aiAvailable)
+
+Tip: call MindGame.gameOver() exactly when a round truly ends; players'
+best scores build the leaderboard. Set "lower is better" in Game ▾ for
+time-based games.</pre>
+        </details>
+      </div>
+      <div class="gedit-preview-pane">
+        <div class="gedit-preview-head">
+          <span class="muted">Preview</span>
+          <button id="btnGeOpen" class="tb sm" title="Open the full player page with the leaderboard">Open player →</button>
+        </div>
+        <div class="game-stage">
+          <iframe id="gePreview" class="game-frame" sandbox="allow-scripts allow-pointer-lock" title="Game preview"></iframe>
+          <div id="gePreviewEmpty" class="game-stage-empty">Press ▶ Run to save &amp; play your code here.</div>
+          <div id="geScore" class="game-score-pill" hidden>Score: 0</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GAME PLAYER ============ -->
+  <section id="view-gameplay" hidden>
+    <div class="gplay-bar">
+      <button id="btnGpBack" class="tb icon" title="Back">←</button>
+      <div class="gedit-name-wrap">
+        <div id="gpName" class="gedit-name">Game</div>
+        <div id="gpBy" class="gedit-state muted"></div>
+      </div>
+      <button id="btnGpEdit" class="tb" hidden title="Open this game in the editor">✎ Edit</button>
+      <button id="btnGpBoard" class="tb" title="Leaderboard">🏆<span id="gpRank" class="gp-rank" hidden></span></button>
+      <button id="btnGpRestart" class="tb" title="Restart the game">↻ Restart</button>
+    </div>
+    <div class="gplay-main">
+      <div class="game-stage">
+        <iframe id="gpFrame" class="game-frame" sandbox="allow-scripts allow-pointer-lock" title="Game"></iframe>
+        <div id="gpScore" class="game-score-pill" hidden>Score: 0</div>
+        <div id="gpToast" class="game-toast" hidden></div>
+      </div>
+      <aside id="gpBoardPanel" class="board-panel" hidden>
+        <div class="board-head">
+          <div class="chat-title">🏆 Leaderboard</div>
+          <button id="btnGpBoardClose" class="tb icon" title="Close" aria-label="Close leaderboard">✕</button>
+        </div>
+        <div id="gpBoardMeta" class="muted board-meta"></div>
+        <div id="gpBoardList" class="board-list"></div>
+        <a id="gpBoardSignin" class="comments-signin" href="#/signin" hidden>Sign in to get on the leaderboard →</a>
+      </aside>
     </div>
   </section>
 
@@ -554,6 +653,53 @@
   <div id="mapLinkList" class="group-options"></div>
   <div class="sheet-row">
     <button id="mapLinkCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<div id="sheetNewGame" class="sheet" hidden>
+  <div class="sheet-title">New game</div>
+  <input id="newGameName" maxlength="60" placeholder="Name your game…">
+  <label class="field-title">Start from</label>
+  <div id="newGameTemplates" class="group-options"></div>
+  <label class="field-title">Who can see &amp; play it?</label>
+  <label class="check"><input type="radio" name="newGameVis" value="private" checked> Private — only me (publish it later from Game ▾)</label>
+  <label class="check"><input type="radio" name="newGameVis" value="friends"> Friends only</label>
+  <label class="check"><input type="radio" name="newGameVis" value="public"> Everyone on MindMapShare</label>
+  <div class="form-error" id="newGameError"></div>
+  <div class="sheet-row">
+    <button id="newGameCancel" class="tb">Cancel</button>
+    <button id="newGameCreate" class="tb primary-tb">Create game</button>
+  </div>
+</div>
+
+<div id="sheetGameSettings" class="sheet" hidden>
+  <div class="sheet-title">Game settings</div>
+  <input id="gsName" maxlength="60" placeholder="Game name…">
+  <label class="field-title">Description <span class="muted">— shown on game cards</span></label>
+  <textarea id="gsDesc" maxlength="500" rows="2" placeholder="What's the game about? How do you play?"></textarea>
+  <label class="field-title">Who can see &amp; play this game?</label>
+  <label class="check"><input type="radio" name="gsVis" value="private"> Private — only me</label>
+  <label class="check"><input type="radio" name="gsVis" value="friends"> Friends only</label>
+  <label class="check"><input type="radio" name="gsVis" value="public"> Everyone on MindMapShare</label>
+  <label class="field-title">Leaderboard ranking</label>
+  <label class="check"><input type="radio" name="gsOrder" value="desc"> Higher score is better</label>
+  <label class="check"><input type="radio" name="gsOrder" value="asc"> Lower score is better <span class="muted">(times, golf)</span></label>
+  <div class="form-error" id="gsError"></div>
+  <div class="sheet-row">
+    <button id="gsDelete" class="tb danger">Delete game</button>
+    <button id="gsDone" class="tb primary-tb">Save</button>
+  </div>
+</div>
+
+<div id="sheetGameAI" class="sheet" hidden>
+  <div class="sheet-title">✨ Build a game with AI</div>
+  <div class="muted" style="margin-bottom:8px">Describe the game you want. <b>Improve this game</b> keeps your current code and applies your request to it. <b>Start fresh</b> writes a brand-new game, replacing the code in the editor.</div>
+  <textarea id="gameAiPrompt" maxlength="2000" rows="3" placeholder="e.g. A fast-paced word scramble — 60 seconds, harder words as the score climbs, use the AI to pick words"></textarea>
+  <div class="form-error" id="gameAiError"></div>
+  <div class="sheet-row">
+    <button id="gameAiCancel" class="tb">Cancel</button>
+    <button id="gameAiNew" class="tb">✨ Start fresh</button>
+    <button id="gameAiEdit" class="tb primary-tb">➕ Improve this game</button>
   </div>
 </div>
 
