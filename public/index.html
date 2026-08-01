@@ -177,7 +177,6 @@
         <div id="geName" class="gedit-name">Untitled game</div>
         <div id="geState" class="gedit-state muted">Saved</div>
       </div>
-      <button id="btnGeAI" class="tb" hidden title="Let AI write or rework this game from a description">✨ AI</button>
       <button id="btnGeRules" class="tb" title="Server-side rules: make this game ranked">⚖️ Ranked</button>
       <button id="btnGeSettings" class="tb" title="Name, description, visibility, scoring, delete">Game ▾</button>
       <button id="btnGeSave" class="tb" title="Save the code (Ctrl+S)">Save</button>
@@ -753,18 +752,6 @@ see the whole multiplayer flow working.</pre>
     <button id="rulesCancel" class="tb">Cancel</button>
     <button id="rulesCheck" class="tb">Check rules</button>
     <button id="rulesSave" class="tb primary-tb">Save</button>
-  </div>
-</div>
-
-<div id="sheetGameAI" class="sheet" hidden>
-  <div class="sheet-title">✨ Build a game with AI</div>
-  <div class="muted" style="margin-bottom:8px">Describe the game you want. <b>Improve this game</b> keeps your current code and applies your request to it. <b>Start fresh</b> writes a brand-new game, replacing the code in the editor.</div>
-  <textarea id="gameAiPrompt" maxlength="2000" rows="3" placeholder="e.g. A fast-paced word scramble — 60 seconds, harder words as the score climbs, use the AI to pick words"></textarea>
-  <div class="form-error" id="gameAiError"></div>
-  <div class="sheet-row">
-    <button id="gameAiCancel" class="tb">Cancel</button>
-    <button id="gameAiNew" class="tb">✨ Start fresh</button>
-    <button id="gameAiEdit" class="tb primary-tb">➕ Improve this game</button>
   </div>
 </div>
 

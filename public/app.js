@@ -1424,7 +1424,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetGameAI', '#sheetRules'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetRules'];
 
 function openSheet(sel) {
   closeSheets();
@@ -4180,7 +4180,7 @@ async function loadGamesHub() {
       if (!mineRes.games.length) {
         const d = document.createElement('div');
         d.className = 'empty';
-        d.textContent = 'No games yet — hit “+ Create a game” and start from a template, or let AI build one.';
+        d.textContent = 'No games yet — hit “+ Create a game” and start from a template.';
         mineList.appendChild(d);
       } else {
         for (const g of mineRes.games) mineList.appendChild(gameCard(g, { mine: true }));
@@ -4283,7 +4283,6 @@ async function openGameEditor(gameId) {
     $('#geScore').hidden = true;
     $('#gePreviewEmpty').hidden = false;
     gePreview.src = 'about:blank';
-    $('#btnGeAI').hidden = !data.aiEnabled;
     paintRankedState();
     setGeState('Saved');
     show('gameedit');
@@ -4468,48 +4467,6 @@ function paintRankedState() {
     ? 'Ranked: this game’s server-side rules decide every match'
     : 'Server-side rules: make this game ranked';
 }
-
-/* ---- AI game builder sheet ---- */
-$('#btnGeAI').addEventListener('click', () => {
-  $('#gameAiError').textContent = '';
-  $('#gameAiEdit').disabled = !$('#geCode').value.trim();
-  openSheet('#sheetGameAI');
-  $('#gameAiPrompt').focus();
-});
-$('#gameAiCancel').addEventListener('click', closeSheets);
-
-async function generateGame(mode) {
-  if (!gameEdit) return;
-  const prompt = $('#gameAiPrompt').value.trim();
-  if (prompt.length < 3) { $('#gameAiError').textContent = 'Describe the game you want first.'; return; }
-  const btns = [$('#gameAiNew'), $('#gameAiEdit'), $('#gameAiCancel')];
-  btns.forEach(b => { b.disabled = true; });
-  const runBtn = mode === 'edit' ? $('#gameAiEdit') : $('#gameAiNew');
-  const oldLabel = runBtn.textContent;
-  runBtn.textContent = '✨ Building… (can take a minute)';
-  $('#gameAiError').textContent = '';
-  try {
-    const r = await api('/api/games/' + gameEdit.id + '/generate', 'POST', { prompt, mode });
-    $('#geCode').value = r.code;
-    markGameDirty();
-    // a fresh AI build names the game too (kept only while it's still untitled)
-    if (mode === 'new' && r.name && /^untitled game$/i.test(gameEdit.meta.name)) {
-      const upd = await api('/api/games/' + gameEdit.id, 'PUT', { name: r.name });
-      gameEdit.meta = Object.assign({}, gameEdit.meta, upd.game);
-      $('#geName').textContent = upd.game.name;
-    }
-    closeSheets();
-    runGamePreview();
-  } catch (err) {
-    $('#gameAiError').textContent = err.message;
-  } finally {
-    btns.forEach(b => { b.disabled = false; });
-    runBtn.textContent = oldLabel;
-    $('#gameAiEdit').disabled = !$('#geCode').value.trim();
-  }
-}
-$('#gameAiNew').addEventListener('click', () => generateGame('new'));
-$('#gameAiEdit').addEventListener('click', () => generateGame('edit'));
 
 /* ---------- player ---------- */
 async function openGamePlayer(gameId) {
