@@ -421,6 +421,12 @@ function makeGame(name, visibility) {
     code: '',
     scoreOrder: 'desc', // 'desc' = higher is better, 'asc' = lower is better (times, golf)
     scores: [],         // [{ userId, best, plays, ts }] — one entry per player
+    personas: [],       // AI opponents born in this game: [{id,name,personality,style,w,l,d,createdAt}]
+    records: {},        // human match records: userId → {w,l,d}
+    rules: '',          // author's server-side rules (empty = casual, self-reported)
+    rulesRev: 1,        // bumped on every rules change so the sandbox recompiles
+    ranked: false,      // only allowed once the rules validate
+    ratings: {},        // ranked Elo: userId → {r, n}
     plays: 0,
     announced: false,   // has "posted a new game" gone out to friends/followers yet?
     createdAt: now,
@@ -462,6 +468,12 @@ function normalizeUser(u) {
     if (g.scoreOrder !== 'asc') g.scoreOrder = 'desc';
     if (!Array.isArray(g.scores)) g.scores = [];
     if (typeof g.plays !== 'number' || !isFinite(g.plays)) g.plays = 0;
+    if (!Array.isArray(g.personas)) g.personas = []; // AI opponents born in this game
+    if (!g.records || typeof g.records !== 'object') g.records = {}; // userId → {w,l,d} match record
+    if (typeof g.rules !== 'string') g.rules = '';   // server-side rules (ranked play)
+    if (typeof g.rulesRev !== 'number') g.rulesRev = 1;
+    g.ranked = !!g.ranked && !!g.rules.trim();       // ranked without rules is meaningless
+    if (!g.ratings || typeof g.ratings !== 'object') g.ratings = {};
   }
   delete u.map;
   return u;
@@ -585,6 +597,10 @@ function gameMeta(g, extra) {
     plays: g.plays || 0,
     playerCount: (g.scores || []).length,
     hasCode: !!(g.code && g.code.trim()),
+    openTables: countOpenTables(g.id), // players sitting in the lobby right now
+    ranked: !!g.ranked,                // matches are decided by server-side rules
+    hasRules: !!(g.rules && g.rules.trim()),
+    rankedAvailable: rulesAvailable(), // false → this server can't sandbox rules
     updatedAt: g.updatedAt || 0,
   }, extra || {});
 }
@@ -627,7 +643,9 @@ async function leaderboardOut(g, viewer) {
     .sort((a, b) => (g.scoreOrder === 'asc' ? a.best - b.best : b.best - a.best) || a.ts - b.ts);
   const top = sorted.slice(0, LEADERBOARD_TOP);
   const myIndex = viewer ? sorted.findIndex(s => s.userId === viewer.id) : -1;
-  const needIds = new Set(top.map(s => s.userId));
+  const recordIds = Object.keys(g.records || {});
+  const ratingIds = Object.keys(g.ratings || {});
+  const needIds = new Set([...top.map(s => s.userId), ...recordIds, ...ratingIds]);
   if (myIndex >= 0) needIds.add(viewer.id);
   const users = await store.getUsersByIds([...needIds]);
   const byId = new Map(users.map(u => [u.id, u]));
@@ -643,12 +661,51 @@ async function leaderboardOut(g, viewer) {
       me: !!viewer && s.userId === viewer.id,
     };
   };
+  // Match (win/loss) records sit beside the score board: humans from
+  // g.records, AI personas from their rows — one ladder, sorted by wins.
+  const matchRows = [];
+  for (const [uid, r] of Object.entries(g.records || {})) {
+    const u = byId.get(uid);
+    if (!u) continue;
+    matchRows.push({
+      kind: 'human', username: u.username, name: nameFor(u, viewer),
+      w: r.w || 0, l: r.l || 0, d: r.d || 0,
+      me: !!viewer && uid === viewer.id,
+    });
+  }
+  for (const p of g.personas || []) {
+    if (!(p.w || p.l || p.d)) continue; // personas appear once they've played
+    matchRows.push({ kind: 'ai', username: null, name: p.name, w: p.w || 0, l: p.l || 0, d: p.d || 0, me: false });
+  }
+  matchRows.sort((a, b) => (b.w - a.w) || (a.l - b.l) || (b.d - a.d));
+
+  // The ranked ladder: Elo from matches the SERVER decided. Separate from the
+  // casual record above precisely because these numbers are trustworthy.
+  const rankedRows = [];
+  for (const [uid, row] of Object.entries(g.ratings || {})) {
+    const u = byId.get(uid);
+    if (!u) continue;
+    const rec = (g.records || {})[uid] || {};
+    rankedRows.push({
+      username: u.username, name: nameFor(u, viewer),
+      rating: row.r, played: row.n,
+      w: rec.w || 0, l: rec.l || 0, d: rec.d || 0,
+      provisional: row.n < 10, // still finding its level
+      me: !!viewer && uid === viewer.id,
+    });
+  }
+  rankedRows.sort((a, b) => b.rating - a.rating || b.played - a.played);
+  rankedRows.forEach((r, i) => { r.rank = i + 1; });
+
   return {
     scoreOrder: g.scoreOrder === 'asc' ? 'asc' : 'desc',
     totalPlayers: sorted.length,
     totalPlays: g.plays || 0,
     entries: top.map(rowOut),
     mine: myIndex >= 0 ? rowOut(sorted[myIndex], myIndex) : null,
+    matches: matchRows.slice(0, LEADERBOARD_TOP),
+    ranked: !!g.ranked,
+    rankedLadder: rankedRows.slice(0, LEADERBOARD_TOP),
   };
 }
 
@@ -701,9 +758,106 @@ const GAME_SDK = `
 'use strict';
 // MindGame — the bridge between your game and MindMapShare.
 window.MindGame = (function () {
-  var score = 0, ready = false, readyFns = [], aiCalls = {}, aiSeq = 0;
+  var score = 0, ready = false, readyFns = [], calls = {}, callSeq = 0;
   var info = { player: null, aiAvailable: false };
+  var curMatch = null;  // the one live match handle (a new match() replaces it)
+  var lobbyFns = [];    // live open-table subscribers
+
   function post(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  // A request the host page answers with {mg:'bridge-ack', id, ok, ...}.
+  function request(msg, timeoutMs) {
+    var id = ++callSeq;
+    return new Promise(function (resolve, reject) {
+      calls[id] = { resolve: resolve, reject: reject };
+      msg.id = id;
+      post(msg);
+      setTimeout(function () {
+        if (calls[id]) { delete calls[id]; reject(new Error('Request timed out')); }
+      }, timeoutMs || 30000);
+    });
+  }
+
+  // The live match handle a game holds after MindGame.match() resolves.
+  function makeMatch(state, persona) {
+    var listeners = {}, lastSeq = 0, started = false;
+    var h = {
+      id: state.id,
+      mode: state.mode,
+      you: state.you,                 // your player id (matches players[].id)
+      players: state.players || [],   // [{id, username, name, isAI}]
+      status: state.status,           // 'waiting' | 'active' | 'done'
+      turnBased: !!state.turnBased,
+      turn: state.turn || null,       // player id whose move it is (turn-based)
+      // Ranked: this game's server-side rules validate every move and decide
+      // the result. send() rejects illegal moves; end() is not yours to call.
+      ranked: !!state.ranked,
+      persona: persona || null,       // vs-ai: {id, name, personality, style, w, l, d}
+      get isMyTurn() { return h.status === 'active' && (!h.turnBased || h.turn === h.you); },
+      on: function (ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return h; },
+      // Relay a move to the other players (server-stamped, turn-checked).
+      // In a ranked match this is also where the rules run: the returned
+      // promise REJECTS if they call the move illegal, and resolves with
+      // {done, winner, ratings} on the move that finishes the game.
+      send: function (data) {
+        return request({ mg: 'match-send', data: data }).then(function (r) {
+          if (r.turn !== undefined) h.turn = r.turn;
+          if (r.done) h.status = 'done';
+          return r;
+        });
+      },
+      // Declare the result: {winner: playerId} or {winner: null} for a draw.
+      // Casual matches only — in a ranked match the rules decide, and this
+      // rejects. Use resign() to concede a ranked game.
+      end: function (result) {
+        return request({ mg: 'match-end', winner: result && result.winner !== undefined ? result.winner : null });
+      },
+      // Concede: the one result a player is allowed to declare in ranked play.
+      resign: function () { return request({ mg: 'match-end', resign: true }); },
+      leave: function () { h.status = 'done'; post({ mg: 'match-leave' }); },
+    };
+    function fire(ev) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      (listeners[ev] || []).forEach(function (fn) {
+        try { fn.apply(null, args); } catch (err) { console.error(err); }
+      });
+    }
+    function applyMove(mv) {
+      if (mv.seq <= lastSeq) return; // already replayed
+      lastSeq = mv.seq;
+      if (mv.turn !== undefined) h.turn = mv.turn;
+      fire('message', mv.from, mv.data);
+    }
+    function maybeStart(players, turn, ranked) {
+      if (started) return;
+      started = true;
+      h.status = 'active';
+      if (players) h.players = players;
+      if (turn !== undefined) h.turn = turn;
+      if (ranked !== undefined) h.ranked = !!ranked;
+      fire('start', { players: h.players, turn: h.turn, ranked: h.ranked });
+    }
+    h._event = function (event, data) {
+      if (event === 'start') maybeStart(data.players, data.turn, data.ranked);
+      else if (event === 'message') applyMove(data);
+      else if (event === 'sync') { // reconnect/hello: full state + missed moves
+        if (data.match && data.match.status === 'active') {
+          maybeStart(data.match.players, data.match.turn, data.match.ranked);
+        }
+        (data.moves || []).forEach(applyMove);
+      }
+      else if (event === 'leave') fire('leave', data.playerId);
+      // end carries the server's verdict in ranked play, plus rating changes
+      else if (event === 'end') { h.status = 'done'; fire('end', data.winner, data); }
+      else if (event === 'gone') { if (h.status !== 'done') { h.status = 'done'; fire('leave', null); } }
+    };
+    if (state.status === 'active') {
+      // joined an already-full lobby: fire 'start' right after the caller has
+      // had a chance to attach listeners
+      setTimeout(function () { maybeStart(state.players, state.turn); }, 0);
+    }
+    return h;
+  }
+
   window.addEventListener('message', function (e) {
     if (e.source !== window.parent || !e.data || typeof e.data !== 'object') return;
     var d = e.data;
@@ -713,12 +867,22 @@ window.MindGame = (function () {
       ready = true;
       var fns = readyFns; readyFns = [];
       fns.forEach(function (fn) { try { fn(info); } catch (err) { console.error(err); } });
-    } else if (d.mg === 'ai-result' && aiCalls[d.id]) {
-      var call = aiCalls[d.id]; delete aiCalls[d.id];
+    } else if (d.mg === 'ai-result' && calls[d.id]) {
+      var call = calls[d.id]; delete calls[d.id];
       d.ok ? call.resolve(String(d.text || '')) : call.reject(new Error(d.error || 'AI unavailable'));
+    } else if (d.mg === 'bridge-ack' && calls[d.id]) {
+      var c = calls[d.id]; delete calls[d.id];
+      d.ok ? c.resolve(d) : c.reject(new Error(d.error || 'Request failed'));
+    } else if (d.mg === 'match-event' && curMatch && d.matchId === curMatch.id) {
+      curMatch._event(d.event, d.data);
+    } else if (d.mg === 'lobby') {
+      lobbyFns.forEach(function (fn) {
+        try { fn(d.tables || []); } catch (err) { console.error(err); }
+      });
     }
   });
   post({ mg: 'ready' });
+
   return {
     // The signed-in player ({username, name}) or null for guests.
     get player() { return info.player; },
@@ -739,15 +903,55 @@ window.MindGame = (function () {
     // Ask the AI. Returns a Promise of the reply text.
     //   MindGame.ai('Give me a trivia question about space')
     //   MindGame.ai(prompt, { system: 'You are a pirate NPC.' })
+    //   MindGame.ai(prompt, { as: personaId })   — answer in that persona's character
     ai: function (prompt, opts) {
-      var id = ++aiSeq;
+      var id = ++callSeq;
       return new Promise(function (resolve, reject) {
-        aiCalls[id] = { resolve: resolve, reject: reject };
-        post({ mg: 'ai', id: id, prompt: String(prompt || ''), system: opts && opts.system ? String(opts.system) : '' });
+        calls[id] = { resolve: resolve, reject: reject };
+        post({ mg: 'ai', id: id, prompt: String(prompt || ''),
+               system: opts && opts.system ? String(opts.system) : '',
+               as: opts && opts.as ? String(opts.as) : '' });
         setTimeout(function () {
-          if (aiCalls[id]) { delete aiCalls[id]; reject(new Error('AI request timed out')); }
+          if (calls[id]) { delete calls[id]; reject(new Error('AI request timed out')); }
         }, 60000);
       });
+    },
+    // Start, join, or sit down for a match. Requires a signed-in player.
+    //   MindGame.match({ mode: 'vs-ai' })               — play an AI persona
+    //   MindGame.match({ mode: 'pvp' })                 — quick match: take the
+    //       longest-waiting open table, or sit down as a new one and wait
+    //   MindGame.match({ mode: 'pvp', join: tableId })  — sit at a listed table
+    //   MindGame.match({ mode: 'pvp', host: true })     — always open a new table
+    // Resolves to a match handle:
+    //   match.players / match.you / match.turn / match.isMyTurn / match.persona
+    //   match.status                 — 'waiting' until someone sits down
+    //   match.send(data)             — relay a move (Promise; rejects off-turn)
+    //   match.on('start'|'message'|'leave'|'end', fn)
+    //   match.end({winner: id|null}) — declare the result (records W/L)
+    //   match.leave()                — get up from the table
+    match: function (opts) {
+      if (curMatch) { try { curMatch.leave(); } catch (e) {} }
+      return request({ mg: 'match', opts: opts || {} }, 60000).then(function (r) {
+        curMatch = makeMatch(r.match, r.persona || null);
+        return curMatch;
+      });
+    },
+    // The pooling lobby: open tables waiting for an opponent, longest wait
+    // first. Each is { id, host: {username, name}, seated, seats, waitingSince }
+    // — pass an id to MindGame.match({ mode:'pvp', join: id }).
+    lobby: function () {
+      return request({ mg: 'lobby' }).then(function (r) { return r.tables || []; });
+    },
+    // Watch the pool live: fn(tables) fires now and on every change, so a
+    // lobby screen stays current without polling. Returns an unsubscribe fn.
+    onLobby: function (fn) {
+      lobbyFns.push(fn);
+      post({ mg: 'lobby-watch' });
+      return function () {
+        var i = lobbyFns.indexOf(fn);
+        if (i >= 0) lobbyFns.splice(i, 1);
+        if (!lobbyFns.length) post({ mg: 'lobby-unwatch' });
+      };
     },
   };
 })();
@@ -795,6 +999,570 @@ async function serveGameFrame(req, res, pathname) {
   }
   headers(200);
   res.end(gameFrameHtml(g));
+}
+
+/* ================================================================
+   Ranked play — server-authoritative rules.
+   ----------------------------------------------------------------
+   Casual games self-report their results, so their leaderboards are only as
+   honest as the players. A RANKED game additionally ships `rules`: a small
+   author-written module that the SERVER runs to decide what a legal move is
+   and who won. The players' browsers stop being the authority — a client that
+   claims a win it didn't earn is simply ignored, and an illegal move is
+   rejected before it ever reaches the opponent.
+
+   Running author code server-side is only safe because it happens nowhere
+   near this process: rules-runner.js is spawned as a privilege-stripped child
+   (no filesystem, no environment, no ability to spawn) and sandboxes each
+   game further in its own vm context. See the header of that file. If the
+   runner can't start, ranked play is simply unavailable — it fails closed.
+================================================================ */
+const { spawn } = require('child_process');
+const RULES_RUNNER = path.join(__dirname, 'rules-runner.js');
+const RULES_CALL_TIMEOUT = 2000;  // parent watchdog per call (the child's own CPU cap is tighter)
+const RULES_RESTART_DELAY = 5000;
+const MAX_RULES_CODE = 40 * 1024;
+
+const rulesRT = {
+  child: null,
+  ready: false,
+  disabled: false,   // spawning failed outright — ranked stays off
+  pending: new Map(), // id → { resolve, timer }
+  seq: 0,
+  buf: '',
+  restarting: false,
+};
+
+// Node's permission model is the outer boundary. The flag was renamed in v22;
+// engines say node>=20, so pick by version and fall back if the runtime
+// disagrees. Nothing else is passed: no env, no fs beyond the runner itself.
+function rulesRunnerArgs() {
+  const major = parseInt(process.versions.node, 10);
+  const permFlag = major >= 22 ? '--permission' : '--experimental-permission';
+  return [permFlag, '--allow-fs-read=' + RULES_RUNNER, '--max-old-space-size=96', RULES_RUNNER];
+}
+
+function startRulesRunner(attempt = 0) {
+  if (rulesRT.disabled) return;
+  let child;
+  try {
+    child = spawn(process.execPath, rulesRunnerArgs(), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {}, // the child gets no DATABASE_URL, no API keys — nothing to leak
+    });
+  } catch (err) {
+    rulesRT.disabled = true;
+    console.warn('Ranked play disabled — could not start the rules sandbox:', err.message);
+    return;
+  }
+  rulesRT.child = child;
+  rulesRT.ready = false;
+  rulesRT.buf = '';
+
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', chunk => {
+    rulesRT.buf += chunk;
+    let i;
+    while ((i = rulesRT.buf.indexOf('\n')) >= 0) {
+      const line = rulesRT.buf.slice(0, i);
+      rulesRT.buf = rulesRT.buf.slice(i + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg.ready) { rulesRT.ready = true; continue; }
+      const p = rulesRT.pending.get(msg.id);
+      if (!p) continue;
+      clearTimeout(p.timer);
+      rulesRT.pending.delete(msg.id);
+      p.resolve(msg);
+    }
+  });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', d => console.warn('[rules]', String(d).trim().slice(0, 300)));
+
+  const onGone = () => {
+    if (rulesRT.child !== child) return;
+    rulesRT.ready = false;
+    rulesRT.child = null;
+    for (const [id, p] of rulesRT.pending) {
+      clearTimeout(p.timer);
+      p.resolve({ ok: false, error: 'The rules sandbox restarted — please try that move again.' });
+      rulesRT.pending.delete(id);
+    }
+    if (rulesRT.restarting) return;
+    rulesRT.restarting = true;
+    // A child that dies instantly, repeatedly, means the runtime won't give us
+    // a sandbox (e.g. the permission flags aren't supported) — stop trying.
+    const next = attempt + 1;
+    if (next > 5) {
+      rulesRT.disabled = true;
+      console.warn('Ranked play disabled — the rules sandbox keeps failing to start.');
+      return;
+    }
+    setTimeout(() => { rulesRT.restarting = false; startRulesRunner(next); }, RULES_RESTART_DELAY).unref();
+  };
+  child.on('exit', onGone);
+  child.on('error', err => { console.warn('[rules] runner error:', err.message); onGone(); });
+  child.unref();
+}
+
+function rulesAvailable() { return !rulesRT.disabled; }
+
+// One request/response with the sandbox. Never rejects: a dead or wedged child
+// resolves as { ok:false, error }, so a broken sandbox degrades a match rather
+// than throwing 500s at players.
+function rulesCall(msg) {
+  if (rulesRT.disabled) return Promise.resolve({ ok: false, error: 'Ranked play isn’t available on this server.' });
+  if (!rulesRT.child) startRulesRunner();
+  const child = rulesRT.child;
+  if (!child || !child.stdin.writable) {
+    return Promise.resolve({ ok: false, error: 'The rules sandbox is starting up — try again in a moment.' });
+  }
+  const id = ++rulesRT.seq;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      rulesRT.pending.delete(id);
+      resolve({ ok: false, error: 'The rules took too long to respond.' });
+      try { child.kill('SIGKILL'); } catch { /* already gone */ } // exit handler restarts it
+    }, RULES_CALL_TIMEOUT);
+    if (timer.unref) timer.unref();
+    rulesRT.pending.set(id, { resolve, timer });
+    try { child.stdin.write(JSON.stringify(Object.assign({ id }, msg)) + '\n'); }
+    catch (err) {
+      clearTimeout(timer);
+      rulesRT.pending.delete(id);
+      resolve({ ok: false, error: 'Could not reach the rules sandbox.' });
+    }
+  });
+}
+
+// Compile + smoke-test a game's rules. Returns { ok, seats } or { ok:false, error }.
+function validateRules(g) {
+  if (!g.rules || !g.rules.trim()) return Promise.resolve({ ok: false, error: 'Add some rules first.' });
+  return rulesCall({ op: 'load', gameId: g.id, rev: g.rulesRev || 1, code: g.rules });
+}
+
+// Ask the sandbox for something, re-sending the code if it has forgotten this
+// game (the runner evicts least-recently-used contexts and restarts on abuse).
+async function rulesRequest(g, msg) {
+  const base = Object.assign({ gameId: g.id, rev: g.rulesRev || 1 }, msg);
+  let res = await rulesCall(base);
+  if (!res.ok && res.needCode) res = await rulesCall(Object.assign({ code: g.rules }, base));
+  return res;
+}
+
+const rulesSetup = (g, players) => rulesRequest(g, { op: 'setup', players });
+const rulesMove = (g, state, seat, data) => rulesRequest(g, { op: 'move', state, seat, data });
+
+/* ---------- Elo ratings ----------
+   Ranked matches move a per-game rating for each human player. Casual and
+   vs-AI matches never touch it: in a vs-AI match the player's own browser
+   drives the opponent, so it can't mean anything on a ladder. */
+const RATING_START = 1200;
+const RATING_K_NEW = 32;   // first 10 ranked games settle faster
+const RATING_K = 24;
+const RATING_FLOOR = 100;
+
+function ratingRow(g, userId) {
+  if (!g.ratings || typeof g.ratings !== 'object') g.ratings = {};
+  if (!g.ratings[userId]) g.ratings[userId] = { r: RATING_START, n: 0 };
+  return g.ratings[userId];
+}
+
+// Standard Elo. `scoreA` is 1 (A won), 0 (A lost) or 0.5 (draw).
+function eloDeltas(ra, rb, scoreA, ka, kb) {
+  const expA = 1 / (1 + Math.pow(10, (rb - ra) / 400));
+  return [Math.round(ka * (scoreA - expA)), Math.round(kb * ((1 - scoreA) - (1 - expA)))];
+}
+
+// Apply a finished ranked match to both players' ratings; returns the per-player
+// before/after so the UI can show "+18".
+function applyRatings(g, m, winnerId) {
+  const humans = m.players.filter(p => p.kind === 'human');
+  if (humans.length !== 2) return [];
+  const [a, b] = humans;
+  const ra = ratingRow(g, a.id), rb = ratingRow(g, b.id);
+  const scoreA = winnerId === null ? 0.5 : (winnerId === a.id ? 1 : 0);
+  const [da, db] = eloDeltas(ra.r, rb.r, scoreA,
+    ra.n < 10 ? RATING_K_NEW : RATING_K, rb.n < 10 ? RATING_K_NEW : RATING_K);
+  const out = [];
+  for (const [seat, row, delta] of [[a, ra, da], [b, rb, db]]) {
+    const before = row.r;
+    row.r = Math.max(RATING_FLOOR, row.r + delta);
+    row.n++;
+    out.push({ playerId: seat.id, username: seat.username, before, after: row.r, delta: row.r - before });
+  }
+  return out;
+}
+
+/* ================================================================
+   Matches — multiplayer (and vs-AI) sessions for games.
+   ----------------------------------------------------------------
+   The platform owns identity and transport; game code only sends and
+   receives moves. The HOST PAGE (not the sandboxed game) opens a
+   per-match SSE stream authenticated by the session cookie and POSTs
+   moves on the game's behalf, so the server binds every message to a
+   verified user and game code physically can't spoof who moved. Turn
+   order is enforced server-side for turn-based matches.
+
+   Live match state is in-memory (like liveHub) — a restart drops
+   matches in flight, and players simply rematch. What matters
+   long-term is persisted on the game object itself: AI personas and
+   win/loss records for humans and AI alike.
+================================================================ */
+const MATCH_WAIT_TTL = 15 * 60 * 1000; // a table nobody joins leaves the pool
+const MATCH_LINGER = 60 * 1000;        // grace after end/leave for final calls
+const RANKED_FORFEIT_GRACE = 20 * 1000; // a dropped connection may come back before it costs the game
+const MAX_MATCH_MOVES = 512;           // replay buffer for reconnects
+const MAX_MOVE_BYTES = 4096;
+const MAX_PERSONAS = 12;               // per game; after that, opponents are reused
+
+const matches = new Map(); // matchId → match
+
+function matchOut(m, viewer) {
+  return {
+    id: m.id,
+    gameId: m.gameId,
+    mode: m.mode,
+    status: m.status,
+    turnBased: m.turnBased,
+    turn: m.turn || null,
+    ranked: !!m.ranked, // moves are validated and the result decided server-side
+    you: viewer ? viewer.id : null,
+    players: m.players.map((p, i) => ({
+      id: p.id, username: p.username, name: p.name, isAI: p.kind === 'ai', seat: i,
+    })),
+  };
+}
+
+// The seat index the rules see for a player id (seat === position at the table).
+function seatOf(m, userId) {
+  return m.players.findIndex(p => p.id === userId);
+}
+
+/* ---------- the pooling lobby ----------
+   Every PvP match that is still waiting for an opponent is an open TABLE in
+   its game's pool: publicly listed to anyone who can view the game, joinable
+   by id, with the host shown. Sitting down is the only way in — no codes to
+   pass around out-of-band. The pool is live over SSE, so a player watching
+   the lobby sees tables appear and fill in real time. */
+const lobbyHub = new Map(); // gameId → Set<res>
+
+function tableOut(m) {
+  const host = m.players[0];
+  return {
+    id: m.id,
+    host: { username: host.username, name: host.name },
+    seated: m.players.length,
+    seats: m.seats,
+    waitingSince: m.createdAt,
+  };
+}
+
+function openTables(gameId) {
+  const out = [];
+  for (const m of matches.values()) {
+    if (m.gameId === gameId && m.mode === 'pvp' && m.status === 'waiting') out.push(tableOut(m));
+  }
+  out.sort((a, b) => a.waitingSince - b.waitingSince); // longest wait first
+  return out;
+}
+
+function countOpenTables(gameId) {
+  let n = 0;
+  for (const m of matches.values()) {
+    if (m.gameId === gameId && m.mode === 'pvp' && m.status === 'waiting') n++;
+  }
+  return n;
+}
+
+function broadcastLobby(gameId) {
+  const set = lobbyHub.get(gameId);
+  if (!set || !set.size) return;
+  const frame = `event: tables\ndata: ${JSON.stringify({ tables: openTables(gameId) })}\n\n`;
+  for (const res of set) {
+    try { res.write(frame); } catch { /* dropped; cleanup runs on close */ }
+  }
+}
+
+function startLobbyStream(req, res, gameId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  let set = lobbyHub.get(gameId);
+  if (!set) { set = new Set(); lobbyHub.set(gameId, set); }
+  set.add(res);
+  res.write(`event: tables\ndata: ${JSON.stringify({ tables: openTables(gameId) })}\n\n`);
+
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
+  const cleanup = () => {
+    clearInterval(beat);
+    set.delete(res);
+    if (!set.size) lobbyHub.delete(gameId);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+}
+
+function matchBroadcast(m, event, data, exceptUserId) {
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const [res, userId] of m.streams) {
+    if (exceptUserId && userId === exceptUserId) continue;
+    try { res.write(frame); } catch { /* dropped; cleanup on close */ }
+  }
+}
+
+function deleteMatch(m) {
+  clearTimeout(m.reaper);
+  const wasOpen = m.mode === 'pvp' && m.status === 'waiting';
+  matches.delete(m.id);
+  if (wasOpen) broadcastLobby(m.gameId); // the table left the pool
+}
+
+// Schedule (or reschedule) the match's cleanup timer.
+function reapLater(m, ms) {
+  clearTimeout(m.reaper);
+  m.reaper = setTimeout(() => {
+    matchBroadcast(m, 'gone', { reason: m.status === 'waiting' ? 'expired' : 'closed' });
+    deleteMatch(m);
+  }, ms);
+}
+
+function findMemberSeat(m, userId) {
+  return m.players.find(p => p.id === userId && p.kind === 'human') || null;
+}
+
+// A ranked match can't take a client's word for the result — including "my
+// opponent quit, so I won". The server awards the forfeit itself.
+async function forfeitRanked(m, leaverId) {
+  if (m.status !== 'active') return;
+  const other = m.players.find(p => p.id !== leaverId);
+  m.status = 'done';
+  const ratings = await recordMatchResult(m, other ? other.id : null);
+  matchBroadcast(m, 'end', {
+    winner: other ? other.id : null, ranked: true, forfeitBy: leaverId, ratings,
+  });
+  reapLater(m, MATCH_LINGER);
+}
+
+// Quick match: the table that has waited longest, skipping the seeker's own.
+function findQuickMatch(gameId, seekerId) {
+  let best = null;
+  for (const m of matches.values()) {
+    if (m.gameId !== gameId || m.mode !== 'pvp' || m.status !== 'waiting') continue;
+    if (m.players.some(p => p.id === seekerId)) continue;
+    if (!best || m.createdAt < best.createdAt) best = m;
+  }
+  return best;
+}
+
+async function startMatch(m, g) {
+  m.status = 'active';
+  // fair coin for who moves first (turn is a player id)
+  m.turn = m.turnBased ? m.players[crypto.randomInt(m.players.length)].id : null;
+  // A ranked match keeps its authoritative state here, built by the game's own
+  // rules. If the sandbox can't produce one, the match falls back to casual
+  // rather than pretending to be ranked.
+  if (m.ranked && g) {
+    // The rules own turn order, and most write it as "seat 0 opens" — so the
+    // fair coin has to be about WHICH SEAT each player takes, not which player
+    // moves first, or the server and the rules would disagree on move one.
+    for (let i = m.players.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(i + 1);
+      [m.players[i], m.players[j]] = [m.players[j], m.players[i]];
+    }
+    const res = await rulesSetup(g, m.players.map((p, i) => ({ seat: i, isAI: p.kind === 'ai' })));
+    if (res.ok) {
+      m.state = res.result.state;
+      // seat 0 opens unless the rules name someone else
+      const opener = typeof res.result.next === 'number' ? res.result.next : 0;
+      if (m.turnBased && m.players[opener]) m.turn = m.players[opener].id;
+    } else {
+      m.ranked = false;
+      m.rulesError = res.error;
+    }
+  }
+  reapLater(m, 6 * 60 * 60 * 1000); // active matches live up to 6h
+  matchBroadcast(m, 'start', {
+    players: matchOut(m, null).players, turn: m.turn, ranked: !!m.ranked,
+  });
+  if (m.mode === 'pvp') broadcastLobby(m.gameId); // the table filled up
+}
+
+// Record a finished match on the game object: bump w/l/d for every human
+// (g.records) and AI persona (persona row) seated in it, and move Elo ratings
+// when the match was ranked. Idempotent per match. Returns the rating changes.
+async function recordMatchResult(m, winnerId) {
+  if (m.recorded) return [];
+  m.recorded = true;
+  const owner = await store.getUserByGameId(m.gameId);
+  const g = owner && owner.games.find(x => x.id === m.gameId);
+  if (!g) return [];
+  for (const p of m.players) {
+    const key = winnerId === null ? 'd' : (p.id === winnerId ? 'w' : 'l');
+    if (p.kind === 'ai') {
+      const persona = (g.personas || []).find(x => x.id === p.id);
+      if (persona) persona[key] = (persona[key] || 0) + 1;
+    } else {
+      if (!g.records || typeof g.records !== 'object') g.records = {};
+      const row = g.records[p.id] || (g.records[p.id] = { w: 0, l: 0, d: 0 });
+      row[key] = (row[key] || 0) + 1;
+    }
+  }
+  // Ratings move only when the server itself decided this result.
+  const ratings = m.ranked ? applyRatings(g, m, winnerId) : [];
+  await store.saveUser(owner);
+  return ratings;
+}
+
+/* ---------- AI personas ----------
+   Named AI opponents that belong to a game, persisted on the game object so
+   they build up win/loss records and reappear in future vs-AI matches. They
+   are invented SERVER-side (names stay unique and moderated); the LLM writes
+   the character when AI is configured, with a fallback list otherwise. */
+const PERSONA_FALLBACKS = [
+  ['Rusty Circuits', 'A creaky old bot with surprising flashes of brilliance.', 'Plays solid openings, wobbles under pressure.'],
+  ['Neon Sage', 'Serene, cryptic, speaks in koans about victory.', 'Patient and defensive until the perfect moment.'],
+  ['Pixel Baron', 'A pompous aristocrat of the arcade age.', 'Aggressive openings, hates retreating.'],
+  ['Turbo Tortoise', 'Slow to speak, never slow to win.', 'Methodical; grinds out endgames.'],
+  ['Glitchy Gambit', 'Chaotic, dramatic, allergic to obvious moves.', 'Loves sacrifices and traps.'],
+  ['Quantum Quokka', 'Cheerful and unpredictable — possibly in two states at once.', 'Random-looking play that keeps working out.'],
+  ['Sir Segfault', 'A noble knight who occasionally crashes mid-sentence.', 'Bold attacks, forgets defense.'],
+  ['Mellow Machine', 'Utterly unbothered. Has never rage-quit.', 'Balanced, punishes mistakes calmly.'],
+];
+
+const PERSONA_AI_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'A playful 1–3 word opponent name.' },
+    personality: { type: 'string', description: 'One line of character.' },
+    style: { type: 'string', description: 'One line describing how it plays.' },
+  },
+  required: ['name', 'personality', 'style'],
+};
+
+async function inventPersona(g) {
+  const taken = new Set((g.personas || []).map(p => p.name.toLowerCase()));
+  if (aiConfigured()) {
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic();
+      const response = await client.messages.create({
+        model: GAME_AI_MODEL,
+        max_tokens: 300,
+        output_config: { format: { type: 'json_schema', schema: PERSONA_AI_SCHEMA } },
+        system: 'You invent fun, family-friendly AI opponent characters for small browser games. Keep every field short.',
+        messages: [{ role: 'user', content:
+          'Invent an AI opponent persona for a game called "' + g.name + '"' +
+          (g.description ? ' (' + g.description.slice(0, 200) + ')' : '') +
+          '. Avoid these existing names: ' + ([...taken].join(', ') || 'none') + '.' }],
+      });
+      const block = (response.content || []).find(b => b.type === 'text');
+      const data = JSON.parse(block ? block.text : '{}');
+      const name = String(data.name || '').trim().slice(0, 40);
+      if (name && !taken.has(name.toLowerCase())) {
+        return {
+          name,
+          personality: String(data.personality || '').trim().slice(0, 200),
+          style: String(data.style || '').trim().slice(0, 200),
+        };
+      }
+    } catch { /* fall through to the list */ }
+  }
+  const fresh = PERSONA_FALLBACKS.filter(f => !taken.has(f[0].toLowerCase()));
+  const pick = fresh.length ? fresh[crypto.randomInt(fresh.length)]
+    : PERSONA_FALLBACKS[crypto.randomInt(PERSONA_FALLBACKS.length)];
+  const name = fresh.length ? pick[0] : pick[0] + ' ' + (g.personas.length + 1); // keep names unique
+  return { name, personality: pick[1], style: pick[2] };
+}
+
+// Get (or create) the AI persona that will sit in a vs-AI match.
+async function pickPersona(gOwner, g, personaId) {
+  if (!Array.isArray(g.personas)) g.personas = [];
+  if (personaId) {
+    const p = g.personas.find(x => x.id === personaId);
+    if (p) return p;
+  }
+  if (g.personas.length >= MAX_PERSONAS) {
+    return g.personas[crypto.randomInt(g.personas.length)];
+  }
+  const invented = await inventPersona(g);
+  const persona = {
+    id: newId(),
+    name: invented.name,
+    personality: invented.personality,
+    style: invented.style,
+    w: 0, l: 0, d: 0,
+    createdAt: Date.now(),
+  };
+  g.personas.push(persona);
+  await store.saveUser(gOwner);
+  return persona;
+}
+
+function personaOut(p) {
+  return { id: p.id, name: p.name, personality: p.personality, style: p.style, w: p.w || 0, l: p.l || 0, d: p.d || 0 };
+}
+
+// Find a persona by id across a game (for MindGame.ai({as}) roleplay).
+function personaSystem(g, personaId) {
+  const p = (g.personas || []).find(x => x.id === personaId);
+  if (!p) return '';
+  return 'You are roleplaying "' + p.name + '", an AI game opponent. Personality: ' +
+    (p.personality || 'playful') + ' Play style: ' + (p.style || 'balanced') +
+    ' Stay in character; keep replies short and game-focused.';
+}
+
+// Per-match SSE stream for one member (the host page owns this connection).
+function startMatchStream(req, res, m, userId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  m.streams.set(res, userId);
+  // hello carries full current state + move history so a late/reconnecting
+  // subscriber misses nothing (the SDK replays by sequence number)
+  res.write(`event: hello\ndata: ${JSON.stringify({
+    match: matchOut(m, { id: userId }),
+    moves: m.moves,
+  })}\n\n`);
+
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
+  const cleanup = () => {
+    clearInterval(beat);
+    if (!m.streams.has(res)) return;
+    m.streams.delete(res);
+    // no other open stream for this user → they left the match
+    if (![...m.streams.values()].includes(userId)) {
+      matchBroadcast(m, 'leave', { playerId: userId });
+      if (m.status === 'waiting') { deleteMatch(m); return; }
+      if (m.status === 'active') {
+        if (m.ranked) {
+          // Give a dropped connection a moment to come back before it costs
+          // them the game; a real departure forfeits, awarded by the server.
+          clearTimeout(m.forfeitTimer);
+          m.forfeitTimer = setTimeout(() => {
+            if (m.status === 'active' && ![...m.streams.values()].includes(userId)) {
+              forfeitRanked(m, userId).catch(() => {});
+            }
+          }, RANKED_FORFEIT_GRACE);
+          if (m.forfeitTimer.unref) m.forfeitTimer.unref();
+        }
+        // keep the match briefly so a casual survivor can claim the win via /end
+        reapLater(m, m.ranked ? RANKED_FORFEIT_GRACE + MATCH_LINGER : MATCH_LINGER);
+      }
+    }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
 }
 
 function publicUser(u, viewer) {
@@ -1531,11 +2299,29 @@ const GAME_SDK_DOC =
   '  MindGame.onReady(fn)      — fn({player, aiAvailable}) once the bridge is up; player is {username, name} or null for guests\n' +
   '  MindGame.setScore(n) / MindGame.addScore(n) / MindGame.getScore()\n' +
   '  MindGame.gameOver(finalScore?) — ends the round and submits the score to the leaderboard\n' +
-  '  MindGame.ai(prompt, {system}) — Promise<string>; only when MindGame.aiAvailable is true\n' +
+  '  MindGame.ai(prompt, {system, as}) — Promise<string>; only when MindGame.aiAvailable is true.\n' +
+  '      {as: personaId} makes the reply come from that AI character, in voice.\n' +
+  'MULTIPLAYER (only if the request calls for it — the platform owns identity and transport, ' +
+  'so game code just sends and receives moves; the server stamps the verified sender and ' +
+  'enforces turn order):\n' +
+  '  const m = await MindGame.match({mode:"pvp"})   — quick match: joins the longest-waiting\n' +
+  '      open table in this game\'s lobby, or opens one and waits ("waiting" status).\n' +
+  '      {mode:"pvp", host:true} always opens a new table; {mode:"pvp", join:tableId} sits at\n' +
+  '      a specific one; {mode:"vs-ai"} plays an AI character (m.persona = {id,name,personality,style}).\n' +
+  '  m.status / m.players ([{id,username,name,isAI}]) / m.you / m.turn / m.isMyTurn\n' +
+  '  await m.send(data) — relay a move; AWAIT IT before applying a move that ends the match,\n' +
+  '      so the opponent receives the move before the result.\n' +
+  '  m.on("start"|"message"|"leave"|"end", fn) — message gives (fromPlayerId, data)\n' +
+  '  m.end({winner: playerId|null}) — records W/L/D; m.leave() gets up from the table\n' +
+  '  MindGame.lobby() / MindGame.onLobby(fn) — the pool of open tables ({id, host, seated,\n' +
+  '      seats, waitingSince}); onLobby fires live on every change and returns an unsubscribe fn.\n' +
+  '      There are no join codes: players see open tables and sit down. Multiplayer needs a\n' +
+  '      signed-in player, so handle the guest case (MindGame.player === null).\n' +
   'Hard constraints: NO network access of any kind (no fetch/XHR/WebSocket, no external ' +
   'scripts, stylesheets, images, or fonts — inline everything; images only as data: URIs or ' +
   'canvas drawing), no cookies or storage. The page background is dark (#10141D) with light ' +
-  'text; design for both mouse and touch, and make the game fill the frame responsively.';
+  'text; design for both mouse and touch, make the game fill the frame responsively, and keep ' +
+  'the top-right ~120px clear (the platform draws a score pill there).';
 
 async function generateGameFromPrompt(prompt, existingCode) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -1935,7 +2721,7 @@ async function handleApi(req, res, pathname) {
 
     if (!gsub && req.method === 'GET') {
       return sendJSON(res, 200, {
-        game: gameMeta(g, gIsOwner ? { code: g.code } : {}),
+        game: gameMeta(g, gIsOwner ? { code: g.code, rules: g.rules } : {}),
         owner: ownerRef(gOwner, user),
         isOwner: gIsOwner,
         aiEnabled: aiConfigured(),
@@ -2089,6 +2875,7 @@ async function handleApi(req, res, pathname) {
       games: (user.games || []).map(g => ({
         id: g.id, name: g.name, description: g.description || '',
         visibility: g.visibility, scoreOrder: g.scoreOrder,
+        ranked: !!g.ranked, rules: g.rules || '',
         plays: g.plays || 0,
         createdAt: g.createdAt ? new Date(g.createdAt).toISOString() : null,
         updatedAt: g.updatedAt ? new Date(g.updatedAt).toISOString() : null,
@@ -2464,16 +3251,25 @@ async function handleApi(req, res, pathname) {
     if (typeof body.code === 'string') g.code = body.code.slice(0, MAX_GAME_CODE);
     if ('description' in body) g.description = String(body.description || '').trim().slice(0, 500);
     if (body.scoreOrder === 'asc') g.scoreOrder = 'asc';
+    // A game may arrive with server-side rules (templates do); ranked only
+    // switches on if they actually compile and run.
+    if (typeof body.rules === 'string' && body.rules.trim()) {
+      g.rules = body.rules.slice(0, MAX_RULES_CODE);
+      if (body.ranked && rulesAvailable()) {
+        const check = await validateRules(g);
+        g.ranked = !!check.ok;
+      }
+    }
     user.games.push(g);
     if (g.visibility !== 'private' && g.code.trim()) {
       g.announced = true;
       await notifyNewGame(user, g);
     }
     await store.saveUser(user);
-    return sendJSON(res, 200, { game: gameMeta(g, { code: g.code }) });
+    return sendJSON(res, 200, { game: gameMeta(g, { code: g.code, rules: g.rules }) });
   }
 
-  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate))?$/);
+  const gameMatch = pathname.match(/^\/api\/games\/([A-Za-z0-9]{1,40})(?:\/(score|ai|generate|match|personas|rules|lobby|lobby\/stream))?$/);
   if (gameMatch) {
     const gameId = gameMatch[1], sub = gameMatch[2];
     const owner = user.games.some(g => g.id === gameId) ? user : await store.getUserByGameId(gameId);
@@ -2489,6 +3285,26 @@ async function handleApi(req, res, pathname) {
       if ('visibility' in body) g.visibility = normVisibility(body.visibility);
       if ('scoreOrder' in body) g.scoreOrder = body.scoreOrder === 'asc' ? 'asc' : 'desc';
       if (typeof body.code === 'string') g.code = body.code.slice(0, MAX_GAME_CODE);
+      // Server-side rules: any change recompiles in the sandbox, and ranked play
+      // is only allowed while the rules actually load and run.
+      let rulesError = null;
+      if (typeof body.rules === 'string' && body.rules !== g.rules) {
+        g.rules = body.rules.slice(0, MAX_RULES_CODE);
+        g.rulesRev = (g.rulesRev || 1) + 1;
+        if (!g.rules.trim()) g.ranked = false;
+      }
+      if ('ranked' in body || (typeof body.rules === 'string' && g.ranked)) {
+        const wantRanked = 'ranked' in body ? !!body.ranked : g.ranked;
+        if (!wantRanked) g.ranked = false;
+        else if (!rulesAvailable()) {
+          g.ranked = false;
+          rulesError = 'This server can’t run ranked games (the rules sandbox is unavailable).';
+        } else {
+          const check = await validateRules(g);
+          g.ranked = !!check.ok;
+          if (!check.ok) rulesError = check.error;
+        }
+      }
       g.updatedAt = Date.now();
       // first time it's shareable and has something to play → tell friends/followers
       if (!g.announced && g.visibility !== 'private' && g.code.trim()) {
@@ -2496,7 +3312,21 @@ async function handleApi(req, res, pathname) {
         await notifyNewGame(user, g);
       }
       await store.saveUser(user);
-      return sendJSON(res, 200, { game: gameMeta(g, { code: g.code }) });
+      return sendJSON(res, 200, { game: gameMeta(g, { code: g.code, rules: g.rules }), rulesError });
+    }
+
+    // Compile + smoke-test the rules without saving anything — the editor's
+    // "Check rules" button, so authors see errors before turning ranked on.
+    if (sub === 'rules' && req.method === 'POST') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can test a game’s rules.' });
+      if (!rulesAvailable()) return sendJSON(res, 503, { error: 'This server can’t run ranked games (the rules sandbox is unavailable).' });
+      const body = await readBody(req);
+      const code = String(body.rules || '').slice(0, MAX_RULES_CODE);
+      if (!code.trim()) return sendJSON(res, 400, { error: 'Add some rules first.' });
+      // test under a throwaway id + revision so a broken draft can't disturb
+      // the live game's compiled rules
+      const probe = await rulesCall({ op: 'load', gameId: 'draft-' + g.id, rev: Date.now(), code });
+      return sendJSON(res, 200, { ok: !!probe.ok, error: probe.ok ? null : probe.error, seats: probe.seats || 2 });
     }
 
     if (!sub && req.method === 'DELETE') {
@@ -2533,12 +3363,99 @@ async function handleApi(req, res, pathname) {
       const body = await readBody(req);
       const prompt = String(body.prompt || '').trim().slice(0, 4000);
       if (!prompt) return sendJSON(res, 400, { error: 'Empty prompt.' });
+      // {as: personaId} makes the reply come from that persona, in character
+      const roleplay = body.as ? personaSystem(g, String(body.as)) : '';
+      const system = (roleplay ? roleplay + '\n\n' : '') + String(body.system || '').slice(0, 2000);
       try {
-        const text = await gameAiAsk(prompt, String(body.system || '').slice(0, 2000));
+        const text = await gameAiAsk(prompt, system);
         return sendJSON(res, 200, { text });
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'AI request failed.' });
       }
+    }
+
+    // The AI opponents this game has accumulated — for "choose your rival" UIs.
+    if (sub === 'personas' && req.method === 'GET') {
+      return sendJSON(res, 200, { personas: (g.personas || []).map(personaOut) });
+    }
+
+    // The pool of open tables for this game: a snapshot, or a live stream that
+    // pushes the table list every time one opens, fills, or expires.
+    if (sub === 'lobby' && req.method === 'GET') {
+      return sendJSON(res, 200, { tables: openTables(g.id) });
+    }
+    if (sub === 'lobby/stream' && req.method === 'GET') {
+      return startLobbyStream(req, res, g.id);
+    }
+
+    // Start, join, or sit down for a match. The response is the full current
+    // match state; live events then arrive on GET /api/match/:id/stream.
+    //   {mode:'vs-ai', personaId?}   — seat an AI persona and start now
+    //   {mode:'pvp'}                 — quick match: take the longest-waiting
+    //                                  open table, or sit down as a new one
+    //   {mode:'pvp', join:tableId}   — sit down at a specific open table
+    //   {mode:'pvp', host:true}      — always open a new table (don't auto-pair)
+    //   turnBased:false              — opt out of server turn enforcement
+    if (sub === 'match' && req.method === 'POST') {
+      if (tooMany('match:' + user.id, 120, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Too many matches this hour. Try again later.' });
+      }
+      const body = await readBody(req);
+      const mode = body.mode === 'vs-ai' ? 'vs-ai' : 'pvp';
+      const seat = { id: user.id, username: user.username, name: selfName(user), kind: 'human' };
+
+      // Joining an existing table — either a named one or (quick match) the
+      // one that has been waiting longest.
+      if (mode === 'pvp') {
+        let open = null;
+        if (body.join) {
+          open = matches.get(String(body.join));
+          if (!open || open.gameId !== g.id || open.mode !== 'pvp' || open.status !== 'waiting') {
+            return sendJSON(res, 409, { error: 'That table is no longer open.' });
+          }
+          if (open.players.some(p => p.id === user.id)) {
+            return sendJSON(res, 409, { error: 'You’re already at that table.' });
+          }
+        } else if (!body.host) {
+          open = findQuickMatch(g.id, user.id);
+        }
+        if (open) {
+          open.players.push(seat);
+          await startMatch(open, g);
+          return sendJSON(res, 200, { match: matchOut(open, user) });
+        }
+      }
+
+      const m = {
+        id: newId(),
+        gameId: g.id,
+        mode,
+        status: 'waiting',
+        seats: 2, // two-seat tables for now; the pool shows seated/seats
+        turnBased: mode === 'pvp' && body.turnBased !== false, // vs-ai moves are computed in-game
+        // Ranked play is PvP-only: in a vs-AI match the player's own browser
+        // drives the opponent, so a rating from it would mean nothing.
+        ranked: mode === 'pvp' && !!g.ranked && rulesAvailable(),
+        state: null, // authoritative rules state (ranked matches only)
+        turn: null,
+        players: [seat],
+        streams: new Map(),
+        moves: [],
+        seq: 0,
+        recorded: false,
+        reaper: null,
+        createdAt: Date.now(),
+      };
+      matches.set(m.id, m);
+      if (mode === 'vs-ai') {
+        const persona = await pickPersona(owner, g, body.personaId ? String(body.personaId) : null);
+        m.players.push({ id: persona.id, username: persona.name, name: persona.name, kind: 'ai', persona });
+        await startMatch(m, g);
+        return sendJSON(res, 200, { match: matchOut(m, user), persona: personaOut(persona) });
+      }
+      reapLater(m, MATCH_WAIT_TTL);
+      broadcastLobby(g.id); // a new table is open in the pool
+      return sendJSON(res, 200, { match: matchOut(m, user) });
     }
 
     // ✨ AI writes (or reworks) the game's code from a description.
@@ -2557,6 +3474,113 @@ async function handleApi(req, res, pathname) {
       } catch (err) {
         return sendJSON(res, err && err.status ? err.status : 500, { error: (err && err.message) || 'Generation failed.' });
       }
+    }
+
+    return sendJSON(res, 404, { error: 'Not found.' });
+  }
+
+  // --- live match transport (members only; identity comes from the session) ---
+  const matchRoute = pathname.match(/^\/api\/match\/([A-Za-z0-9]{1,40})\/(stream|move|end|leave)$/);
+  if (matchRoute) {
+    const m = matches.get(matchRoute[1]);
+    const act = matchRoute[2];
+    if (!m || !findMemberSeat(m, user.id)) return sendJSON(res, 404, { error: 'No such match.' });
+
+    if (act === 'stream' && req.method === 'GET') {
+      return startMatchStream(req, res, m, user.id);
+    }
+
+    // Relay one move to the room. The server stamps the verified sender and,
+    // for turn-based matches, rejects out-of-turn moves and advances the turn.
+    // In a RANKED match the game's own rules run here first: an illegal move is
+    // refused and never reaches the opponent, and if the rules say the game is
+    // over, the server ends it — the clients don't get a vote.
+    if (act === 'move' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (m.status !== 'active') return sendJSON(res, 409, { error: 'The match hasn’t started.' });
+      const payload = body.data === undefined ? null : body.data;
+      if (JSON.stringify(payload).length > MAX_MOVE_BYTES) {
+        return sendJSON(res, 400, { error: 'Move too large.' });
+      }
+      if (m.turnBased && m.turn !== user.id) return sendJSON(res, 409, { error: 'Not your turn.' });
+
+      let finished = null; // { winner } once the rules call the game
+      if (m.ranked) {
+        const owner2 = await store.getUserByGameId(m.gameId);
+        const g2 = owner2 && owner2.games.find(x => x.id === m.gameId);
+        if (!g2) return sendJSON(res, 404, { error: 'No such game.' });
+        const seat = seatOf(m, user.id);
+        const verdict = await rulesMove(g2, m.state, seat, payload);
+        if (!verdict.ok) return sendJSON(res, 503, { error: verdict.error });
+        const r = verdict.result;
+        if (r.reject) return sendJSON(res, 422, { error: r.reject, illegal: true });
+        m.state = r.state;
+        // the rules decide who moves next (default: the next seat along)
+        const nextSeat = typeof r.next === 'number' ? r.next
+          : (seatOf(m, user.id) + 1) % m.players.length;
+        m.turn = m.turnBased && m.players[nextSeat] ? m.players[nextSeat].id : m.turn;
+        if (r.done) {
+          finished = {
+            winner: typeof r.winner === 'number' && m.players[r.winner] ? m.players[r.winner].id : null,
+          };
+        }
+      } else if (m.turnBased) {
+        const humans = m.players.filter(p => p.kind === 'human');
+        const i = humans.findIndex(p => p.id === user.id);
+        m.turn = humans[(i + 1) % humans.length].id;
+      }
+
+      const move = { seq: ++m.seq, from: user.id, data: payload, turn: m.turn };
+      m.moves.push(move);
+      if (m.moves.length > MAX_MATCH_MOVES) m.moves.shift();
+      matchBroadcast(m, 'message', move, user.id); // sender's 200 is their ack
+
+      if (finished) {
+        m.status = 'done';
+        const ratings = await recordMatchResult(m, finished.winner);
+        matchBroadcast(m, 'end', { winner: finished.winner, ranked: true, ratings });
+        reapLater(m, MATCH_LINGER);
+        return sendJSON(res, 200, { seq: move.seq, turn: null, done: true, winner: finished.winner, ratings });
+      }
+      return sendJSON(res, 200, { seq: move.seq, turn: m.turn });
+    }
+
+    // Declare the result. In a CASUAL match the clients are the authority, so
+    // the first call wins (honest clients agree anyway). In a RANKED match the
+    // rules already decide this from the moves, so a client's claim is refused
+    // outright — that refusal is the whole point of ranked play.
+    if (act === 'end' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (m.status === 'done') return sendJSON(res, 200, { ok: true, already: true });
+      if (m.ranked) {
+        // …except conceding, which is a legitimate thing only a player can say.
+        if (body.resign) {
+          const other = m.players.find(p => p.id !== user.id);
+          m.status = 'done';
+          const ratings = await recordMatchResult(m, other ? other.id : null);
+          matchBroadcast(m, 'end', { winner: other ? other.id : null, ranked: true, resigned: user.id, ratings });
+          reapLater(m, MATCH_LINGER);
+          return sendJSON(res, 200, { ok: true, resigned: true });
+        }
+        return sendJSON(res, 409, { error: 'This match is ranked — its result is decided by the game’s rules.' });
+      }
+      let winner = body.winner === null || body.winner === undefined ? null : String(body.winner);
+      if (winner && !m.players.some(p => p.id === winner)) {
+        return sendJSON(res, 400, { error: 'Winner must be a player in the match.' });
+      }
+      m.status = 'done';
+      await recordMatchResult(m, winner);
+      matchBroadcast(m, 'end', { winner, byId: user.id });
+      reapLater(m, MATCH_LINGER);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (act === 'leave' && req.method === 'POST') {
+      matchBroadcast(m, 'leave', { playerId: user.id }, user.id);
+      if (m.status === 'waiting') deleteMatch(m);
+      else if (m.ranked && m.status === 'active') await forfeitRanked(m, user.id);
+      else reapLater(m, MATCH_LINGER);
+      return sendJSON(res, 200, { ok: true });
     }
 
     return sendJSON(res, 404, { error: 'Not found.' });
@@ -2760,6 +3784,8 @@ server.on('error', err => {
   }
   throw err;
 });
+
+startRulesRunner(); // ranked play's sandbox; failing to start just disables ranked
 
 store.init().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
