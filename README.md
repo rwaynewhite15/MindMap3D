@@ -218,7 +218,8 @@ widgets) and share them the same way maps are shared.
   games from the whole community. Signed-out visitors can browse and play public games too.
 - **The editor** is a split view: your **HTML/CSS/JS code on the left, a live preview on
   the right** — press **▶ Run** to save and play instantly. Start from a template: a blank
-  scaffold, an arcade game, a multiplayer Tic Tac Toe, or an AI trivia quiz.
+  scaffold, an arcade game, a ranked multiplayer **Tic Tac Toe** or **Connect 4**, or an AI
+  trivia quiz.
 - **Scores & leaderboards** — games report scores through a tiny `MindGame` API
   (`setScore`, `addScore`, `gameOver`). Each game keeps a **leaderboard of every player's
   personal best** (with play counts), shown beside the game with medals for the top three
@@ -254,8 +255,9 @@ author writing any networking code.
   personas alike, sorted by wins.
 - **For game authors** it's a handful of calls — `MindGame.match({mode:'pvp'})`,
   `match.send(move)`, `match.on('message', …)`, `match.end({winner})`, plus
-  `MindGame.onLobby(fn)` for a live table list. The **Tic Tac Toe template** is a complete
-  working example: lobby, quick match, AI opponent, forfeit handling, and result recording.
+  `MindGame.onLobby(fn)` for a live table list. The **Tic Tac Toe and Connect 4 templates**
+  are complete working examples: lobby, quick match, AI opponent, forfeit handling, and
+  result recording.
 
 #### Ranked play — results the leaderboard can trust
 
@@ -292,8 +294,8 @@ const Rules = {
   from it would mean nothing.
 - **Turning it on**: write the rules in the editor's **⚖️ Ranked** panel and press *Check
   rules* — they're compiled and smoke-tested in the sandbox, and ranked can only be switched
-  on once they actually run. The **Tic Tac Toe template ships with rules**, so a game made
-  from it is ranked from the moment it's created.
+  on once they actually run. The **Tic Tac Toe and Connect 4 templates ship with rules**, so
+  a game made from either is ranked from the moment it's created.
 
 #### Safety — why user-written code is safe to run
 
