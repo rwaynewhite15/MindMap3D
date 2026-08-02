@@ -800,6 +800,10 @@ window.MindGame = (function () {
       // {done, winner, ratings} on the move that finishes the game.
       send: function (data) {
         return request({ mg: 'match-send', data: data }).then(function (r) {
+          // Own moves come back on a reconnect's replay too, so record that we
+          // have already applied this one. Without this the replay would hand
+          // your own move back to you as if the opponent had just played it.
+          if (typeof r.seq === 'number' && r.seq > lastSeq) lastSeq = r.seq;
           if (r.turn !== undefined) h.turn = r.turn;
           if (r.done) h.status = 'done';
           return r;
@@ -844,6 +848,16 @@ window.MindGame = (function () {
           maybeStart(data.match.players, data.match.turn, data.match.ranked);
         }
         (data.moves || []).forEach(applyMove);
+        // maybeStart is a no-op once the match is running, so refresh the
+        // authoritative bits here: after a dropped connection the server's
+        // turn is the truth, not whatever the game was left believing.
+        if (data.match) {
+          if (data.match.turn !== undefined) h.turn = data.match.turn;
+          if (data.match.status) h.status = data.match.status;
+          if (data.match.players) h.players = data.match.players;
+        }
+        // Tell the game to reconcile: it should re-read isMyTurn and redraw.
+        if (started) fire('sync', { turn: h.turn, isMyTurn: h.isMyTurn, status: h.status });
       }
       else if (event === 'leave') fire('leave', data.playerId);
       // end carries the server's verdict in ranked play, plus rating changes
