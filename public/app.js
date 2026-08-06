@@ -895,9 +895,11 @@ function createMapView(host, opts = {}) {
         pos: Array.isArray(n.pos) ? [n.pos[0] || 0, n.pos[1] || 0, 0] : [0, 0, 0],
         r: n.r || 62, hue: n.hue || 0, parentId: n.parentId || null,
         kind: n.kind === 'container' ? 'container' : 'bubble', mapRef: n.mapRef || '',
+        order: (typeof n.order === 'number' && isFinite(n.order)) ? n.order : null,
       };
     }
     map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+    normalizeOrder();
     selectedId = null; connectFrom = null; highlightedEdge = null;
     hueCounter = Object.keys(map.nodes).length;
     buildDOM();
@@ -915,6 +917,169 @@ function createMapView(host, opts = {}) {
   function deleteEdge(edgeId) {
     map.edges = map.edges.filter(x => x.id !== edgeId);
     changed();
+  }
+
+  /* ---------- outline order ----------
+     Siblings carry an explicit `order` so the outline can be rearranged without
+     disturbing the canvas layout — the two views of a map are ordered
+     independently. Maps written before ordering existed arrive with order null;
+     normalizeOrder numbers them the way the outline already listed them, so
+     nothing appears to jump the first time an old map is opened. */
+  const orderKey = n => ((n.parentId && map.nodes[n.parentId]) ? n.parentId : '');
+
+  function normalizeOrder() {
+    const buckets = new Map();
+    for (const n of Object.values(map.nodes)) {
+      const k = orderKey(n);
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(n);
+    }
+    const ranked = n => (typeof n.order === 'number' && isFinite(n.order));
+    for (const list of buckets.values()) {
+      if (list.every(ranked)) continue;
+      // Renumber a bucket that isn't fully ordered yet. Items that already carry
+      // an order keep their relative places; the rest fall in behind them in the
+      // outline's legacy order — groups first, then loose bubbles.
+      list.slice().sort((a, b) => {
+        const ra = ranked(a), rb = ranked(b);
+        if (ra && rb) return a.order - b.order;
+        if (ra !== rb) return ra ? -1 : 1;
+        return (a.kind === 'container' ? 0 : 1) - (b.kind === 'container' ? 0 : 1);
+      }).forEach((n, i) => { n.order = i; });
+    }
+  }
+
+  // The children of a node — or the map's top level, for a null id — in outline
+  // order. This is the one ordering the outline panel and every export share.
+  function orderedChildren(parentId) {
+    const key = parentId || '';
+    return Object.values(map.nodes)
+      .filter(n => n.id !== parentId && orderKey(n) === key)
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+  }
+
+  // Put a freshly created node last among its siblings.
+  function appendOrder(n) {
+    const sibs = orderedChildren(n.parentId).filter(s => s.id !== n.id);
+    n.order = sibs.length ? Math.max(...sibs.map(s => s.order || 0)) + 1 : 0;
+  }
+
+  // Every node beneath `id`, at any depth (a group's whole subtree).
+  function descendantsOf(id) {
+    const out = [];
+    const walk = pid => {
+      for (const kid of childrenOf(pid)) {
+        if (kid.id === pid || out.includes(kid.id)) continue; // guard a bad parent chain
+        out.push(kid.id);
+        walk(kid.id);
+      }
+    };
+    walk(id);
+    return out;
+  }
+
+  // Add a sub-item under `parentId` — the outline's "+". A plain bubble is
+  // promoted to a group first: in a mind map an idea with sub-ideas *is* a
+  // group, and only groups can hold children.
+  function addChildOf(parentId) {
+    const p = map.nodes[parentId];
+    if (!p) return null;
+    if (p.kind !== 'container') {
+      p.kind = 'container';
+      p.r = Math.max(p.r, 150);
+      p.mapRef = ''; // a group can't double as a link to another map
+    }
+    const id = newId();
+    const n = {
+      id, label: '', note: '', link: '', done: false,
+      pos: add3(p.pos, mul(randUnit(), Math.max(20, p.r * 0.45))),
+      r: 62, hue: p.hue, parentId: p.id, kind: 'bubble', mapRef: '', order: 0,
+    };
+    map.nodes[id] = n;
+    appendOrder(n);
+    clampInside(n);
+    growContainer(p);
+    selectedId = id;
+    changed();
+    if (opts.onSelect) opts.onSelect(id);
+    return id;
+  }
+
+  // Add an item directly below `afterId` at the same outline level, pushing the
+  // rest of that level down a slot.
+  function addSiblingAfter(afterId) {
+    const sib = map.nodes[afterId];
+    if (!sib) return null;
+    const parent = (sib.parentId && map.nodes[sib.parentId]) || null;
+    const id = newId();
+    const n = {
+      id, label: '', note: '', link: '', done: false,
+      pos: add3(sib.pos, mul(randUnit(), sib.r + 62 + 70)),
+      r: 62, hue: sib.hue, parentId: parent ? parent.id : null,
+      kind: 'bubble', mapRef: '', order: (sib.order || 0) + 1,
+    };
+    for (const s of orderedChildren(n.parentId)) {
+      if ((s.order || 0) >= n.order) s.order = (s.order || 0) + 1;
+    }
+    map.nodes[id] = n;
+    if (parent) { clampInside(n); growContainer(parent); }
+    selectedId = id;
+    changed();
+    if (opts.onSelect) opts.onSelect(id);
+    return id;
+  }
+
+  // A brand-new top-level item, for the outline's footer buttons. Deliberately
+  // ignores the current selection — "add a topic" means a topic of its own, not
+  // one wired to whatever happens to be selected on the canvas.
+  function addRootItem(kind) {
+    selectedId = null;
+    const id = kind === 'container' ? addContainer() : addBubble();
+    const n = map.nodes[id];
+    if (n) { appendOrder(n); changed(); }
+    return id;
+  }
+
+  // Swap an item with its previous (dir < 0) or next sibling in the outline.
+  function moveInOutline(id, dir) {
+    return moveToIndex(id, indexInOutline(id) + (dir < 0 ? -1 : 1));
+  }
+
+  function indexInOutline(id) {
+    const n = map.nodes[id];
+    return n ? orderedChildren(n.parentId).findIndex(s => s.id === id) : -1;
+  }
+
+  // Drop an item at `index` among its siblings (used by ↑/↓ and by dragging).
+  // Renumbering the whole level keeps the orders dense and collision-free.
+  function moveToIndex(id, index) {
+    const n = map.nodes[id];
+    if (!n) return false;
+    const sibs = orderedChildren(n.parentId);
+    const i = sibs.findIndex(s => s.id === id);
+    if (i < 0 || index < 0 || index >= sibs.length || index === i) return false;
+    sibs.splice(index, 0, sibs.splice(i, 1)[0]);
+    sibs.forEach((s, k) => { s.order = k; });
+    changed();
+    return true;
+  }
+
+  // Delete a node by id — with its whole subtree, for a group. Unlike
+  // deleteSelected this takes no confirmation of its own; the outline asks.
+  function deleteNodeById(id) {
+    const n = map.nodes[id];
+    if (!n) return false;
+    const doomed = [id, ...descendantsOf(id)];
+    const parent = n.parentId && map.nodes[n.parentId];
+    for (const d of doomed) delete map.nodes[d];
+    map.edges = map.edges.filter(e => !doomed.includes(e.a) && !doomed.includes(e.b));
+    if (parent) fitContainer(parent);
+    if (doomed.includes(selectedId)) {
+      selectedId = null;
+      if (opts.onSelect) opts.onSelect(null);
+    }
+    changed();
+    return true;
   }
 
   function moveIntoContainer(nodeId, containerId) {
@@ -1161,9 +1326,12 @@ function createMapView(host, opts = {}) {
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
           mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
+          // position among its siblings in the outline; null until numbered
+          order: (typeof n.order === 'number' && isFinite(n.order)) ? n.order : null,
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+      normalizeOrder();
       idCounter = 1;
       hueCounter = Object.keys(map.nodes).length;
       selectedId = null;
@@ -1212,9 +1380,12 @@ function createMapView(host, opts = {}) {
           parentId: n.parentId || null,
           kind: n.kind === 'container' ? 'container' : 'bubble',
           mapRef: n.mapRef || '', // a bubble linking to another map (a "map bubble")
+          // position among its siblings in the outline; null until numbered
+          order: (typeof n.order === 'number' && isFinite(n.order)) ? n.order : null,
         };
       }
       map.edges = ((m && m.edges) || []).map(e => ({ id: e.id, a: e.a, b: e.b, w: e.w || 3 }));
+      normalizeOrder();
       hueCounter = Object.keys(map.nodes).length;
       selectedId = map.nodes[keepSel] ? keepSel : null;
       connectFrom = map.nodes[keepConnect] ? keepConnect : null;
@@ -1235,6 +1406,9 @@ function createMapView(host, opts = {}) {
     stop() { running = false; },
     addBubble, addMapLinkBubble, addContainer, deleteSelected, renameSelected, renameNode, setNote,
     setLink, setDone, loadGenerated,
+    // outline editing: add / reorder / delete by id, and the shared sibling order
+    addChildOf, addSiblingAfter, addRootItem, moveInOutline, moveToIndex, indexInOutline,
+    deleteNodeById, orderedChildren,
     setWeight, deleteEdge, moveIntoContainer, autoArrange,
     // colors: recolor an existing node / pick the color for future bubbles
     setNodeHue(id, hue) {
@@ -1332,7 +1506,7 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul', 'games', 'gameedit', 'gameplay'];
+const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
 
 function show(name) {
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
@@ -1356,9 +1530,6 @@ function show(name) {
   if (myMap) { name === 'map' ? myMap.start() : myMap.stop(); }
   if (profileMap) { name === 'profile' ? profileMap.start() : profileMap.stop(); }
   if (name !== 'profile') closeComments(); // the comment panel belongs to the profile viewer
-  // leaving a game view unloads its iframe so games never run in the background
-  if (name !== 'gameplay') stopGamePlayer();
-  if (name !== 'gameedit') stopGamePreview();
 }
 
 function route() {
@@ -1371,12 +1542,10 @@ function route() {
   if (h === 'privacy' || h === 'terms' || h === 'soul') { show(h); window.scrollTo(0, 0); return; }
 
   if (!me) {
-    // anonymous visitors may browse public maps, profiles, and public games;
+    // anonymous visitors may browse public maps and profiles;
     // everything else prompts them to sign in
     if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
     if (h === 'browse') { show('browse'); loadBrowse(); return; }
-    if (h === 'games') { show('games'); loadGamesHub(); return; }
-    if (h.startsWith('g/')) { openGamePlayer(h.slice(2)); return; }
     show('auth'); // #/signin, #/map, #/friends, #/settings all land here
     return;
   }
@@ -1384,9 +1553,6 @@ function route() {
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
-  if (h === 'games') { show('games'); loadGamesHub(); return; }
-  if (h.startsWith('games/edit/')) { openGameEditor(h.slice('games/edit/'.length)); return; }
-  if (h.startsWith('g/')) { openGamePlayer(h.slice(2)); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
   show('map');
@@ -1424,7 +1590,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetNewGame', '#sheetGameSettings', '#sheetRules'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
 
 function openSheet(sel) {
   closeSheets();
@@ -1807,10 +1973,54 @@ function toggleOutline(force) {
 }
 function refreshOutlineIfOpen() { if (outlineOpen) buildOutline(); }
 
-function makeOutlineRow(n, depth, childrenOf) {
+// Who may change what, from the outline. Editing follows the map's edit
+// permission (owner or a granted editor); rearranging is the owner's alone.
+// The read-only profile viewer is never editable, whoever is looking at it.
+function outlineEditable() {
+  return activeMap() === myMap && !!(currentMapInfo && currentMapInfo.canEdit);
+}
+function outlineOwner() {
+  return activeMap() === myMap && !!(currentMapInfo && currentMapInfo.isOwner);
+}
+
+function outlineStateText() {
+  if (onProfileView()) return 'Read-only — open the map in the editor to change it.';
+  if (!outlineEditable()) return 'Read-only.';
+  return outlineOwner()
+    ? 'Tap a row to find it on the map · drag ⠿ to reorder'
+    : 'You can edit this outline · tap a row to find it on the map';
+}
+
+// A small round button in a row's action cluster.
+function outlineBtn(glyph, title, fn, cls) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'outline-act' + (cls ? ' ' + cls : '');
+  b.textContent = glyph;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.addEventListener('click', e => { e.stopPropagation(); fn(); });
+  return b;
+}
+
+function makeOutlineRow(n, depth, childrenOf, siblings, index) {
+  const editable = outlineEditable();
+  const owner = outlineOwner();
   const row = document.createElement('div');
   row.className = 'outline-row' + (n.kind === 'container' ? ' group' : '') + (n.done ? ' done' : '');
+  row.dataset.id = n.id;
   row.style.paddingLeft = (8 + depth * 16) + 'px';
+
+  // the owner drags this handle to rearrange the level; everyone else never
+  // sees it, so the row keeps its full width
+  if (owner) {
+    const grip = document.createElement('span');
+    grip.className = 'outline-grip';
+    grip.textContent = '⠿';
+    grip.title = 'Drag to reorder';
+    grip.addEventListener('pointerdown', e => startOutlineDrag(e, n.id));
+    row.appendChild(grip);
+  }
 
   // a caret appears for anything that actually has children (groups and parent
   // bubbles alike); childless nodes keep the plain dot
@@ -1825,10 +2035,23 @@ function makeOutlineRow(n, depth, childrenOf) {
       buildOutline();
     });
     row.appendChild(caret);
-  } else {
+  } else if (!editable) {
     const dot = document.createElement('span');
     dot.className = 'outline-dot';
     row.appendChild(dot);
+  }
+
+  // Editors get a real checkbox in place of the dot: ticking items off is the
+  // whole point of studying from an outline.
+  if (editable) {
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'outline-check';
+    box.checked = !!n.done;
+    box.title = n.done ? 'Mark as not done' : 'Mark as done';
+    box.addEventListener('click', e => e.stopPropagation());
+    box.addEventListener('change', () => myMap.setDone(n.id, box.checked));
+    row.appendChild(box);
   }
 
   const label = document.createElement('span');
@@ -1841,9 +2064,29 @@ function makeOutlineRow(n, depth, childrenOf) {
   const bits = [];
   if (n.mapRef) bits.push('🗺️');
   if (n.link) bits.push('🔗');
-  if (n.done) bits.push('✓');
+  if (n.note && n.note.trim()) bits.push('📝');
   meta.textContent = bits.join(' ');
   row.appendChild(meta);
+
+  if (editable) {
+    const acts = document.createElement('span');
+    acts.className = 'outline-acts';
+    if (owner) {
+      const up = outlineBtn('↑', 'Move up', () => moveOutlineItem(n.id, -1));
+      const down = outlineBtn('↓', 'Move down', () => moveOutlineItem(n.id, 1));
+      up.disabled = index === 0;
+      down.disabled = index === siblings.length - 1;
+      acts.append(up, down);
+    }
+    acts.append(
+      outlineBtn('✎', 'Edit this item — label, notes, link', () => openRename(n.id)),
+      outlineBtn('＋', n.kind === 'container'
+        ? 'Add a sub-item inside this group'
+        : 'Add a sub-item (turns this into a group)', () => addOutlineChild(n.id)),
+      outlineBtn('🗑', 'Delete this item', () => deleteOutlineItem(n.id), 'danger'),
+    );
+    row.appendChild(acts);
+  }
 
   // the note itself renders on its own full-width line beneath the label, so
   // the outline reads like an annotated document rather than just flagging 📝
@@ -1854,16 +2097,107 @@ function makeOutlineRow(n, depth, childrenOf) {
     row.appendChild(note);
   }
 
-  // single click focuses the node on the canvas; double-click opens the rename
-  // editor (editor only — the profile viewer is read-only)
+  // single click focuses the node on the canvas; double-click opens the editor
+  // (the profile viewer is read-only, so it only centers)
   const inEditor = activeMap() === myMap;
   row.addEventListener('click', () => {
+    if (outlineDrag || Date.now() - outlineDragEndedAt < 300) return; // tail of a drag
     const m = activeMap();
     if (inEditor) { m.focusNode(n.id); refreshToolbar(); }
     else if (m.centerOnNode) m.centerOnNode(n.id); // read-only viewer centers instead
   });
-  if (inEditor) row.addEventListener('dblclick', () => openRename(n.id));
+  if (editable) row.addEventListener('dblclick', () => openRename(n.id));
   return row;
+}
+
+/* ---------- outline edits ----------
+   These all mutate the editor's map, whose onChange is saveMap — so each one
+   autosaves, broadcasts to anyone else on the map, and rebuilds this panel
+   through exactly the path a canvas edit takes. Nothing here saves by hand. */
+function addOutlineChild(parentId) {
+  if (!outlineEditable()) return;
+  outlineCollapsed.delete(parentId); // reveal the new item in its parent
+  const id = myMap.addChildOf(parentId);
+  if (!id) return;
+  refreshToolbar();
+  openRename(id); // straight into naming it — an unnamed row helps nobody
+}
+
+function addOutlineRoot(kind) {
+  if (!outlineEditable()) return;
+  const id = myMap.addRootItem(kind);
+  if (!id) return;
+  refreshToolbar();
+  openRename(id);
+}
+
+function deleteOutlineItem(id) {
+  if (!outlineEditable()) return;
+  const n = myMap.getNode(id);
+  if (!n) return;
+  const kids = myMap.orderedChildren(id).length;
+  const what = '“' + (n.label || 'Untitled') + '”';
+  if (!confirm(kids
+    ? 'Delete ' + what + ' and the ' + kids + ' item' + (kids > 1 ? 's' : '') + ' inside it?'
+    : 'Delete ' + what + '?')) return;
+  myMap.deleteNodeById(id);
+  refreshToolbar();
+}
+
+function moveOutlineItem(id, dir) {
+  if (outlineOwner()) myMap.moveInOutline(id, dir);
+}
+
+/* ---------- drag to reorder (owner) ----------
+   The grip keeps pointer capture for the whole gesture, so touch and mouse both
+   track cleanly. We only highlight the row we would drop onto while dragging
+   and commit on release — rebuilding the list mid-drag would destroy the very
+   element holding the capture. Dragging reorders within one level only;
+   re-parenting stays in the canvas's Group ▾ menu. */
+let outlineDrag = null;       // { id, parentId, target }
+let outlineDragEndedAt = 0;   // so the click that ends a drag doesn't also fire
+
+function startOutlineDrag(e, id) {
+  if (!outlineOwner()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const n = myMap.getNode(id);
+  if (!n) return;
+  outlineDrag = { id, parentId: n.parentId || null, target: null };
+  const grip = e.currentTarget;
+  grip.setPointerCapture(e.pointerId);
+  grip.addEventListener('pointermove', onOutlineDragMove);
+  grip.addEventListener('pointerup', endOutlineDrag);
+  grip.addEventListener('pointercancel', endOutlineDrag);
+  markOutlineDrag();
+}
+
+function onOutlineDragMove(e) {
+  if (!outlineDrag) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const row = el && el.closest ? el.closest('.outline-row') : null;
+  let target = null;
+  if (row && row.dataset.id && row.dataset.id !== outlineDrag.id) {
+    const cand = myMap.getNode(row.dataset.id);
+    if (cand && (cand.parentId || null) === outlineDrag.parentId) target = cand.id;
+  }
+  if (target !== outlineDrag.target) { outlineDrag.target = target; markOutlineDrag(); }
+}
+
+function markOutlineDrag() {
+  for (const row of $('#outlineBody').querySelectorAll('.outline-row')) {
+    row.classList.toggle('dragging', !!outlineDrag && row.dataset.id === outlineDrag.id);
+    row.classList.toggle('drop-target', !!outlineDrag && row.dataset.id === outlineDrag.target);
+  }
+}
+
+function endOutlineDrag() {
+  if (!outlineDrag) return;
+  const { id, target } = outlineDrag;
+  outlineDrag = null;
+  outlineDragEndedAt = Date.now();
+  if (target) myMap.moveToIndex(id, myMap.indexInOutline(target));
+  buildOutline(); // always: a drag that moved nothing still has classes to clear
 }
 
 function buildOutline() {
@@ -1871,30 +2205,29 @@ function buildOutline() {
   body.innerHTML = '';
   const src = activeMap();
   if (!src) return;
-  const map = src.getMap();
-  const byId = map.nodes || {};
-  const nodes = Object.values(byId);
+  const editable = outlineEditable();
+  $('#outlineState').textContent = outlineStateText();
+  $('#outlineAdd').hidden = !editable;
+
+  const { nodes, childrenOf, roots } = outlineStructure();
   if (!nodes.length) {
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = activeMap() === myMap ? 'Empty map — add a bubble to get started.' : 'This map is empty.';
+    d.textContent = editable
+      ? 'Nothing here yet — add a topic below to start your outline.'
+      : 'This map is empty.';
     body.appendChild(d);
     return;
   }
-  const hasParent = n => !!(n.parentId && byId[n.parentId]);
-  const childrenOf = id => nodes.filter(n => n.parentId === id && n.id !== id);
-  const groups = nodes.filter(n => n.kind === 'container' && !hasParent(n));
-  const loose = nodes.filter(n => n.kind !== 'container' && !hasParent(n));
 
   // any node with children can be expanded, so sub-topics nest to any depth
-  const addRow = (n, depth) => {
-    body.appendChild(makeOutlineRow(n, depth, childrenOf));
-    if (!outlineCollapsed.has(n.id)) {
-      for (const k of childrenOf(n.id)) addRow(k, depth + 1);
-    }
+  const addRow = (n, depth, siblings, index) => {
+    body.appendChild(makeOutlineRow(n, depth, childrenOf, siblings, index));
+    if (outlineCollapsed.has(n.id)) return;
+    const kids = childrenOf(n.id);
+    kids.forEach((k, i) => addRow(k, depth + 1, kids, i));
   };
-  for (const g of groups) addRow(g, 0);
-  for (const b of loose) addRow(b, 0);
+  roots.forEach((n, i) => addRow(n, 0, roots, i));
 }
 
 // The name of the currently open map, for export titles/filenames. In view mode
@@ -1912,29 +2245,26 @@ function currentMapName() {
   return raw.replace(/\s*👥.*$/, '').trim() || 'Mind map'; // strip the shared-with marker
 }
 
-// The ordered outline structure: top-level groups (with their descendants) and
-// then loose bubbles — the same shape the Outline panel renders.
+// The ordered outline structure the panel and every export share.
 //
-// `groups`/`loose` are *roots only*: a node whose parent exists is rendered by
-// its parent, so listing it at the top level too would duplicate it. Every
-// consumer walks `childrenOf` recursively, so nesting of any depth comes out as
-// sub-topics.
+// `roots` is top-level items only: a node whose parent exists is rendered by its
+// parent, so listing it at the top level too would duplicate it. Every consumer
+// walks `childrenOf` recursively, so nesting of any depth comes out as
+// sub-topics — and both lists honour the order set in the outline panel.
 function outlineStructure() {
-  const map = activeMap().getMap();
-  const byId = map.nodes || {};
-  const nodes = Object.values(byId);
-  const hasParent = n => !!(n.parentId && byId[n.parentId]);
-  // guard against a corrupt parent chain (a cycle would otherwise recurse forever)
-  const childrenOf = id => nodes.filter(n => n.parentId === id && n.id !== id);
-  const groups = nodes.filter(n => n.kind === 'container' && !hasParent(n));
-  const loose = nodes.filter(n => n.kind !== 'container' && !hasParent(n));
-  return { nodes, childrenOf, groups, loose };
+  const src = activeMap();
+  const nodes = Object.values(src.getMap().nodes || {});
+  // The map view owns sibling order, so the panel, the exports, and anyone
+  // rearranging rows all agree on one sequence. It also guards a corrupt parent
+  // chain, which a naive recursive walk would follow forever.
+  const childrenOf = id => src.orderedChildren(id);
+  return { nodes, childrenOf, roots: src.orderedChildren(null) };
 }
 
 // Markdown: groups as bold bullets, bubbles nested, notes as blockquotes,
 // done tasks struck through, links as markdown links.
 function buildOutlineMarkdown() {
-  const { nodes, childrenOf, groups, loose } = outlineStructure();
+  const { nodes, childrenOf, roots } = outlineStructure();
   const label = n => {
     let s = (n.label || 'Untitled').trim() || 'Untitled';
     if (n.done) s = '~~' + s + '~~ ✓';
@@ -1953,14 +2283,13 @@ function buildOutlineMarkdown() {
     out += pad + '- ' + text + '\n' + note(n, pad + '  ');
     for (const c of childrenOf(n.id)) emit(c, depth + 1);
   };
-  for (const g of groups) emit(g, 0);
-  for (const b of loose) emit(b, 0);
+  for (const n of roots) emit(n, 0);
   return out;
 }
 
 // Plain text: an indented outline with •/- bullets; notes indented beneath.
 function buildOutlineText() {
-  const { nodes, childrenOf, groups, loose } = outlineStructure();
+  const { nodes, childrenOf, roots } = outlineStructure();
   const label = n => {
     let s = (n.label || 'Untitled').trim() || 'Untitled';
     if (n.done) s += ' [done]';
@@ -1979,15 +2308,14 @@ function buildOutlineText() {
     out += pad + (depth === 0 ? '• ' : '- ') + label(n) + '\n' + note(n, pad + '    ');
     for (const c of childrenOf(n.id)) emit(c, depth + 1);
   };
-  for (const g of groups) emit(g, 0);
-  for (const b of loose) emit(b, 0);
+  for (const n of roots) emit(n, 0);
   return out;
 }
 
 // OPML 2.0: a standard outline format importable by many outliners/mind-map
 // tools. Notes ride on the conventional `_note` attribute.
 function buildOutlineOPML() {
-  const { childrenOf, groups, loose } = outlineStructure();
+  const { childrenOf, roots } = outlineStructure();
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\r/g, '').replace(/\n/g, '&#10;');
   const node = (n, indent) => {
@@ -2004,7 +2332,7 @@ function buildOutlineOPML() {
     }
     return indent + '<outline ' + attrs.join(' ') + '/>\n';
   };
-  const body = groups.map(g => node(g, '    ')).join('') + loose.map(b => node(b, '    ')).join('');
+  const body = roots.map(n => node(n, '    ')).join('');
   return '<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n'
     + '  <head><title>' + esc(currentMapName()) + '</title></head>\n'
     + '  <body>\n' + body + '  </body>\n</opml>\n';
@@ -2087,7 +2415,7 @@ function buildMapSVG() {
 // The outline as printable HTML (groups → children, notes beneath), reusing the
 // same structure the Outline panel and text exports share.
 function buildOutlineHTML() {
-  const { nodes, childrenOf, groups, loose } = outlineStructure();
+  const { nodes, childrenOf, roots } = outlineStructure();
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
   const escAttr = s => esc(s).replace(/"/g, '&quot;');
@@ -2113,7 +2441,7 @@ function buildOutlineHTML() {
     return s + '</li>';
   };
   if (!nodes.length) return '<p><em>(empty map)</em></p>';
-  return '<ul class="outline">' + groups.map(item).join('') + loose.map(item).join('') + '</ul>';
+  return '<ul class="outline">' + roots.map(item).join('') + '</ul>';
 }
 
 // PDF export: open a print-ready document (the map picture on top, the outline
@@ -2196,6 +2524,8 @@ $('#exportTxt').addEventListener('click', () => { downloadOutline('txt'); closeS
 $('#exportOpml').addEventListener('click', () => { downloadOutline('opml'); closeSheets(); });
 $('#exportCancel').addEventListener('click', () => closeSheets());
 $('#btnOutlineClose').addEventListener('click', () => toggleOutline(false));
+$('#btnOutlineAddTopic').addEventListener('click', () => addOutlineRoot('bubble'));
+$('#btnOutlineAddGroup').addEventListener('click', () => addOutlineRoot('container'));
 
 /* ================================================================
    AI map generation (optional — only when the server has it configured)
@@ -2817,7 +3147,9 @@ async function startLive(mapId, canEdit) {
     if (mapId !== currentMapId) return;
     const m = JSON.parse(e.data);
     const applied = myMap.applyRemote(m);
-    if (applied) refreshToolbar();
+    // the outline is an editing surface of its own now, so a collaborator's
+    // change has to land there too — not just on the canvas
+    if (applied) { refreshToolbar(); refreshOutlineIfOpen(); }
     // if we were mid-drag it didn't apply; our next save reconciles anyway
     const st = $('#saveState');
     st.hidden = false; st.textContent = 'Updated by @' + m.by;
@@ -3413,1589 +3745,6 @@ function updateBadge(n) {
 }
 
 /* ================================================================
-   Games — hub, editor, and player.
-   ----------------------------------------------------------------
-   A game is HTML/CSS/JS its author writes (or asks AI to write). It runs
-   inside a sandboxed iframe served by /game-frame (opaque origin, no
-   network) and talks to this page only via postMessage: live score, round
-   over (→ leaderboard submit), and MindGame.ai() relays. This page owns
-   the session, so all API calls happen out here.
-================================================================ */
-
-/* ---------- starter templates ---------- */
-const GAME_TEMPLATES = [
-  {
-    id: 'blank',
-    label: '📄 Blank — a commented scaffold',
-    code: [
-      '<div id="game" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">',
-      '  <h1>My game</h1>',
-      '  <button id="btn" style="font-size:20px;padding:14px 26px;border-radius:12px;border:none;background:#4FD1E0;cursor:pointer">Click me (+1)</button>',
-      '  <button id="end" style="font-size:14px;padding:8px 18px;border-radius:10px;border:1px solid #4FD1E0;background:none;color:#4FD1E0;cursor:pointer">End round</button>',
-      '</div>',
-      '<script>',
-      "// MindGame is the bridge to MindMapShare (see the guide under the editor):",
-      "//   MindGame.addScore(n) / setScore(n)  — live score in the corner",
-      "//   MindGame.gameOver()                 — end the round, submit to the leaderboard",
-      "//   MindGame.ai(prompt)                 — Promise<string> when MindGame.aiAvailable",
-      "MindGame.onReady(function (info) {",
-      "  var hi = info.player ? 'Hello @' + info.player.username + '!' : 'Hello guest!';",
-      "  document.querySelector('h1').textContent = hi;",
-      "});",
-      "document.getElementById('btn').addEventListener('click', function () { MindGame.addScore(1); });",
-      "document.getElementById('end').addEventListener('click', function () { MindGame.gameOver(); });",
-      '<\/script>',
-    ].join('\n'),
-  },
-  {
-    id: 'popper',
-    label: '🫧 Bubble Popper — a 30-second arcade game',
-    code: [
-      '<canvas id="c"></canvas>',
-      '<div id="hud" style="position:absolute;top:10px;left:12px;font-size:14px;opacity:.85">30.0s</div>',
-      '<div id="msg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#10141Dcc">',
-      '  <h1 style="margin:0">🫧 Bubble Popper</h1>',
-      '  <p style="margin:0;opacity:.7">Pop as many bubbles as you can in 30 seconds.</p>',
-      '  <button id="go" style="font-size:18px;padding:12px 26px;border-radius:12px;border:none;background:#4FD1E0;cursor:pointer">Play</button>',
-      '</div>',
-      '<script>',
-      "var cv = document.getElementById('c'), cx = cv.getContext('2d');",
-      "var hud = document.getElementById('hud'), msg = document.getElementById('msg'), go = document.getElementById('go');",
-      'var W, H, bubbles, left, running = false, raf;',
-      'function size() { W = cv.width = innerWidth; H = cv.height = innerHeight; }',
-      "addEventListener('resize', size); size();",
-      'function spawn() {',
-      '  var r = 16 + Math.random() * 26;',
-      '  bubbles.push({ x: r + Math.random() * (W - 2 * r), y: H + r, r: r, v: 60 + Math.random() * 110, hue: 150 + Math.random() * 160 });',
-      '}',
-      'function start() {',
-      '  bubbles = []; left = 30; running = true; msg.style.display = "none";',
-      '  MindGame.setScore(0);',
-      '  var last = performance.now();',
-      '  function tick(now) {',
-      '    var dt = Math.min(0.05, (now - last) / 1000); last = now;',
-      '    left -= dt;',
-      '    if (left <= 0) return end();',
-      '    if (Math.random() < dt * 3.2) spawn();',
-      '    cx.clearRect(0, 0, W, H);',
-      '    bubbles = bubbles.filter(function (b) { return b.y + b.r > 0; });',
-      '    bubbles.forEach(function (b) {',
-      '      b.y -= b.v * dt;',
-      '      cx.beginPath(); cx.arc(b.x, b.y, b.r, 0, 7);',
-      '      cx.fillStyle = "hsla(" + b.hue + ",70%,60%,.85)"; cx.fill();',
-      '      cx.beginPath(); cx.arc(b.x - b.r / 3, b.y - b.r / 3, b.r / 4, 0, 7);',
-      '      cx.fillStyle = "#ffffff88"; cx.fill();',
-      '    });',
-      '    hud.textContent = left.toFixed(1) + "s";',
-      '    raf = requestAnimationFrame(tick);',
-      '  }',
-      '  raf = requestAnimationFrame(tick);',
-      '}',
-      'function end() {',
-      '  running = false; cancelAnimationFrame(raf);',
-      '  cx.clearRect(0, 0, W, H);',
-      '  msg.style.display = "flex"; go.textContent = "Play again";',
-      '  msg.querySelector("p").textContent = "Final score: " + MindGame.getScore();',
-      '  MindGame.gameOver();',
-      '}',
-      "addEventListener('pointerdown', function (e) {",
-      '  if (!running) return;',
-      '  for (var i = bubbles.length - 1; i >= 0; i--) {',
-      '    var b = bubbles[i], dx = e.clientX - b.x, dy = e.clientY - b.y;',
-      '    if (dx * dx + dy * dy <= b.r * b.r * 1.4) {',
-      '      bubbles.splice(i, 1);',
-      '      MindGame.addScore(Math.max(1, Math.round(40 - b.r)));',
-      '      break;',
-      '    }',
-      '  }',
-      '});',
-      "go.addEventListener('click', start);",
-      '<\/script>',
-    ].join('\n'),
-  },
-  {
-    id: 'ttt',
-    label: '⭕ Tic Tac Toe — ranked multiplayer + AI opponents',
-    // Server-side rules make this game RANKED out of the box: the same logic
-    // the browser uses to draw the board also runs on the server, where it —
-    // not the players — decides which moves are legal and who won.
-    rules: [
-      'const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];',
-      '',
-      'const Rules = {',
-      '  seats: 2,',
-      '  setup() {',
-      "    return { board: ['','','','','','','','',''], turn: 0 };",
-      '  },',
-      '  move(state, seat, data) {',
-      '    // `seat` is who the SERVER saw send this move — it cannot be forged.',
-      "    if (seat !== state.turn) return { error: 'It is not your turn.' };",
-      '    const i = data && data.cell;',
-      "    if (typeof i !== 'number' || i < 0 || i > 8) return { error: 'That is not a square.' };",
-      "    if (state.board[i]) return { error: 'That square is already taken.' };",
-      '',
-      "    state.board[i] = seat === 0 ? 'X' : 'O';",
-      '    for (const [a, b, c] of LINES) {',
-      '      if (state.board[a] && state.board[a] === state.board[b] && state.board[b] === state.board[c]) {',
-      '        return { state, done: true, winner: seat };',
-      '      }',
-      '    }',
-      '    if (state.board.every(v => v)) return { state, done: true, winner: null }; // draw',
-      '    state.turn = 1 - seat;',
-      '    return { state, next: 1 - seat };',
-      '  },',
-      '};',
-    ].join('\n'),
-    code: [
-      '<div id="app">',
-      '  <div id="head"><span id="status">Tic Tac Toe</span><button id="quit" hidden>Leave match</button></div>',
-      '  <div id="menu">',
-      '    <p class="lead">Play a real person, or take on one of this game\'s AI characters.</p>',
-      '    <div class="row"><button id="quick" class="primary">⚡ Quick match</button>',
-      '    <button id="host">🪑 Open a table</button>',
-      '    <button id="ai">🤖 Play an AI</button></div>',
-      '    <h3>Open tables</h3>',
-      '    <div id="tables"><p class="dim">Nobody is waiting right now — open a table and someone can sit down.</p></div>',
-      '  </div>',
-      '  <div id="boardWrap" hidden><div id="board"></div><div id="sub"></div></div>',
-      '</div>',
-      '<style>',
-      '  #app{max-width:440px;margin:0 auto;padding:18px 16px;font-family:system-ui,sans-serif}',
-      '  /* keep the top-right clear: the platform draws its score pill there */',
-      '  #head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-right:120px}',
-      '  #status{font-size:17px;font-weight:700;flex:1}',
-      '  .lead{opacity:.75;font-size:14px;margin:0 0 12px}',
-      '  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}',
-      '  button{font:inherit;font-size:14px;padding:10px 14px;border-radius:10px;border:1px solid #2a3550;background:#141926;color:#E8ECF4;cursor:pointer}',
-      '  button.primary{background:#4FD1E0;color:#10141D;border-color:#4FD1E0;font-weight:700}',
-      '  button:disabled{opacity:.45;cursor:default}',
-      '  h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin:0 0 8px}',
-      '  .dim{opacity:.55;font-size:13px;margin:0}',
-      '  .table{display:flex;align-items:center;gap:10px;background:#141926;border:1px solid #2a3550;border-radius:10px;padding:8px 10px;margin-bottom:6px}',
-      '  .table b{flex:1;font-size:14px;font-weight:600}',
-      '  .table small{opacity:.55;font-size:12px}',
-      '  #board{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;aspect-ratio:1;margin-bottom:12px}',
-      '  .cell{font-size:min(13vw,52px);font-weight:700;background:#141926;border:1px solid #2a3550;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer}',
-      '  .cell:disabled{cursor:default}',
-      '  .cell.win{background:#4FD1E033;border-color:#4FD1E0}',
-      '  #sub{text-align:center;opacity:.75;font-size:14px;min-height:22px}',
-      '</style>',
-      '<script>',
-      '// A complete multiplayer reference. The platform owns identity and',
-      '// transport: match.send() relays a move, and every message you receive is',
-      '// stamped by the server with who really sent it — so a move can never be',
-      '// forged by another player\'s code.',
-      'var WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];',
-      'var board, match, mark, myTurn, over, unwatch, winLine;',
-      'var el = function (id) { return document.getElementById(id); };',
-      '',
-      'function render(winLine) {',
-      '  var b = el("board"); b.innerHTML = "";',
-      '  board.forEach(function (v, i) {',
-      '    var c = document.createElement("button");',
-      '    c.className = "cell" + (winLine && winLine.indexOf(i) >= 0 ? " win" : "");',
-      '    c.textContent = v || "";',
-      '    c.disabled = !!v || !myTurn || over;',
-      '    c.onclick = function () { play(i); };',
-      '    b.appendChild(c);',
-      '  });',
-      '}',
-      '',
-      'function winner() {',
-      '  for (var i = 0; i < WINS.length; i++) {',
-      '    var w = WINS[i];',
-      '    if (board[w[0]] && board[w[0]] === board[w[1]] && board[w[1]] === board[w[2]]) return { mark: board[w[0]], line: w };',
-      '  }',
-      '  return board.indexOf("") < 0 ? { mark: null, line: null } : null; // null mark = draw',
-      '}',
-      '',
-      '// Apply a move locally, then see whether the game is decided.',
-      '// `mine` marks our own move, already acknowledged by the server: in a',
-      '// ranked match the server\'s "end" can beat our own send() reply back to',
-      '// us, and we must still place the move that won the game.',
-      'function apply(i, m, mine) {',
-      '  if (board[i] || (over && !mine)) return;',
-      '  board[i] = m;',
-      '  var res = winner();',
-      '  if (res) {',
-      '    over = true;',
-      '    winLine = res.line; // remembered so later re-renders keep the highlight',
-      '    myTurn = false;',
-      '    render(winLine);',
-      '    var iWon = res.mark === mark;',
-      '    el("sub").textContent = res.mark === null ? "Draw." : (iWon ? "You win!" : "You lose.");',
-      '    MindGame.setScore(res.mark === null ? 1 : (iWon ? 3 : 0)); // 3/1/0 points',
-      '    MindGame.gameOver();',
-      '    // In a RANKED match the server already reached this verdict from the',
-      '    // moves themselves and has ended the match — clients get no say. In a',
-      '    // casual match, whoever notices first reports it.',
-      '    if (!match.ranked) {',
-      '      var winnerId = res.mark === null ? null',
-      '        : (iWon ? match.you : (match.players.filter(function (p) { return p.id !== match.you; })[0] || {}).id);',
-      '      match.end({ winner: winnerId });',
-      '    }',
-      '    return;',
-      '  }',
-      '  render();',
-      '  turnText();',
-      '}',
-      '',
-      '// Whose turn it is comes from the SERVER (match.isMyTurn), not a local',
-      '// flag — a missed or replayed event would otherwise desync the turn for',
-      '// good and leave both players waiting on each other.',
-      'function syncTurn() {',
-      '  if (!match || !match.turnBased) return; // vs-AI: the opponent is local, keep our own flow',
-      '  myTurn = !over && match.isMyTurn;',
-      '}',
-      '',
-      'function turnText() {',
-      '  if (over) return;',
-      '  el("sub").textContent = myTurn ? "Your move (" + mark + ")" : "Waiting for your opponent…";',
-      '}',
-      '',
-      '// Relay the move FIRST, then resolve it locally. A winning move both',
-      '// sends and ends the match, and the opponent has to receive the move',
-      '// before the end — so we wait for the relay to be acknowledged.',
-      'function play(i) {',
-      '  if (!myTurn || board[i] || over) return;',
-      '  myTurn = false;',
-      '  render(); // lock the board while the move is in flight',
-      '  match.send({ cell: i }).then(function () {',
-      '    apply(i, mark, true);',
-      '    if (!over && match.mode === "vs-ai") setTimeout(aiMove, 500);',
-      '  }).catch(function (err) {',
-      '    syncTurn(); // the move never landed — the server says whose turn it is',
-      '    el("sub").textContent = err.message;',
-      '    render();',
-      '  });',
-      '}',
-      '',
-      '// The AI opponent: ask the model in-character, and fall back to a solid',
-      '// local strategy if AI is off or the answer is unusable.',
-      'function aiMove() {',
-      '  if (over) return;',
-      '  var free = [];',
-      '  board.forEach(function (v, i) { if (!v) free.push(i); });',
-      '  if (!free.length) return;',
-      '  var mine = mark === "X" ? "O" : "X";',
-      '  function finish(i) { apply(i, mine); myTurn = !over; render(); turnText(); }',
-      '  function best() { // win, else block, else centre/corner',
-      '    for (var t = 0; t < 2; t++) {',
-      '      var who = t === 0 ? mine : mark;',
-      '      for (var w = 0; w < WINS.length; w++) {',
-      '        var line = WINS[w], vals = line.map(function (i) { return board[i]; });',
-      '        var open = line.filter(function (i) { return !board[i]; });',
-      '        if (open.length === 1 && vals.filter(function (v) { return v === who; }).length === 2) return open[0];',
-      '      }',
-      '    }',
-      '    var pref = [4, 0, 2, 6, 8, 1, 3, 5, 7];',
-      '    for (var p = 0; p < pref.length; p++) if (!board[pref[p]]) return pref[p];',
-      '    return free[0];',
-      '  }',
-      '  if (!MindGame.aiAvailable) return finish(best());',
-      '  MindGame.ai(',
-      '    "Tic tac toe. Cells 0-8, row-major. Board: [" + board.map(function (v) { return v || "_"; }).join(",") + "]. " +',
-      '    "You are \\"" + mine + "\\". Reply with ONLY the number of your chosen empty cell.",',
-      '    { as: match.persona && match.persona.id }   // answer in character',
-      '  ).then(function (text) {',
-      '    var n = parseInt(String(text).match(/\\d/) ? String(text).match(/\\d/)[0] : "", 10);',
-      '    finish(free.indexOf(n) >= 0 ? n : best());',
-      '  }).catch(function () { finish(best()); });',
-      '}',
-      '',
-      'function begin(m) {',
-      '  match = m;',
-      '  if (unwatch) { unwatch(); unwatch = null; }',
-      '  board = ["", "", "", "", "", "", "", "", ""];',
-      '  over = false;',
-      '  winLine = null;',
-      '  el("quit").hidden = false;',
-      '  m.on("start", function (info) {',
-      '    var opp = info.players.filter(function (p) { return p.id !== m.you; })[0] || {};',
-      '    // X always moves first, so your mark follows who the server chose',
-      '    myTurn = m.isMyTurn;',
-      '    mark = myTurn ? "X" : "O";',
-      '    el("menu").hidden = true;',
-      '    el("boardWrap").hidden = false;',
-      '    el("status").textContent = (m.ranked ? "⚔️ " : "") + "vs " + (opp.isAI ? "🤖 " : "@") + (opp.name || opp.username || "opponent");',
-      '    if (m.persona && m.persona.personality) el("sub").textContent = m.persona.personality;',
-      '    render();',
-      '    setTimeout(turnText, m.persona ? 1600 : 0);',
-      '    if (m.mode === "vs-ai" && !myTurn) setTimeout(aiMove, 700);',
-      '  });',
-      '  m.on("message", function (from, data) {',
-      '    if (!data || typeof data.cell !== "number") return;',
-      '    // Mark by WHO played it (`from` is server-verified), never by assuming',
-      '    // it was the opponent — a reconnect replays your own moves too.',
-      '    syncTurn();',
-      '    apply(data.cell, from === m.you ? mark : (mark === "X" ? "O" : "X"));',
-      '  });',
-      '  // After a dropped connection the server’s turn is the truth: re-read it.',
-      '  m.on("sync", function () { syncTurn(); render(winLine); turnText(); });',
-      '  m.on("leave", function () {',
-      '    if (over) return;',
-      '    // Ranked: the server awards the forfeit itself (after a short grace',
-      '    // period, so a dropped connection can come back). Casual: we claim it.',
-      '    if (m.ranked) { el("sub").textContent = "Your opponent left — waiting for the server to award the match…"; return; }',
-      '    over = true;',
-      '    el("sub").textContent = "Your opponent left — you win by forfeit.";',
-      '    MindGame.setScore(3); MindGame.gameOver();',
-      '    m.end({ winner: m.you });',
-      '  });',
-      '  m.on("end", function () { over = true; render(winLine); });',
-      '  if (m.status === "waiting") {',
-      '    el("menu").hidden = true;',
-      '    el("boardWrap").hidden = false;',
-      '    el("board").innerHTML = "";',
-      '    el("status").textContent = "Waiting at your table…";',
-      '    el("sub").textContent = "You\'re in the lobby — the next player who sits down starts the game.";',
-      '  }',
-      '}',
-      '',
-      'function renderTables(tables) {',
-      '  var box = el("tables");',
-      '  var open = tables.filter(function (t) { return t.host.username !== (MindGame.player || {}).username; });',
-      '  if (!open.length) { box.innerHTML = "<p class=\\"dim\\">Nobody is waiting right now — open a table and someone can sit down.</p>"; return; }',
-      '  box.innerHTML = "";',
-      '  open.forEach(function (t) {',
-      '    var row = document.createElement("div"); row.className = "table";',
-      '    var who = document.createElement("b"); who.textContent = t.host.name || "@" + t.host.username;',
-      '    var age = document.createElement("small");',
-      '    var secs = Math.max(0, Math.round((Date.now() - t.waitingSince) / 1000));',
-      '    age.textContent = "waiting " + (secs < 60 ? secs + "s" : Math.round(secs / 60) + "m");',
-      '    var sit = document.createElement("button"); sit.className = "primary"; sit.textContent = "Sit down";',
-      '    sit.onclick = function () { MindGame.match({ mode: "pvp", join: t.id }).then(begin).catch(oops); };',
-      '    row.appendChild(who); row.appendChild(age); row.appendChild(sit);',
-      '    box.appendChild(row);',
-      '  });',
-      '}',
-      '',
-      'function oops(err) { el("sub").textContent = err.message; el("menu").hidden = false; el("boardWrap").hidden = true; }',
-      '',
-      'el("quick").onclick = function () { MindGame.match({ mode: "pvp" }).then(begin).catch(oops); };',
-      'el("host").onclick = function () { MindGame.match({ mode: "pvp", host: true }).then(begin).catch(oops); };',
-      'el("ai").onclick = function () { MindGame.match({ mode: "vs-ai" }).then(begin).catch(oops); };',
-      'el("quit").onclick = function () { if (match) match.leave(); location.reload(); };',
-      '',
-      'MindGame.onReady(function (info) {',
-      '  MindGame.setScore(0);',
-      '  if (!info.player) {',
-      '    el("status").textContent = "Sign in to play";',
-      '    el("menu").innerHTML = "<p class=\\"lead\\">Multiplayer needs an account — sign in on MindMapShare to join the lobby.</p>";',
-      '    return;',
-      '  }',
-      '  unwatch = MindGame.onLobby(renderTables); // live pool of open tables',
-      '});',
-      '<\/script>',
-    ].join('\n'),
-  },
-  {
-    id: 'c4',
-    label: '🔴 Connect 4 — ranked multiplayer, four in a row',
-    // Server-side rules: the same drop-and-check logic the browser draws with
-    // also runs on the server, where it — not the players — decides whose turn
-    // it is, whether a move is legal, and who won.
-    rules: [
-      'const COLS = 7, ROWS = 6;',
-      'const DIRS = [[0, 1], [1, 0], [1, 1], [1, -1]]; // →  ↓  ↘  ↗',
-      '',
-      '// Lowest empty row in a column, or -1 when the column is full.',
-      'function dropRow(board, col) {',
-      '  for (let r = ROWS - 1; r >= 0; r--) if (!board[r * COLS + col]) return r;',
-      '  return -1;',
-      '}',
-      '',
-      '// Does the disc just played at (row, col) complete a line of four?',
-      'function wins(board, row, col) {',
-      '  const disc = board[row * COLS + col];',
-      '  for (const [dr, dc] of DIRS) {',
-      '    let n = 1;',
-      '    for (const step of [1, -1]) {',
-      '      let r = row + dr * step, c = col + dc * step;',
-      '      while (r >= 0 && r < ROWS && c >= 0 && c < COLS && board[r * COLS + c] === disc) {',
-      '        n++; r += dr * step; c += dc * step;',
-      '      }',
-      '    }',
-      '    if (n >= 4) return true;',
-      '  }',
-      '  return false;',
-      '}',
-      '',
-      'const Rules = {',
-      '  seats: 2,',
-      '  // 0 = empty, 1 = seat 0’s disc, 2 = seat 1’s. Seat 0 opens.',
-      '  setup() { return { board: new Array(COLS * ROWS).fill(0), turn: 0 }; },',
-      '  move(state, seat, data) {',
-      '    // `seat` is who the SERVER saw send this move — it cannot be forged,',
-      '    // so this one check is what actually enforces taking turns.',
-      "    if (seat !== state.turn) return { error: 'It is not your turn.' };",
-      '    const col = data && data.col;',
-      "    if (typeof col !== 'number' || col < 0 || col >= COLS) return { error: 'That is not a column.' };",
-      '    const row = dropRow(state.board, col);',
-      "    if (row < 0) return { error: 'That column is full.' };",
-      '',
-      '    state.board[row * COLS + col] = seat + 1;',
-      '    if (wins(state.board, row, col)) return { state, done: true, winner: seat };',
-      '    if (state.board.every(v => v)) return { state, done: true, winner: null }; // draw',
-      '    state.turn = 1 - seat;',
-      '    return { state, next: 1 - seat };',
-      '  },',
-      '};',
-    ].join('\n'),
-    code: [
-      '<div id="app">',
-      '  <div id="head"><span id="status">Connect 4</span><button id="quit" hidden>Leave match</button></div>',
-      '  <div id="menu">',
-      '    <p class="lead">Drop a disc into a column. First to four in a row — across, down, or diagonally — wins.</p>',
-      '    <div class="row"><button id="quick" class="primary">⚡ Quick match</button>',
-      '    <button id="host">🪑 Open a table</button>',
-      '    <button id="ai">🤖 Play an AI</button></div>',
-      '    <h3>Open tables</h3>',
-      '    <div id="tables"><p class="dim">Nobody is waiting right now — open a table and someone can sit down.</p></div>',
-      '  </div>',
-      '  <div id="boardWrap" hidden>',
-      '    <div id="you" class="dim"></div>',
-      '    <div id="board"></div>',
-      '    <div id="sub"></div>',
-      '  </div>',
-      '</div>',
-      '<style>',
-      '  #app{max-width:520px;margin:0 auto;padding:16px;font-family:system-ui,sans-serif}',
-      '  /* keep the top-right clear: the platform draws its score pill there */',
-      '  #head{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-right:120px}',
-      '  #status{font-size:17px;font-weight:700;flex:1}',
-      '  .lead{opacity:.75;font-size:14px;margin:0 0 12px}',
-      '  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}',
-      '  button{font:inherit;font-size:14px;padding:10px 14px;border-radius:10px;border:1px solid #2a3550;background:#141926;color:#E8ECF4;cursor:pointer}',
-      '  button.primary{background:#4FD1E0;color:#10141D;border-color:#4FD1E0;font-weight:700}',
-      '  button:disabled{opacity:.45;cursor:default}',
-      '  h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin:0 0 8px}',
-      '  .dim{opacity:.55;font-size:13px;margin:0}',
-      '  .table{display:flex;align-items:center;gap:10px;background:#141926;border:1px solid #2a3550;border-radius:10px;padding:8px 10px;margin-bottom:6px}',
-      '  .table b{flex:1;font-size:14px;font-weight:600}',
-      '  .table small{opacity:.55;font-size:12px}',
-      '  #you{margin-bottom:8px;font-size:13px}',
-      '  #board{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;background:#1D2A52;padding:8px;border-radius:14px;margin-bottom:10px}',
-      '  .cell{aspect-ratio:1;width:100%;padding:0;border:none;border-radius:50%;background:#0C0F16;transition:background .12s}',
-      '  .cell:not(:disabled){cursor:pointer}',
-      '  .cell:not(:disabled):hover{background:#243056}',
-      '  .cell.p1{background:#F0B84A}',
-      '  .cell.p2{background:#F07A8F}',
-      '  .cell.win{box-shadow:0 0 0 3px #4FD1E0, 0 0 14px #4FD1E0aa}',
-      '  .disc{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-1px;margin-right:4px}',
-      '  #sub{text-align:center;font-size:14px;opacity:.85;min-height:22px}',
-      '</style>',
-      '<script>',
-      '// Multiplayer Connect 4. The platform handles identity, matchmaking and',
-      '// transport; this code just draws the board and sends the column it played.',
-      '// Turn order and the result are enforced by the server-side rules, so a',
-      '// tampered client cannot move twice or invent a win.',
-      'var COLS = 7, ROWS = 6;',
-      'var DIRS = [[0,1],[1,0],[1,1],[1,-1]];',
-      'var board, match, myDisc, myTurn, over, winLine, unwatch;',
-      'var el = function (id) { return document.getElementById(id); };',
-      '',
-      'function dropRow(b, col) {',
-      '  for (var r = ROWS - 1; r >= 0; r--) if (!b[r * COLS + col]) return r;',
-      '  return -1; // full',
-      '}',
-      '',
-      '// The four-or-more cells through (row,col), or null. Used to light up the win.',
-      'function lineThrough(b, row, col) {',
-      '  var disc = b[row * COLS + col];',
-      '  for (var d = 0; d < DIRS.length; d++) {',
-      '    var dr = DIRS[d][0], dc = DIRS[d][1], cells = [row * COLS + col];',
-      '    for (var step = -1; step <= 1; step += 2) {',
-      '      var r = row + dr * step, c = col + dc * step;',
-      '      while (r >= 0 && r < ROWS && c >= 0 && c < COLS && b[r * COLS + c] === disc) {',
-      '        cells.push(r * COLS + c); r += dr * step; c += dc * step;',
-      '      }',
-      '    }',
-      '    if (cells.length >= 4) return cells;',
-      '  }',
-      '  return null;',
-      '}',
-      '',
-      'function render() {',
-      '  var wrap = el("board"); wrap.innerHTML = "";',
-      '  for (var i = 0; i < ROWS * COLS; i++) {',
-      '    var col = i % COLS, v = board[i];',
-      '    var cell = document.createElement("button");',
-      '    cell.className = "cell" + (v === 1 ? " p1" : v === 2 ? " p2" : "") +',
-      '      (winLine && winLine.indexOf(i) >= 0 ? " win" : "");',
-      '    cell.disabled = over || !myTurn || dropRow(board, col) < 0;',
-      '    cell.title = "Column " + (col + 1);',
-      '    cell.onclick = (function (c) { return function () { drop(c); }; })(col);',
-      '    wrap.appendChild(cell);',
-      '  }',
-      '}',
-      '',
-      '// Whose turn it is comes from the SERVER (match.isMyTurn), not from a',
-      '// local flag we toggle — a missed or replayed event would otherwise',
-      '// desync the turn permanently and leave both players waiting.',
-      'function syncTurn() {',
-      '  if (!match || !match.turnBased) return; // vs-AI: the opponent is local, keep our own flow',
-      '  myTurn = !over && match.isMyTurn;',
-      '}',
-      '',
-      'function turnText() {',
-      '  if (over) return;',
-      '  el("sub").textContent = myTurn ? "Your turn — pick a column" : "Waiting for your opponent…";',
-      '}',
-      '',
-      '// Place a disc and see whether that ends the game. `mine` marks our own',
-      '// move, already acknowledged by the server: in a ranked match the server’s',
-      '// "end" can beat our own send() reply back to us, and we must still place',
-      '// the disc that won.',
-      'function apply(col, disc, mine) {',
-      '  var row = dropRow(board, col);',
-      '  if (row < 0 || (over && !mine)) return;',
-      '  board[row * COLS + col] = disc;',
-      '  var line = lineThrough(board, row, col);',
-      '  var full = board.every(function (v) { return v; });',
-      '  if (line || full) {',
-      '    over = true; myTurn = false; winLine = line;',
-      '    render();',
-      '    var iWon = !!line && disc === myDisc;',
-      '    el("sub").textContent = line',
-      '      ? (iWon ? "Four in a row — you win! 🎉" : "Your opponent connected four.")',
-      '      : "The board is full — it’s a draw.";',
-      '    MindGame.setScore(line ? (iWon ? 3 : 0) : 1); // 3 win / 1 draw / 0 loss',
-      '    MindGame.gameOver();',
-      '    // Ranked: the server already reached this verdict from the moves and',
-      '    // ended the match. Casual: whoever notices first reports it.',
-      '    if (!match.ranked) {',
-      '      var opp = match.players.filter(function (p) { return p.id !== match.you; })[0] || {};',
-      '      match.end({ winner: !line ? null : (iWon ? match.you : opp.id) });',
-      '    }',
-      '    return;',
-      '  }',
-      '  syncTurn();',
-      '  render();',
-      '  turnText();',
-      '}',
-      '',
-      '// Relay first, then resolve locally — a winning move both sends and ends',
-      '// the match, and the opponent must receive the move before the result.',
-      'function drop(col) {',
-      '  if (!myTurn || over || dropRow(board, col) < 0) return;',
-      '  myTurn = false;',
-      '  render(); // lock the board while the move is in flight',
-      '  match.send({ col: col }).then(function () {',
-      '    apply(col, myDisc, true);',
-      '    if (!over && match.mode === "vs-ai") setTimeout(aiMove, 450);',
-      '  }).catch(function (err) {',
-      '    syncTurn(); // the move never landed — the server says whose turn it is',
-      '    el("sub").textContent = err.message;',
-      '    render();',
-      '  });',
-      '}',
-      '',
-      '// The AI opponent: ask the model in character, and fall back to a solid',
-      '// local strategy (win, block, prefer the centre) if AI is off or unusable.',
-      'function aiMove() {',
-      '  if (over) return;',
-      '  var aiDisc = myDisc === 1 ? 2 : 1;',
-      '  var free = [];',
-      '  for (var c = 0; c < COLS; c++) if (dropRow(board, c) >= 0) free.push(c);',
-      '  if (!free.length) return;',
-      '  function best() {',
-      '    for (var t = 0; t < 2; t++) {',
-      '      var disc = t === 0 ? aiDisc : myDisc; // take the win, else block theirs',
-      '      for (var i = 0; i < free.length; i++) {',
-      '        var c = free[i], r = dropRow(board, c);',
-      '        board[r * COLS + c] = disc;',
-      '        var won = !!lineThrough(board, r, c);',
-      '        board[r * COLS + c] = 0;',
-      '        if (won) return c;',
-      '      }',
-      '    }',
-      '    var pref = [3, 2, 4, 1, 5, 0, 6];',
-      '    for (var p = 0; p < pref.length; p++) if (free.indexOf(pref[p]) >= 0) return pref[p];',
-      '    return free[0];',
-      '  }',
-      '  function finish(c) { apply(c, aiDisc); myTurn = !over; render(); turnText(); }',
-      '  if (!MindGame.aiAvailable) return finish(best());',
-      '  var rows = [];',
-      '  for (var r = 0; r < ROWS; r++) {',
-      '    var line = "";',
-      '    for (var c2 = 0; c2 < COLS; c2++) { var v = board[r * COLS + c2]; line += v === aiDisc ? "A" : v ? "H" : "."; }',
-      '    rows.push(line);',
-      '  }',
-      '  MindGame.ai(',
-      '    "Connect 4 on a 7-wide, 6-tall board. Rows top to bottom: " + rows.join(" / ") + ". " +',
-      '    "You are A, your opponent is H, . is empty. Open columns (0-6): " + free.join(",") + ". " +',
-      '    "Reply with ONLY the column number you drop into.",',
-      '    { as: match.persona && match.persona.id }',
-      '  ).then(function (text) {',
-      '    var m = String(text).match(/[0-6]/);',
-      '    var n = m ? parseInt(m[0], 10) : -1;',
-      '    finish(free.indexOf(n) >= 0 ? n : best());',
-      '  }).catch(function () { finish(best()); });',
-      '}',
-      '',
-      'function begin(m) {',
-      '  match = m;',
-      '  if (unwatch) { unwatch(); unwatch = null; }',
-      '  board = new Array(ROWS * COLS).fill(0);',
-      '  over = false; winLine = null;',
-      '  el("quit").hidden = false;',
-      '  m.on("start", function (info) {',
-      '    var opp = info.players.filter(function (p) { return p.id !== m.you; })[0] || {};',
-      '    // seat 0 opens and plays disc 1, so whoever moves first is player one',
-      '    myTurn = m.isMyTurn;',
-      '    myDisc = myTurn ? 1 : 2;',
-      '    el("menu").hidden = true;',
-      '    el("boardWrap").hidden = false;',
-      '    el("status").textContent = (m.ranked ? "⚔️ " : "") + "vs " +',
-      '      (opp.isAI ? "🤖 " : "@") + (opp.name || opp.username || "opponent");',
-      '    el("you").innerHTML = \'You are <span class="disc" style="background:\' +',
-      '      (myDisc === 1 ? "#F0B84A" : "#F07A8F") + \'"></span>\' + (myDisc === 1 ? "yellow" : "pink");',
-      '    render();',
-      '    if (m.persona && m.persona.personality) {',
-      '      el("sub").textContent = m.persona.personality;',
-      '      setTimeout(turnText, 1600);',
-      '    } else turnText();',
-      '    if (m.mode === "vs-ai" && !myTurn) setTimeout(aiMove, 700);',
-      '  });',
-      '  m.on("message", function (from, data) {',
-      '    if (!data || typeof data.col !== "number") return;',
-      '    // Colour the disc by WHO played it (`from` is server-verified), never',
-      '    // by assuming it was the opponent — a reconnect replays your own',
-      '    // moves too, and guessing would paint them the wrong colour.',
-      '    syncTurn();',
-      '    apply(data.col, from === m.you ? myDisc : (myDisc === 1 ? 2 : 1));',
-      '  });',
-      '  // A dropped connection reconnects and replays what we missed; the',
-      '  // server’s turn is the truth afterwards, so re-read it and redraw.',
-      '  m.on("sync", function () { syncTurn(); render(); turnText(); });',
-      '  m.on("leave", function () {',
-      '    if (over) return;',
-      '    if (m.ranked) { el("sub").textContent = "Your opponent left — waiting for the server to award the match…"; return; }',
-      '    over = true;',
-      '    el("sub").textContent = "Your opponent left — you win by forfeit.";',
-      '    MindGame.setScore(3); MindGame.gameOver();',
-      '    m.end({ winner: m.you });',
-      '  });',
-      '  m.on("end", function () { over = true; render(); });',
-      '  if (m.status === "waiting") {',
-      '    el("menu").hidden = true;',
-      '    el("boardWrap").hidden = false;',
-      '    el("board").innerHTML = "";',
-      '    el("status").textContent = "Waiting at your table…";',
-      '    el("sub").textContent = "You’re in the lobby — the next player who sits down starts the game.";',
-      '  }',
-      '}',
-      '',
-      'function renderTables(tables) {',
-      '  var box = el("tables");',
-      '  var mine = (MindGame.player || {}).username;',
-      '  var open = tables.filter(function (t) { return t.host.username !== mine; });',
-      '  if (!open.length) { box.innerHTML = "<p class=\\"dim\\">Nobody is waiting right now — open a table and someone can sit down.</p>"; return; }',
-      '  box.innerHTML = "";',
-      '  open.forEach(function (t) {',
-      '    var row = document.createElement("div"); row.className = "table";',
-      '    var who = document.createElement("b"); who.textContent = t.host.name || "@" + t.host.username;',
-      '    var age = document.createElement("small");',
-      '    var secs = Math.max(0, Math.round((Date.now() - t.waitingSince) / 1000));',
-      '    age.textContent = "waiting " + (secs < 60 ? secs + "s" : Math.round(secs / 60) + "m");',
-      '    var sit = document.createElement("button"); sit.className = "primary"; sit.textContent = "Sit down";',
-      '    sit.onclick = function () { MindGame.match({ mode: "pvp", join: t.id }).then(begin).catch(oops); };',
-      '    row.appendChild(who); row.appendChild(age); row.appendChild(sit);',
-      '    box.appendChild(row);',
-      '  });',
-      '}',
-      '',
-      'function oops(err) { el("sub").textContent = err.message; el("menu").hidden = false; el("boardWrap").hidden = true; }',
-      '',
-      'el("quick").onclick = function () { MindGame.match({ mode: "pvp" }).then(begin).catch(oops); };',
-      'el("host").onclick = function () { MindGame.match({ mode: "pvp", host: true }).then(begin).catch(oops); };',
-      'el("ai").onclick = function () { MindGame.match({ mode: "vs-ai" }).then(begin).catch(oops); };',
-      'el("quit").onclick = function () { if (match) match.leave(); location.reload(); };',
-      '',
-      'MindGame.onReady(function (info) {',
-      '  MindGame.setScore(0);',
-      '  if (!info.player) {',
-      '    el("status").textContent = "Sign in to play";',
-      '    el("menu").innerHTML = "<p class=\\"lead\\">Multiplayer needs an account — sign in on MindMapShare to join the lobby.</p>";',
-      '    return;',
-      '  }',
-      '  unwatch = MindGame.onLobby(renderTables); // live pool of open tables',
-      '});',
-      '<\/script>',
-    ].join('\n'),
-  },
-  {
-    id: 'quiz',
-    label: '🧠 AI Trivia — questions written by AI as you play',
-    code: [
-      '<div style="max-width:520px;margin:0 auto;padding:26px 18px;display:flex;flex-direction:column;gap:14px;height:100%;box-sizing:border-box">',
-      '  <div id="prog" style="opacity:.6;font-size:13px"></div>',
-      '  <h2 id="q" style="margin:0;line-height:1.35">Loading…</h2>',
-      '  <div id="opts" style="display:flex;flex-direction:column;gap:8px"></div>',
-      '  <div id="note" style="opacity:.7;font-size:13px"></div>',
-      '</div>',
-      '<script>',
-      '// 5 rounds; each correct answer = 100 points. With AI available the',
-      '// questions are generated fresh; otherwise a built-in bank is used.',
-      'var BANK = [',
-      '  { q: "Which planet has the most moons?", a: ["Saturn", "Earth", "Mars", "Venus"], c: 0 },',
-      '  { q: "What does CPU stand for?", a: ["Central Processing Unit", "Computer Power Unit", "Core Program Utility", "Control Panel Unit"], c: 0 },',
-      '  { q: "Which ocean is the largest?", a: ["Pacific", "Atlantic", "Indian", "Arctic"], c: 0 },',
-      '  { q: "Who painted the Mona Lisa?", a: ["Leonardo da Vinci", "Michelangelo", "Raphael", "Rembrandt"], c: 0 },',
-      '  { q: "What is the chemical symbol for gold?", a: ["Au", "Ag", "Go", "Gd"], c: 0 },',
-      '];',
-      'var round = 0, total = 5, used = [];',
-      'var qEl = document.getElementById("q"), optsEl = document.getElementById("opts");',
-      'var progEl = document.getElementById("prog"), noteEl = document.getElementById("note");',
-      'function shuffle(item) {',
-      '  var right = item.a[item.c];',
-      '  var a = item.a.slice().sort(function () { return Math.random() - 0.5; });',
-      '  return { q: item.q, a: a, c: a.indexOf(right) };',
-      '}',
-      'function fromBank() {',
-      '  var pool = BANK.filter(function (_, i) { return used.indexOf(i) < 0; });',
-      '  var i = BANK.indexOf(pool[Math.floor(Math.random() * pool.length)]);',
-      '  used.push(i); return shuffle(BANK[i]);',
-      '}',
-      'function nextQuestion() {',
-      '  round++;',
-      '  if (round > total) {',
-      '    qEl.textContent = "Done! Final score: " + MindGame.getScore();',
-      '    optsEl.innerHTML = ""; progEl.textContent = ""; noteEl.textContent = "";',
-      '    MindGame.gameOver();',
-      '    var b = document.createElement("button"); style(b); b.textContent = "Play again";',
-      '    b.onclick = function () { round = 0; used = []; MindGame.setScore(0); nextQuestion(); };',
-      '    optsEl.appendChild(b);',
-      '    return;',
-      '  }',
-      '  progEl.textContent = "Question " + round + " of " + total + " · Score " + MindGame.getScore();',
-      '  qEl.textContent = "Loading…"; optsEl.innerHTML = ""; noteEl.textContent = "";',
-      '  if (MindGame.aiAvailable) {',
-      '    MindGame.ai(',
-      '      "Write one fun multiple-choice trivia question (medium difficulty, any topic). " +',
-      '      "Reply with ONLY this JSON: {\\"q\\":\\"question\\",\\"a\\":[\\"opt1\\",\\"opt2\\",\\"opt3\\",\\"opt4\\"],\\"c\\":indexOfCorrect}"',
-      '    ).then(function (text) {',
-      '      var item; try { item = JSON.parse(text); } catch (e) {}',
-      '      ask(item && item.q && item.a && item.a.length === 4 ? shuffle(item) : fromBank());',
-      '    }).catch(function () { ask(fromBank()); });',
-      '  } else { ask(fromBank()); }',
-      '}',
-      'function style(b) {',
-      '  b.style.cssText = "text-align:left;font-size:15px;padding:12px 14px;border-radius:10px;border:1px solid #2a3550;background:#141926;color:#E8ECF4;cursor:pointer";',
-      '}',
-      'function ask(item) {',
-      '  qEl.textContent = item.q;',
-      '  item.a.forEach(function (opt, i) {',
-      '    var b = document.createElement("button"); style(b); b.textContent = opt;',
-      '    b.onclick = function () {',
-      '      var right = i === item.c;',
-      '      if (right) MindGame.addScore(100);',
-      '      noteEl.textContent = right ? "✓ Correct!" : "✗ It was: " + item.a[item.c];',
-      '      Array.prototype.forEach.call(optsEl.children, function (x) { x.disabled = true; });',
-      '      setTimeout(nextQuestion, 1100);',
-      '    };',
-      '    optsEl.appendChild(b);',
-      '  });',
-      '}',
-      'MindGame.onReady(function () { MindGame.setScore(0); nextQuestion(); });',
-      '<\/script>',
-    ].join('\n'),
-  },
-];
-
-/* ---------- shared state ---------- */
-let gameEdit = null;   // { id, meta } — the game open in the editor
-let gameEditDirty = false;
-let gamePlay = null;   // { id, meta, owner, isOwner, signedIn, src } — the game open in the player
-let gamePreviewOn = false; // the editor preview is running the saved code
-
-const gpFrame = $('#gpFrame');
-const gePreview = $('#gePreview');
-
-function playerRef() {
-  if (!me) return null;
-  return { username: me.username, name: me.showDisplayName && me.displayName ? me.displayName : null };
-}
-
-function fmtScore(n) {
-  n = Number(n) || 0;
-  return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-/* ---------- the postMessage bridge (player + editor preview) ----------
-   The host page is the only side with credentials: it holds the session
-   cookie, opens the match/lobby SSE streams, and makes every API call the
-   game asks for. Game code just sends and receives moves — the server
-   stamps the verified sender, so it can't claim to be anyone else. */
-let bridge = null; // { mode, gameId, matchId, matchEs, lobbyEs } for the running frame
-
-function bridgeFrame(mode) { return mode === 'play' ? gpFrame : gePreview; }
-
-function postToGame(mode, msg) {
-  const f = bridgeFrame(mode);
-  try { if (f.contentWindow) f.contentWindow.postMessage(msg, '*'); } catch { /* frame gone */ }
-}
-
-// Drop any match/lobby streams held for a frame that's being replaced or closed.
-function resetBridge() {
-  if (!bridge) return;
-  if (bridge.matchEs) bridge.matchEs.close();
-  if (bridge.lobbyEs) bridge.lobbyEs.close();
-  // tell the server we've left an unfinished match so the table clears
-  if (bridge.matchId) api('/api/match/' + bridge.matchId + '/leave', 'POST').catch(() => {});
-  bridge = null;
-}
-
-window.addEventListener('message', e => {
-  const d = e.data;
-  if (!d || typeof d !== 'object' || !d.mg) return;
-  // only trust our own two frames, and only while their game is open
-  let mode = null, gameId = null;
-  if (gamePlay && e.source === gpFrame.contentWindow) { mode = 'play'; gameId = gamePlay.id; }
-  else if (gameEdit && gamePreviewOn && e.source === gePreview.contentWindow) { mode = 'preview'; gameId = gameEdit.id; }
-  if (!mode) return;
-  const reply = msg => { try { e.source.postMessage(msg, '*'); } catch { /* frame gone */ } };
-  const ack = (id, extra) => reply(Object.assign({ mg: 'bridge-ack', id, ok: true }, extra || {}));
-  const nack = (id, error) => reply({ mg: 'bridge-ack', id, ok: false, error });
-
-  if (d.mg === 'ready') {
-    reply({ mg: 'init', player: playerRef(), aiAvailable: !!(me && me.aiEnabled) });
-  } else if (d.mg === 'score') {
-    setGameScorePill(mode, Number(d.value) || 0);
-  } else if (d.mg === 'over') {
-    onGameOver(mode, gameId, Number(d.score) || 0);
-  } else if (d.mg === 'ai') {
-    relayGameAi(gameId, d, reply);
-  } else if (d.mg === 'match') {
-    startMatchForGame(mode, gameId, d, ack, nack);
-  } else if (d.mg === 'match-send') {
-    if (!bridge || !bridge.matchId) return nack(d.id, 'You are not in a match.');
-    api('/api/match/' + bridge.matchId + '/move', 'POST', { data: d.data })
-      .then(r => ack(d.id, { seq: r.seq, turn: r.turn }))
-      .catch(err => nack(d.id, err.message));
-  } else if (d.mg === 'match-end') {
-    if (!bridge || !bridge.matchId) return nack(d.id, 'You are not in a match.');
-    api('/api/match/' + bridge.matchId + '/end', 'POST', { winner: d.winner === undefined ? null : d.winner })
-      .then(() => ack(d.id))
-      .catch(err => nack(d.id, err.message));
-  } else if (d.mg === 'match-leave') {
-    resetBridge();
-  } else if (d.mg === 'lobby') {
-    api('/api/games/' + gameId + '/lobby')
-      .then(r => ack(d.id, { tables: r.tables }))
-      .catch(err => nack(d.id, err.message));
-  } else if (d.mg === 'lobby-watch') {
-    watchLobby(mode, gameId);
-  } else if (d.mg === 'lobby-unwatch') {
-    if (bridge && bridge.lobbyEs) { bridge.lobbyEs.close(); bridge.lobbyEs = null; }
-  }
-});
-
-// Sit down for a match on the game's behalf, then wire its live stream.
-async function startMatchForGame(mode, gameId, d, ack, nack) {
-  if (!me) return nack(d.id, 'Sign in to play against other people.');
-  const opts = (d.opts && typeof d.opts === 'object') ? d.opts : {};
-  resetBridge();
-  try {
-    const r = await api('/api/games/' + gameId + '/match', 'POST', {
-      mode: opts.mode === 'vs-ai' ? 'vs-ai' : 'pvp',
-      join: opts.join ? String(opts.join) : undefined,
-      host: !!opts.host,
-      personaId: opts.personaId ? String(opts.personaId) : undefined,
-      turnBased: opts.turnBased,
-    });
-    const b = { mode, gameId, matchId: r.match.id, you: r.match.you, matchEs: null, lobbyEs: bridge ? bridge.lobbyEs : null };
-    bridge = b;
-    ack(d.id, { match: r.match, persona: r.persona || null });
-    // live match events → the game, tagged with the match they belong to
-    const es = new EventSource('/api/match/' + r.match.id + '/stream');
-    b.matchEs = es;
-    const forward = ev => es.addEventListener(ev, msg => {
-      let data; try { data = JSON.parse(msg.data); } catch { return; }
-      if (bridge !== b) return; // a newer match replaced this one
-      postToGame(mode, { mg: 'match-event', matchId: b.matchId, event: ev, data });
-      if (ev === 'end' || ev === 'gone') showMatchOutcome(mode, b, data, ev);
-    });
-    ['message', 'start', 'leave', 'end', 'gone'].forEach(forward);
-    // `hello` carries the full state + any moves already made (reconnect-safe)
-    es.addEventListener('hello', msg => {
-      let data; try { data = JSON.parse(msg.data); } catch { return; }
-      if (bridge !== b) return;
-      postToGame(mode, { mg: 'match-event', matchId: b.matchId, event: 'sync', data });
-    });
-  } catch (err) {
-    nack(d.id, err.message);
-  }
-}
-
-function watchLobby(mode, gameId) {
-  if (!bridge) bridge = { mode, gameId, matchId: null, matchEs: null, lobbyEs: null };
-  if (bridge.lobbyEs) return;
-  const b = bridge;
-  const es = new EventSource('/api/games/' + gameId + '/lobby/stream');
-  b.lobbyEs = es;
-  es.addEventListener('tables', msg => {
-    let data; try { data = JSON.parse(msg.data); } catch { return; }
-    if (bridge !== b) return;
-    postToGame(mode, { mg: 'lobby', tables: data.tables || [] });
-  });
-}
-
-// Surface a match result in the platform chrome too, so the outcome is visible
-// even if the game's own UI is subtle about it.
-function showMatchOutcome(mode, b, data, ev) {
-  if (ev === 'gone') { gameToast('The match ended — your opponent left.', 2); b.matchId = null; return; }
-  const winner = data && data.winner;
-  let text = winner === null || winner === undefined ? '🤝 Match drawn.'
-    : winner === b.you ? '🏆 You won the match!' : 'Match over — better luck next time.';
-  if (data && data.forfeitBy && data.forfeitBy !== b.you) text = '🏆 You win — your opponent left.';
-  if (data && data.resigned === b.you) text = 'You resigned.';
-  // ranked matches move an Elo rating; show the change that just happened
-  const mine = data && Array.isArray(data.ratings) && data.ratings.find(r => r.playerId === b.you);
-  if (mine) text += '  ' + (mine.delta >= 0 ? '+' : '') + mine.delta + ' → ' + mine.after;
-  gameToast(text, 2); // the match verdict outranks the round's score message
-  b.matchId = null; // finished: nothing to leave
-  if (mode === 'play' && gamePlay) refreshLeaderboard(gamePlay.id);
-}
-
-async function refreshLeaderboard(gameId) {
-  try {
-    const r = await api('/api/games/' + gameId + '/leaderboard');
-    if (gamePlay && gamePlay.id === gameId) renderLeaderboard(r.leaderboard);
-  } catch { /* keep whatever is shown */ }
-}
-
-function setGameScorePill(mode, value) {
-  const pill = mode === 'play' ? $('#gpScore') : $('#geScore');
-  pill.hidden = false;
-  pill.textContent = 'Score: ' + fmtScore(value);
-}
-
-async function relayGameAi(gameId, d, reply) {
-  const fail = err => reply({ mg: 'ai-result', id: d.id, ok: false, error: err });
-  if (!me) return fail('Sign in to use AI in games.');
-  try {
-    const r = await api('/api/games/' + gameId + '/ai', 'POST', {
-      prompt: String(d.prompt || '').slice(0, 4000),
-      system: String(d.system || '').slice(0, 2000),
-      as: d.as ? String(d.as) : undefined, // answer in a persona's character
-    });
-    reply({ mg: 'ai-result', id: d.id, ok: true, text: r.text });
-  } catch (err) {
-    fail(err.message);
-  }
-}
-
-// A round ended. In the player, submit to the leaderboard (signed-in) and show
-// where the score landed; in the editor preview, just report — test runs while
-// building a game shouldn't pollute its leaderboard.
-async function onGameOver(mode, gameId, score) {
-  setGameScorePill(mode, score);
-  if (mode === 'preview') {
-    gameToast('Round over — score ' + fmtScore(score) + '. (Preview runs don\'t post to the leaderboard.)');
-    return;
-  }
-  if (!me) {
-    gameToast('Round over — score ' + fmtScore(score) + '. Sign in to get on the leaderboard!');
-    return;
-  }
-  try {
-    const r = await api('/api/games/' + gameId + '/score', 'POST', { score });
-    renderLeaderboard(r.leaderboard);
-    const mine = r.leaderboard.mine;
-    gameToast(r.improved
-      ? '🏆 New personal best: ' + fmtScore(score) + (mine ? ' — rank #' + mine.rank : '')
-      : 'Round over — score ' + fmtScore(score) + (mine ? '. Your best: ' + fmtScore(mine.best) + ' (#' + mine.rank + ')' : ''));
-  } catch (err) {
-    gameToast('Score not saved: ' + err.message);
-  }
-}
-
-let gameToastTimer = null;
-let gePreviewToast = null; // the editor stage gets its own toast node on demand
-let lastToast = { at: 0, priority: 0 };
-// A round ending can produce two messages at once — the score submission and
-// the match verdict. Priority keeps the more important one on screen instead of
-// letting whichever arrived last win: match results (2) outrank scores (1).
-function gameToast(text, priority = 1) {
-  if (priority < lastToast.priority && Date.now() - lastToast.at < 3000) return;
-  lastToast = { at: Date.now(), priority };
-  let box = null;
-  if (!$('#view-gameplay').hidden) {
-    box = $('#gpToast');
-  } else if (!$('#view-gameedit').hidden) {
-    if (!gePreviewToast) {
-      gePreviewToast = document.createElement('div');
-      gePreviewToast.className = 'game-toast';
-      document.querySelector('#view-gameedit .game-stage').appendChild(gePreviewToast);
-    }
-    box = gePreviewToast;
-  }
-  if (!box) return;
-  box.textContent = text;
-  box.hidden = false;
-  clearTimeout(gameToastTimer);
-  gameToastTimer = setTimeout(() => { box.hidden = true; }, 4200);
-}
-
-/* ---------- games hub ---------- */
-function gameCard(g, opts) {
-  const mine = !!(opts && opts.mine);
-  const card = document.createElement('div');
-  card.className = 'game-card';
-
-  const title = document.createElement('div');
-  title.className = 'game-card-title';
-  title.textContent = g.name;
-  card.appendChild(title);
-
-  if (!mine && g.owner) {
-    const by = document.createElement('div');
-    by.className = 'game-card-by';
-    by.textContent = 'by ' + (g.owner.name || '@' + g.owner.username);
-    by.addEventListener('click', () => { location.hash = '#/u/' + g.owner.username; });
-    card.appendChild(by);
-  }
-  if (g.description) {
-    const desc = document.createElement('div');
-    desc.className = 'game-card-desc';
-    desc.textContent = g.description;
-    card.appendChild(desc);
-  }
-
-  const stats = document.createElement('div');
-  stats.className = 'game-card-stats';
-  const bits = ['▶ ' + fmtScore(g.plays || 0) + ' play' + (g.plays === 1 ? '' : 's'),
-                '🏆 ' + fmtScore(g.playerCount || 0) + ' on the board'];
-  if (g.updatedAt) bits.push(timeAgo(g.updatedAt));
-  stats.textContent = bits.join(' · ');
-  card.appendChild(stats);
-
-  // someone is sitting in this game's lobby right now — the strongest possible
-  // nudge to click Play, so it gets its own live badge
-  if (g.openTables) {
-    const live = document.createElement('div');
-    live.className = 'game-card-live';
-    live.textContent = '🟢 ' + g.openTables + ' player' + (g.openTables === 1 ? '' : 's') + ' waiting to play';
-    card.appendChild(live);
-  }
-
-  const actions = document.createElement('div');
-  actions.className = 'game-card-actions';
-  if (g.ranked) {
-    const tag = document.createElement('span');
-    tag.className = 'ranked-tag';
-    tag.textContent = '⚔️ Ranked';
-    tag.title = 'Matches are decided by server-side rules and move an Elo ladder';
-    card.appendChild(tag);
-  }
-  if (mine) {
-    const vis = document.createElement('span');
-    vis.className = 'vis-tag';
-    vis.textContent = g.visibility === 'public' ? 'Public' : g.visibility === 'friends' ? 'Friends' : 'Private';
-    stats.appendChild(vis);
-    const edit = document.createElement('button');
-    edit.className = 'tb';
-    edit.textContent = '✎ Edit';
-    edit.addEventListener('click', () => { location.hash = '#/games/edit/' + g.id; });
-    actions.appendChild(edit);
-  }
-  const play = document.createElement('button');
-  play.className = 'tb primary-tb';
-  play.textContent = '▶ Play';
-  if (!g.hasCode && mine) { play.textContent = '▶ Play (no code yet)'; play.disabled = true; }
-  play.addEventListener('click', () => { location.hash = '#/g/' + g.id; });
-  actions.appendChild(play);
-  card.appendChild(actions);
-  return card;
-}
-
-async function loadGamesHub() {
-  $('#btnNewGame').hidden = !me;
-  $('#gamesSignin').hidden = !!me;
-  $('#myGamesWrap').hidden = !me;
-  const mineList = $('#myGamesList');
-  const discList = $('#gameDiscoverList');
-  discList.innerHTML = '<div class="empty">Loading…</div>';
-  try {
-    const [mineRes, discRes] = await Promise.all([
-      me ? api('/api/games') : Promise.resolve({ games: [] }),
-      api('/api/games/discover'),
-    ]);
-    if (me) {
-      mineList.innerHTML = '';
-      if (!mineRes.games.length) {
-        const d = document.createElement('div');
-        d.className = 'empty';
-        d.textContent = 'No games yet — hit “+ Create a game” and start from a template.';
-        mineList.appendChild(d);
-      } else {
-        for (const g of mineRes.games) mineList.appendChild(gameCard(g, { mine: true }));
-      }
-    }
-    discList.innerHTML = '';
-    const myName = me && me.username;
-    const discover = discRes.games.filter(g => !g.owner || g.owner.username !== myName);
-    if (!discover.length) {
-      const d = document.createElement('div');
-      d.className = 'empty';
-      d.textContent = 'No public games yet. Be the first to publish one!';
-      discList.appendChild(d);
-    } else {
-      for (const g of discover) discList.appendChild(gameCard(g, {}));
-    }
-  } catch (err) {
-    discList.innerHTML = '';
-    const d = document.createElement('div'); d.className = 'empty'; d.textContent = err.message;
-    discList.appendChild(d);
-  }
-}
-
-/* ---------- create game (template sheet) ---------- */
-let newGameTemplate = GAME_TEMPLATES[0];
-
-function renderGameTemplates() {
-  const wrap = $('#newGameTemplates');
-  wrap.innerHTML = '';
-  for (const t of GAME_TEMPLATES) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'tb' + (t === newGameTemplate ? ' active' : '');
-    b.textContent = t.label;
-    b.addEventListener('click', () => { newGameTemplate = t; renderGameTemplates(); });
-    wrap.appendChild(b);
-  }
-}
-
-$('#btnNewGame').addEventListener('click', () => {
-  $('#newGameName').value = '';
-  $('#newGameError').textContent = '';
-  newGameTemplate = GAME_TEMPLATES[0];
-  renderGameTemplates();
-  openSheet('#sheetNewGame');
-  $('#newGameName').focus();
-});
-$('#newGameCancel').addEventListener('click', closeSheets);
-$('#newGameCreate').addEventListener('click', async () => {
-  const vis = document.querySelector('input[name="newGameVis"]:checked');
-  try {
-    const r = await api('/api/games', 'POST', {
-      name: $('#newGameName').value.trim(),
-      visibility: vis ? vis.value : 'private',
-      code: newGameTemplate.code,
-      // templates may ship server-side rules; ranked switches on if they compile
-      rules: newGameTemplate.rules || '',
-      ranked: !!newGameTemplate.rules,
-    });
-    closeSheets();
-    location.hash = '#/games/edit/' + r.game.id;
-  } catch (err) {
-    $('#newGameError').textContent = err.message;
-  }
-});
-
-/* ---------- editor ---------- */
-function setGeState(text) { $('#geState').textContent = text; }
-
-function markGameDirty() {
-  if (!gameEditDirty) { gameEditDirty = true; setGeState('Unsaved changes'); }
-}
-$('#geCode').addEventListener('input', markGameDirty);
-
-// Tab inserts two spaces instead of leaving the editor
-$('#geCode').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const el = e.target, s = el.selectionStart, epos = el.selectionEnd;
-    el.value = el.value.slice(0, s) + '  ' + el.value.slice(epos);
-    el.selectionStart = el.selectionEnd = s + 2;
-    markGameDirty();
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-    e.preventDefault();
-    saveGameCode();
-  }
-});
-
-async function openGameEditor(gameId) {
-  if (!me) { show('auth'); return; }
-  try {
-    const data = await api('/api/games/' + gameId);
-    if (!data.isOwner) { location.hash = '#/g/' + gameId; return; } // not yours → play it
-    gameEdit = { id: gameId, meta: data.game };
-    gameEditDirty = false;
-    gamePreviewOn = false;
-    $('#geName').textContent = data.game.name;
-    $('#geCode').value = data.game.code || '';
-    $('#geScore').hidden = true;
-    $('#gePreviewEmpty').hidden = false;
-    gePreview.src = 'about:blank';
-    paintRankedState();
-    setGeState('Saved');
-    show('gameedit');
-  } catch (err) {
-    alert(err.message);
-    location.hash = '#/games';
-  }
-}
-
-async function saveGameCode() {
-  if (!gameEdit) return false;
-  setGeState('Saving…');
-  try {
-    const r = await api('/api/games/' + gameEdit.id, 'PUT', { code: $('#geCode').value });
-    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
-    gameEditDirty = false;
-    setGeState('Saved');
-    return true;
-  } catch (err) {
-    setGeState('Save failed: ' + err.message);
-    return false;
-  }
-}
-
-async function runGamePreview() {
-  if (!gameEdit) return;
-  if (!(await saveGameCode())) return;
-  try {
-    const r = await api('/api/games/' + gameEdit.id + '/play', 'POST');
-    resetBridge(); // re-running drops the previous run's match/lobby streams
-    gamePreviewOn = true;
-    $('#gePreviewEmpty').hidden = true;
-    $('#geScore').hidden = false;
-    $('#geScore').textContent = 'Score: 0';
-    gePreview.src = r.src + '&r=' + Date.now(); // cache-buster forces a fresh run
-  } catch (err) {
-    alert(err.message);
-  }
-}
-
-function stopGamePreview() {
-  if (!gamePreviewOn) return;
-  gamePreviewOn = false;
-  resetBridge();
-  gePreview.src = 'about:blank';
-}
-
-$('#btnGeBack').addEventListener('click', () => { location.hash = '#/games'; });
-$('#btnGeSave').addEventListener('click', saveGameCode);
-$('#btnGeRun').addEventListener('click', runGamePreview);
-$('#btnGeOpen').addEventListener('click', async () => {
-  if (!gameEdit) return;
-  if (gameEditDirty && !(await saveGameCode())) return;
-  location.hash = '#/g/' + gameEdit.id;
-});
-
-/* ---- game settings sheet ---- */
-$('#btnGeSettings').addEventListener('click', () => {
-  if (!gameEdit) return;
-  const m = gameEdit.meta;
-  $('#gsName').value = m.name;
-  $('#gsDesc').value = m.description || '';
-  $('#gsError').textContent = '';
-  for (const r of document.querySelectorAll('input[name="gsVis"]')) r.checked = r.value === m.visibility;
-  for (const r of document.querySelectorAll('input[name="gsOrder"]')) r.checked = r.value === (m.scoreOrder || 'desc');
-  openSheet('#sheetGameSettings');
-});
-$('#gsDone').addEventListener('click', async () => {
-  if (!gameEdit) return;
-  const vis = document.querySelector('input[name="gsVis"]:checked');
-  const ord = document.querySelector('input[name="gsOrder"]:checked');
-  try {
-    const r = await api('/api/games/' + gameEdit.id, 'PUT', {
-      name: $('#gsName').value.trim(),
-      description: $('#gsDesc').value.trim(),
-      visibility: vis ? vis.value : 'private',
-      scoreOrder: ord ? ord.value : 'desc',
-    });
-    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
-    $('#geName').textContent = r.game.name;
-    closeSheets();
-  } catch (err) {
-    $('#gsError').textContent = err.message;
-  }
-});
-$('#gsDelete').addEventListener('click', async () => {
-  if (!gameEdit) return;
-  if (!confirm('Delete “' + gameEdit.meta.name + '” and its leaderboard for good?')) return;
-  try {
-    await api('/api/games/' + gameEdit.id, 'DELETE');
-    gameEdit = null;
-    closeSheets();
-    location.hash = '#/games';
-  } catch (err) {
-    $('#gsError').textContent = err.message;
-  }
-});
-
-/* ---- ranked play: server-side rules sheet ----
-   The author writes rules here; the server compiles them in its sandbox and
-   only lets the game be ranked once they load and survive a real setup call. */
-function setRulesStatus(text, kind) {
-  const el = $('#rulesStatus');
-  el.textContent = text;
-  el.className = 'rules-status' + (kind ? ' ' + kind : '');
-}
-
-$('#btnGeRules').addEventListener('click', () => {
-  if (!gameEdit) return;
-  const m = gameEdit.meta;
-  $('#rulesCode').value = m.rules || '';
-  $('#rulesRanked').checked = !!m.ranked;
-  $('#rulesError').textContent = '';
-  if (m.rankedAvailable === false) {
-    setRulesStatus('This server can’t run ranked games — the rules sandbox is unavailable.', 'bad');
-    $('#rulesRanked').disabled = true;
-  } else {
-    $('#rulesRanked').disabled = false;
-    setRulesStatus(m.ranked ? 'Ranked is on — these rules decide every match.' : '', m.ranked ? 'good' : '');
-  }
-  openSheet('#sheetRules');
-});
-$('#rulesCancel').addEventListener('click', closeSheets);
-
-// Tab indents in the rules editor too, rather than leaving the field.
-$('#rulesCode').addEventListener('keydown', e => {
-  if (e.key !== 'Tab') return;
-  e.preventDefault();
-  const el = e.target, s = el.selectionStart, en = el.selectionEnd;
-  el.value = el.value.slice(0, s) + '  ' + el.value.slice(en);
-  el.selectionStart = el.selectionEnd = s + 2;
-});
-
-async function checkRules() {
-  if (!gameEdit) return false;
-  const rules = $('#rulesCode').value;
-  if (!rules.trim()) { setRulesStatus('Add some rules first.', 'bad'); return false; }
-  setRulesStatus('Compiling in the sandbox…');
-  try {
-    const r = await api('/api/games/' + gameEdit.id + '/rules', 'POST', { rules });
-    if (r.ok) setRulesStatus('✓ Rules compile and run (' + r.seats + ' seats). Ready for ranked play.', 'good');
-    else setRulesStatus('✗ ' + r.error, 'bad');
-    return !!r.ok;
-  } catch (err) {
-    setRulesStatus('✗ ' + err.message, 'bad');
-    return false;
-  }
-}
-$('#rulesCheck').addEventListener('click', checkRules);
-
-$('#rulesSave').addEventListener('click', async () => {
-  if (!gameEdit) return;
-  const wantRanked = $('#rulesRanked').checked;
-  $('#rulesError').textContent = '';
-  try {
-    const r = await api('/api/games/' + gameEdit.id, 'PUT', {
-      rules: $('#rulesCode').value,
-      ranked: wantRanked,
-    });
-    gameEdit.meta = Object.assign({}, gameEdit.meta, r.game);
-    if (wantRanked && !r.game.ranked) {
-      // saved, but ranked couldn't be turned on — say exactly why
-      $('#rulesRanked').checked = false;
-      setRulesStatus('✗ ' + (r.rulesError || 'The rules did not compile.'), 'bad');
-      $('#rulesError').textContent = 'Rules saved, but ranked stays off until they run.';
-      return;
-    }
-    paintRankedState();
-    closeSheets();
-  } catch (err) {
-    $('#rulesError').textContent = err.message;
-  }
-});
-
-// Reflect ranked status in the editor's toolbar button.
-function paintRankedState() {
-  const on = !!(gameEdit && gameEdit.meta && gameEdit.meta.ranked);
-  const b = $('#btnGeRules');
-  b.classList.toggle('active', on);
-  b.textContent = on ? '⚔️ Ranked' : '⚖️ Ranked';
-  b.title = on
-    ? 'Ranked: this game’s server-side rules decide every match'
-    : 'Server-side rules: make this game ranked';
-}
-
-/* ---------- player ---------- */
-async function openGamePlayer(gameId) {
-  gpFrame.src = 'about:blank'; // never let a previous game linger while loading
-  try {
-    const data = await api('/api/games/' + gameId);
-    gamePlay = {
-      id: gameId,
-      meta: data.game,
-      owner: data.owner,
-      isOwner: data.isOwner,
-      signedIn: data.signedIn,
-      src: null,
-    };
-    $('#gpName').textContent = data.game.name;
-    const ownerName = data.owner.name || '@' + data.owner.username;
-    $('#gpBy').textContent = 'by ' + ownerName + ' · ' + fmtScore(data.game.plays || 0) + ' plays';
-    $('#btnGpEdit').hidden = !data.isOwner;
-    $('#gpRanked').hidden = !data.game.ranked;
-    $('#gpScore').hidden = true;
-    $('#gpToast').hidden = true;
-    $('#gpRank').hidden = true;
-    $('#gpBoardSignin').hidden = !!me;
-    $('#gpBoardPanel').hidden = window.innerWidth <= 900; // open beside the game on desktop
-    $('#gpBoardList').innerHTML = '<div class="board-empty">Loading…</div>';
-    show('gameplay');
-    // start the play session + fetch the board in parallel
-    const [playRes, boardRes] = await Promise.all([
-      api('/api/games/' + gameId + '/play', 'POST'),
-      api('/api/games/' + gameId + '/leaderboard'),
-    ]);
-    if (!gamePlay || gamePlay.id !== gameId) return; // navigated away meanwhile
-    gamePlay.src = playRes.src;
-    gpFrame.src = playRes.src;
-    renderLeaderboard(boardRes.leaderboard);
-  } catch (err) {
-    alert(err.message);
-    location.hash = '#/games';
-  }
-}
-
-function stopGamePlayer() {
-  if (!gamePlay) return;
-  gamePlay = null;
-  resetBridge(); // leaves any open table so it doesn't sit in the pool
-  gpFrame.src = 'about:blank';
-}
-
-function renderLeaderboard(board) {
-  const list = $('#gpBoardList');
-  const meta = $('#gpBoardMeta');
-  list.innerHTML = '';
-  meta.textContent = fmtScore(board.totalPlays) + ' plays · ' + fmtScore(board.totalPlayers) +
-    ' player' + (board.totalPlayers === 1 ? '' : 's') +
-    (board.scoreOrder === 'asc' ? ' · lower is better' : '');
-  const rank = $('#gpRank');
-  if (board.mine) { rank.hidden = false; rank.textContent = '#' + board.mine.rank; }
-  else rank.hidden = true;
-
-  if (!board.entries.length) {
-    const d = document.createElement('div');
-    d.className = 'board-empty';
-    d.textContent = 'No scores yet — set the first one!';
-    list.appendChild(d);
-    return;
-  }
-  const row = e => {
-    const r = document.createElement('div');
-    r.className = 'board-row' + (e.me ? ' me' : '') + (e.rank <= 3 ? ' top' + e.rank : '');
-    const rk = document.createElement('span'); rk.className = 'br-rank';
-    rk.textContent = e.rank === 1 ? '🥇' : e.rank === 2 ? '🥈' : e.rank === 3 ? '🥉' : '#' + e.rank;
-    const who = document.createElement('span'); who.className = 'br-who';
-    who.textContent = (e.name || '@' + e.username) + (e.me ? ' (you)' : '');
-    if (e.username !== '(deleted)') {
-      who.addEventListener('click', () => { location.hash = '#/u/' + e.username; });
-    }
-    const sc = document.createElement('span'); sc.className = 'br-score';
-    sc.textContent = fmtScore(e.best);
-    r.append(rk, who, sc);
-    return r;
-  };
-  for (const e of board.entries) list.appendChild(row(e));
-  if (board.mine && board.mine.rank > board.entries.length) {
-    const gap = document.createElement('div');
-    gap.className = 'board-gap';
-    gap.textContent = '⋯';
-    list.appendChild(gap);
-    list.appendChild(row(board.mine));
-  }
-  renderRankedLadder(board);
-  renderMatchRecords(board.matches || []);
-}
-
-// The ranked ladder: Elo from matches the SERVER decided, so unlike the score
-// board above these numbers can't be self-reported.
-function renderRankedLadder(board) {
-  if (!board.ranked) return;
-  const list = $('#gpBoardList');
-  const head = document.createElement('div');
-  head.className = 'board-subhead';
-  head.textContent = '⚔️ Ranked ladder';
-  list.appendChild(head);
-  const rows = board.rankedLadder || [];
-  if (!rows.length) {
-    const e = document.createElement('div');
-    e.className = 'board-empty';
-    e.textContent = 'No ranked matches yet — play someone to start a rating.';
-    list.appendChild(e);
-    return;
-  }
-  for (const r of rows) {
-    const el = document.createElement('div');
-    el.className = 'board-row' + (r.me ? ' me' : '') + (r.rank <= 3 ? ' top' + r.rank : '');
-    const rk = document.createElement('span');
-    rk.className = 'br-rank';
-    rk.textContent = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : '#' + r.rank;
-    const who = document.createElement('span');
-    who.className = 'br-who';
-    who.textContent = (r.name || '@' + r.username) + (r.me ? ' (you)' : '');
-    who.addEventListener('click', () => { location.hash = '#/u/' + r.username; });
-    const sub = document.createElement('span');
-    sub.className = 'br-sub';
-    sub.textContent = r.w + '-' + r.l + (r.d ? '-' + r.d : '') + (r.provisional ? ' ?' : '');
-    sub.title = r.provisional ? 'Provisional — rating still settling (under 10 ranked games)' : '';
-    const rating = document.createElement('span');
-    rating.className = 'br-rating';
-    rating.textContent = r.rating;
-    el.append(rk, who, sub, rating);
-    list.appendChild(el);
-  }
-}
-
-// Head-to-head records from multiplayer matches — humans and AI personas on
-// the same ladder, since a persona is just another player with a record.
-function renderMatchRecords(rows) {
-  const list = $('#gpBoardList');
-  if (!rows.length) return;
-  const head = document.createElement('div');
-  head.className = 'board-subhead';
-  head.textContent = '⚔️ Match record';
-  list.appendChild(head);
-  for (const r of rows) {
-    const el = document.createElement('div');
-    el.className = 'board-row' + (r.me ? ' me' : '');
-    const who = document.createElement('span');
-    who.className = 'br-who';
-    who.textContent = (r.kind === 'ai' ? '🤖 ' : '') + (r.name || '@' + r.username) + (r.me ? ' (you)' : '');
-    if (r.kind === 'human' && r.username) {
-      who.addEventListener('click', () => { location.hash = '#/u/' + r.username; });
-    } else {
-      who.style.cursor = 'default';
-    }
-    const rec = document.createElement('span');
-    rec.className = 'br-score br-record';
-    rec.textContent = r.w + 'W ' + r.l + 'L' + (r.d ? ' ' + r.d + 'D' : '');
-    el.append(who, rec);
-    list.appendChild(el);
-  }
-}
-
-$('#btnGpBack').addEventListener('click', () => {
-  location.hash = '#/games'; // the hub works for guests too (discover)
-});
-$('#btnGpEdit').addEventListener('click', () => {
-  if (gamePlay) location.hash = '#/games/edit/' + gamePlay.id;
-});
-$('#btnGpRestart').addEventListener('click', () => {
-  if (!gamePlay || !gamePlay.src) return;
-  $('#gpScore').hidden = true;
-  $('#gpToast').hidden = true;
-  resetBridge(); // a fresh round starts with no match attached
-  gpFrame.src = gamePlay.src + '&r=' + Date.now(); // reload = fresh round
-});
-$('#btnGpBoard').addEventListener('click', () => {
-  const panel = $('#gpBoardPanel');
-  panel.hidden = !panel.hidden;
-  if (!panel.hidden && gamePlay) refreshLeaderboard(gamePlay.id);
-});
-$('#btnGpBoardClose').addEventListener('click', () => { $('#gpBoardPanel').hidden = true; });
-
-/* ================================================================
    Notifications (bell feed + Web Push)
    ----------------------------------------------------------------
    A per-user SSE stream feeds a bell dropdown live; the same events also
@@ -5047,7 +3796,6 @@ function renderNotifs() {
       chat: ' chatted in ',
       edit: ' edited ',
       newmap: ' posted a new map ',
-      newgame: ' published a game ',
     };
     const verb = verbs[n.kind] || ' updated ';
     const title = document.createElement('div');
@@ -5073,16 +3821,9 @@ function renderNotifs() {
   }
 }
 
-// Jump to what the notification is about: the game player for game alerts,
-// otherwise the map (via the profile map viewer).
+// Jump to what the notification is about: the map, via the profile map viewer.
 function openNotifTarget(n) {
   closeNotifPanel();
-  if (n.kind === 'newgame') {
-    const target = '#/g/' + n.mapId; // game alerts store the game id here
-    if (location.hash === target) openGamePlayer(n.mapId); // same hash won't refire route()
-    else location.hash = target;
-    return;
-  }
   pendingProfileMapId = n.mapId;
   const target = '#/u/' + n.mapOwner;
   if (location.hash === target) openProfile(n.mapOwner); // same hash won't refire route()
