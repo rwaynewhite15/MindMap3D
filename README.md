@@ -40,6 +40,9 @@ and turns on **AI generation** simply by setting environment variables.
 - **Project or reference is a dropdown** — once a project name is on the board, later items
   pick it from a list instead of retyping it, with a **＋ New** entry for a name that isn't
   there yet.
+- **Projects and owners are editable after the fact** — click the project on a card to move
+  the item to another one, or rename that project across every item carrying it in one go.
+  The name of whoever you are waiting on is edited in place on the card.
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -183,6 +186,12 @@ ideas, the desk is for tracking open work.
 - **One project or reference per item**, chosen from a dropdown of the ones already on the
   board so the same name is typed once and picked thereafter. **＋ New project or reference**
   turns the dropdown back into a text box for a name that isn't there yet.
+- **Projects and owners can be changed afterwards.** Click the project shown on a card to
+  move that item to another one, and **✎ Rename … on every item** renames the project itself
+  everywhere it appears — open items and completed ones alike — so a project that gets called
+  something else halfway through doesn't leave the board split between two names. On an item
+  you are waiting on, the name beside it is edited in place: hand something off with **Move
+  to waiting** and it reads *Unassigned* until you type who has it.
 - **Reference** — short entries you refer to often (links, codes, contacts, targets, a map
   you keep reopening), edited in place and kept separate from the item list.
 - **Working notes** — a ruled area at the foot of the board for thinking something through,

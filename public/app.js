@@ -4449,6 +4449,8 @@ let deskStaleDays = 14;     // no activity for this long and an item is stalled
 let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
 let deskFocusForm = false;  // a form just opened and should take the caret
 let deskMapPickFor = null;  // id of the item whose map picker is open, if any
+let deskTagEdit = null;     // { id, mode } while an item's project is being changed
+let deskFocusTagBox = false; // that editor just opened a text box, which takes the caret
 let deskFlashText = '';     // transient line above the board
 let deskFlashTimer = null;
 let deskSaveTimer = null;
@@ -4784,6 +4786,29 @@ function deskRemove(id) {
   renderDesk();
 }
 
+// A project is only ever the name written on the items carrying it, so renaming
+// one means rewriting that name wherever it appears — completed items included,
+// since they still show it and still feed the list of known projects.
+function deskRenameProject(from, to) {
+  if (!desk || deskOwner || !from) return;
+  const name = to.trim().slice(0, 80);
+  if (name === from) return;
+  let n = 0;
+  for (const it of desk.items) if (it.tag === from) { it.tag = name; n++; }
+  const items = `${n} item${n === 1 ? '' : 's'}`;
+  deskFlash(name
+    ? `Renamed \u201c${from}\u201d to \u201c${name}\u201d on ${items}.`
+    : `Cleared \u201c${from}\u201d from ${items}.`);
+  saveDesk();
+}
+
+function deskSetTag(id, tag) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  it.tag = String(tag || '').trim().slice(0, 80);
+  saveDesk();
+}
+
 function deskEditField(id, field, val) {
   const it = desk.items.find(x => x.id === id);
   if (!it) return;
@@ -5109,6 +5134,37 @@ function noteToolbarHtml() {
 
 /* ---------- render ---------- */
 const NEXT_PLACEHOLDER = 'Add the next step';
+const WHO_PLACEHOLDER = 'Unassigned';
+const TAG_PLACEHOLDER = 'No project';
+
+// Changing an item's project, from the card. The picker offers the projects the
+// board already knows so the same one is chosen rather than retyped, and the two
+// entries at the end swap it for a text box: one to name a project that isn't
+// there yet, one to rename this project across every item carrying it.
+function deskTagEditHtml(it) {
+  const id = escapeHtml(it.id);
+  if (deskTagEdit.mode === 'pick') {
+    const option = t =>
+      `<option value="${escapeHtml(t)}"${t === it.tag ? ' selected' : ''}>${escapeHtml(t)}</option>`;
+    return `<div class="dk-card__pick">
+      <select class="dk-select" data-act="picktag" data-id="${id}">
+        <option value=""${it.tag ? '' : ' selected'}>No project or reference</option>
+        ${deskTags().map(option).join('')}
+        <option value="" data-new="1">＋ New project or reference…</option>
+        ${it.tag ? `<option value="" data-rename="1">✎ Rename &ldquo;${escapeHtml(it.tag)}&rdquo; on every item…</option>` : ''}
+      </select>
+      <button class="dk-btn" data-act="canceltag">Cancel</button>
+    </div>`;
+  }
+  const renaming = deskTagEdit.mode === 'rename';
+  return `<div class="dk-card__pick">
+    <input class="dk-select" data-tagbox="1" maxlength="80"
+      value="${renaming ? escapeHtml(it.tag) : ''}"
+      placeholder="${renaming ? 'New name for this project' : 'New project or reference'}">
+    <button class="dk-btn dk-btn--go" data-act="savetag" data-id="${id}">${renaming ? 'Rename everywhere' : 'Set'}</button>
+    <button class="dk-btn" data-act="canceltag">Cancel</button>
+  </div>`;
+}
 
 function deskCardHtml(it) {
   const ro = !!deskOwner; // someone else's board: read it, don't touch it
@@ -5123,7 +5179,14 @@ function deskCardHtml(it) {
       <h3 class="dk-card__title"${ro ? '' : ` contenteditable data-id="${id}" data-field="title"`}>${escapeHtml(it.title)}</h3>
       <span class="dk-card__clock" title="Days since this item was last updated">${deskDaysLabel(d)}</span>
     </div>
-    <div class="dk-card__meta">${escapeHtml(owner)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
+    <div class="dk-card__meta">${ro
+      ? escapeHtml(owner) + (it.tag ? ' &middot; ' + escapeHtml(it.tag) : '')
+      : (it.state === 'waiting'
+          ? `<span class="dk-card__who${it.who ? '' : ' dk-meta--empty'}" contenteditable data-id="${id}" data-field="who"
+              title="Who this item is with">${escapeHtml(it.who || WHO_PLACEHOLDER)}</span>`
+          : 'Me') +
+        ` &middot; <button class="dk-card__tag${it.tag ? '' : ' dk-meta--empty'}" data-act="edittag" data-id="${id}"
+            title="Change the project or reference, or rename it everywhere">${escapeHtml(it.tag || TAG_PLACEHOLDER)}</button>`}</div>
     ${it.mapRef ? `<div class="dk-card__map">
       <button class="dk-maplink${mapName ? '' : ' dk-maplink--gone'}" data-act="openmap" data-map="${escapeHtml(it.mapRef)}"
         title="${mapName ? 'Open this map' : 'Open the linked map — it may have been deleted or unshared'}"
@@ -5141,6 +5204,7 @@ function deskCardHtml(it) {
       <button class="dk-btn dk-btn--done" data-act="complete" data-id="${id}" title="Remove this item and add it to your completed count">Complete</button>
       <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item without counting it as completed">Delete</button>
     </div>`}
+    ${deskTagEdit && deskTagEdit.id === it.id ? deskTagEditHtml(it) : ''}
     ${deskMapPickFor === it.id ? `<div class="dk-card__pick">
       ${deskMapSelectHtml(`data-act="pickmap" data-id="${id}"`, '', 'Choose a map…')}
       <button class="dk-btn" data-act="cancelmap">Cancel</button>
@@ -5313,6 +5377,12 @@ function renderDesk() {
   if (caret) {
     restoreNotesCaret(notesEl(), caret);
     refreshNoteToolbar();
+  } else if (deskFocusTagBox) {
+    // the project editor keeps the caret inside the desk, so Escape reaches the
+    // keydown handler that closes it
+    deskFocusTagBox = false;
+    const box = deskRoot.querySelector('[data-tagbox], select[data-act="picktag"]');
+    if (box) { box.focus(); if (box.select) box.select(); }
   } else if (deskFocusNote) {
     deskFocusNote = false;
     const box = notesEl();
@@ -5344,7 +5414,23 @@ deskRoot.addEventListener('click', e => {
   else if (act === 'addnote') deskAddNote();
   else if (act === 'delnote') deskDeleteNote(b.dataset.id);
   else if (act === 'openmap') deskOpenMap(b.dataset.map);
-  else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; renderDesk(); }
+  // one editor open on a card at a time, whichever was asked for last
+  else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; deskTagEdit = null; renderDesk(); }
+  else if (act === 'edittag') {
+    deskTagEdit = { id: b.dataset.id, mode: 'pick' };
+    deskMapPickFor = null;
+    deskFocusTagBox = true;
+    renderDesk();
+  }
+  else if (act === 'canceltag') { deskTagEdit = null; renderDesk(); }
+  else if (act === 'savetag') {
+    const box = b.closest('.dk-card__pick').querySelector('[data-tagbox]');
+    const it = desk.items.find(x => x.id === b.dataset.id);
+    if (deskTagEdit.mode === 'rename' && it) deskRenameProject(it.tag, box.value);
+    else deskSetTag(b.dataset.id, box.value);
+    deskTagEdit = null;
+    renderDesk();
+  }
   else if (act === 'cancelmap') { deskMapPickFor = null; renderDesk(); }
   else if (act === 'unlinkmap') {
     const it = desk.items.find(x => x.id === b.dataset.id);
@@ -5386,7 +5472,9 @@ deskRoot.addEventListener('blur', e => {
   if (!desk || !t.dataset) return;
   if (t.dataset.field) {
     const v = t.textContent.trim();
-    if (t.dataset.field === 'next' && v === NEXT_PLACEHOLDER) return; // untouched placeholder
+    // an untouched placeholder is not a value
+    if (t.dataset.field === 'next' && v === NEXT_PLACEHOLDER) return;
+    if (t.dataset.field === 'who' && v === WHO_PLACEHOLDER) return;
     deskEditField(t.dataset.id, t.dataset.field, v);
     renderDesk();
   } else if (t.dataset.noteTitle) {
@@ -5412,6 +5500,18 @@ deskRoot.addEventListener('change', e => {
     renderDesk();
     return;
   }
+  // the project picker on a card: choosing a project applies it, and the two
+  // entries at the end open a text box instead
+  const pickTag = e.target.closest('select[data-act="picktag"]');
+  if (pickTag) {
+    const opt = pickTag.selectedOptions[0];
+    if (opt && opt.dataset.new) deskTagEdit = { id: pickTag.dataset.id, mode: 'new' };
+    else if (opt && opt.dataset.rename) deskTagEdit = { id: pickTag.dataset.id, mode: 'rename' };
+    else { deskSetTag(pickTag.dataset.id, pickTag.value); deskTagEdit = null; }
+    deskFocusTagBox = !!deskTagEdit;
+    renderDesk();
+    return;
+  }
   // "New project or reference…" turns the dropdown into a text box. Swapped in
   // place rather than re-rendered, so the rest of the form survives.
   const tag = e.target.closest('select[data-f="tag"]');
@@ -5425,10 +5525,16 @@ deskRoot.addEventListener('change', e => {
   }
 });
 
-// clear the next-step prompt the moment someone types into it
+// clear a placeholder the moment its field is entered — only where the
+// placeholder is text someone is about to type over. The project button also
+// carries dk-meta--empty, and emptying that would collapse it out from under
+// the click that just landed on it.
 deskRoot.addEventListener('focus', e => {
   const t = e.target;
-  if (t.classList && t.classList.contains('dk-card__next--empty')) t.textContent = '';
+  if (!t.isContentEditable || !t.classList) return;
+  if (t.classList.contains('dk-card__next--empty') || t.classList.contains('dk-meta--empty')) {
+    t.textContent = '';
+  }
 }, true);
 
 deskRoot.addEventListener('input', e => {
@@ -5477,12 +5583,19 @@ deskRoot.addEventListener('keydown', e => {
   } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.noteTitle) {
     e.preventDefault(); // a note title is one line
     e.target.blur();
+  } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'who') {
+    e.preventDefault(); // a name is one line
+    e.target.blur();
+  } else if (e.key === 'Enter' && e.target.matches('[data-tagbox]')) {
+    e.preventDefault();
+    e.target.closest('.dk-card__pick').querySelector('[data-act="savetag"]').click();
   } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'title') {
     e.preventDefault(); // one line per title; commit it instead of adding a newline
     e.target.blur();
-  } else if (e.key === 'Escape' && (deskForm || deskMapPickFor)) {
+  } else if (e.key === 'Escape' && (deskForm || deskMapPickFor || deskTagEdit)) {
     deskForm = null;
     deskMapPickFor = null;
+    deskTagEdit = null;
     renderDesk();
   }
 });
