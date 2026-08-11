@@ -52,10 +52,6 @@ const MAX_DESK_REF = 40;        // reference entries
 const MAX_DESK_NOTES = 20000;   // characters of markup in one note
 const MAX_DESK_NOTE_COUNT = 20; // separate notes a board can hold
 const MAX_DESK_NOTE_TITLE = 60;
-// How many items may be assigned to the account holder at once. The UI
-// enforces this to keep the list of active work honest; it is not a storage
-// limit, and nothing here ever deletes an item to satisfy it.
-const DESK_ASSIGNED_CAP = 5;
 const DESK_STALE_DAYS = 14;     // no activity for this long and an item is stalled
 
 // Who may read a desk. Separate from map visibility (which is per-map and has a
@@ -1769,7 +1765,6 @@ async function handleApi(req, res, pathname) {
         notes: d.notes.filter(n => n.html),
       },
       staleDays: DESK_STALE_DAYS,
-      cap: DESK_ASSIGNED_CAP,
     });
   }
 
@@ -2042,7 +2037,6 @@ async function handleApi(req, res, pathname) {
   if (route === 'GET /api/desk') {
     return sendJSON(res, 200, {
       desk: user.desk,
-      cap: DESK_ASSIGNED_CAP,
       maxItems: MAX_DESK_ITEMS,
       maxDone: MAX_DESK_DONE,
       maxRef: MAX_DESK_REF,
