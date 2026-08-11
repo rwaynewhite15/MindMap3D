@@ -1489,6 +1489,18 @@ button.primary {
   color: var(--dk-board);
 }
 .dk-rig__sub { font-family: var(--dk-mono); font-size: 11px; color: var(--dk-ink-3); letter-spacing: 0.04em; margin-top: 5px; }
+/* sharing state in the header: a button when the board is yours, plain text
+   when you are reading someone else's */
+.dk-share {
+  font-family: var(--dk-mono); font-size: 11px; letter-spacing: 0.04em;
+  border: 1px solid var(--dk-edge); background: var(--dk-steel-2); color: var(--dk-ink-3);
+  padding: 1px 8px 2px;
+}
+.dk-share:hover { color: var(--dk-board); border-color: var(--dk-ink-3); }
+.dk-ro {
+  font-family: var(--dk-label); font-weight: 700; font-size: 11px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--dk-amber);
+}
 .dk-tally { display: flex; gap: 2px; margin-left: auto; }
 .dk-tally__cell { background: var(--dk-steel-2); border: 1px solid var(--dk-edge); padding: 6px 13px 7px; min-width: 80px; }
 .dk-tally__k {

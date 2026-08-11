@@ -1542,6 +1542,11 @@ function route() {
   // legal pages are public — reachable signed in or not (soul = the joke draft)
   if (h === 'privacy' || h === 'terms' || h === 'soul') { show(h); window.scrollTo(0, 0); return; }
 
+  // someone's shared desk: #/desk/<username>, plus the code when it is
+  // link-shared. Open to signed-out visitors, so it sits ahead of the sign-in gate.
+  const sharedDesk = h.match(/^desk\/([a-z0-9_]{3,20})(?:\/([A-Z2-9]{4,40}))?$/);
+  if (sharedDesk) { show('desk'); loadSharedDesk(sharedDesk[1], sharedDesk[2] || ''); return; }
+
   if (!me) {
     // anonymous visitors may browse public maps and profiles;
     // everything else prompts them to sign in
@@ -1592,7 +1597,7 @@ document.addEventListener('click', e => {
    Sheets
 ================================================================ */
 const sheetShade = $('#sheetShade');
-const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount'];
+const allSheets = ['#sheetRename', '#sheetEdge', '#sheetGroup', '#sheetColor', '#sheetNewMap', '#sheetMapLink', '#sheetMapSettings', '#sheetAI', '#sheetExport', '#sheetDeleteAccount', '#sheetDeskShare'];
 
 function openSheet(sel) {
   closeSheets();
@@ -4010,6 +4015,9 @@ async function openProfile(username) {
     $('#profileHandle').textContent = bits.join(' · ') + ' · ' + fc + ' follower' + (fc === 1 ? '' : 's');
     renderFollowButton();
     renderFriendButton();
+    // a desk shared with everyone is reachable from its owner's profile; one
+    // shared by link is not advertised here
+    $('#btnProfileDesk').hidden = !u.deskPublic || viewingSelf;
     renderProfileTabs(data.maps);
     if (data.maps.length) {
       $('#profileLocked').hidden = true;
@@ -4303,6 +4311,10 @@ $('#btnFriendAction').addEventListener('click', async () => {
   } catch (err) { alert(err.message); }
 });
 
+$('#btnProfileDesk').addEventListener('click', () => {
+  if (currentProfile) location.hash = '#/desk/' + currentProfile.user.username;
+});
+
 // follow button on a profile (asymmetric follow, distinct from friends)
 function renderFollowButton() {
   const btn = $('#btnFollowAction');
@@ -4424,6 +4436,8 @@ function initProfileViewer() {
 const DESK_DAY = 86400000;
 
 let desk = null;            // { ref, items, scratch, closed } — null until loaded
+let deskOwner = null;       // whose desk is on screen; null means your own
+                            // (set → read-only: someone else's shared board)
 let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
 let deskMaxItems = 40;      // items the board holds in total, both states
 let deskMaxRef = 40;        // reference entries the board holds
@@ -4482,6 +4496,8 @@ function deskOpenMap(mapId) {
 
 /* ---------- load / save ---------- */
 async function loadDesk() {
+  // coming back from someone else's board: theirs is on screen, drop it
+  if (deskOwner) { desk = null; deskOwner = null; deskForm = null; deskMapPickFor = null; }
   const first = !desk;
   if (first) deskRoot.innerHTML = '<div class="dk-loading">Loading your desk…</div>';
   // Unsaved local edits outrank a refetch — never pull the board out from
@@ -4509,15 +4525,17 @@ async function loadDesk() {
   renderDesk();
 }
 
+// Someone else's board is read-only in every path, not just in the markup: the
+// save helpers refuse outright so no stray handler can write to it.
 function saveDesk() {
-  if (!desk) return;
+  if (!desk || deskOwner) return;
   deskDirty = true;
   clearTimeout(deskSaveTimer);
   deskSaveTimer = setTimeout(doDeskSave, 700);
 }
 
 async function doDeskSave() {
-  if (!desk || !deskDirty) return;
+  if (!desk || deskOwner || !deskDirty) return;
   try {
     await api('/api/desk', 'PUT', { desk });
     deskDirty = false;
@@ -4533,7 +4551,7 @@ async function doDeskSave() {
 // keepalive lets the request outlive the unload the way a queued beacon would.
 function flushDeskSave() {
   clearTimeout(deskSaveTimer);
-  if (!desk || !deskDirty) return;
+  if (!desk || deskOwner || !deskDirty) return;
   deskDirty = false;
   fetch('/api/desk', {
     method: 'PUT',
@@ -4549,6 +4567,123 @@ window.addEventListener('pagehide', flushDeskSave);
 // Patched straight into the alert slot rather than re-rendered: a flash can
 // land while someone is mid-sentence in a card or an add form, and a full
 // re-render there would throw away what they had typed.
+/* ---------- someone else's desk, opened by link ---------- */
+// #/desk/<username> for a desk anyone may see, #/desk/<username>/<code> for one
+// shared by link. Works signed out; the code is the credential.
+async function loadSharedDesk(username, code) {
+  flushDeskSave(); // your own pending edit still belongs to your own board
+  desk = null;
+  deskOwner = null;
+  deskForm = null;
+  deskMapPickFor = null;
+  deskRoot.innerHTML = '<div class="dk-loading">Loading desk…</div>';
+  let data;
+  try {
+    data = await api('/api/users/' + encodeURIComponent(username) + '/desk' +
+      (code ? '?code=' + encodeURIComponent(code) : ''));
+  } catch (err) {
+    deskRoot.innerHTML = '';
+    const p = document.createElement('div');
+    p.className = 'dk-loading';
+    p.textContent = err.status === 404
+      ? 'That desk is not available. The link may be wrong, or its owner may have stopped sharing it.'
+      : 'That desk could not be loaded. ' + err.message;
+    deskRoot.appendChild(p);
+    return;
+  }
+  // your own share link belongs in your own editable board
+  if (data.isOwner) { location.hash = '#/desk'; return; }
+  desk = { ...data.desk, scratch: '', visibility: data.visibility, code: '' };
+  deskOwner = data.owner;
+  deskAssignedCap = data.cap;
+  deskStaleDays = data.staleDays;
+  renderDesk();
+}
+
+/* ---------- sharing (owner only) ---------- */
+const DESK_SHARE_LABEL = {
+  private: 'Private to you',
+  code: 'Shared by link',
+  public: 'Visible to anyone',
+};
+
+function deskShareLink() {
+  if (!desk || !me) return '';
+  const base = location.origin + location.pathname + '#/desk/' + me.username;
+  if (desk.visibility === 'public') return base;
+  if (desk.visibility === 'code' && desk.code) return base + '/' + desk.code;
+  return '';
+}
+
+function openDeskShare() {
+  if (!desk || deskOwner) return;
+  openSheet('#sheetDeskShare');
+  $('#deskShareError').textContent = '';
+  fillDeskShare();
+}
+
+function fillDeskShare() {
+  if (!desk) return;
+  for (const r of document.querySelectorAll('input[name="deskVis"]')) {
+    r.checked = r.value === desk.visibility;
+  }
+  const link = deskShareLink();
+  $('#deskShareLinkWrap').hidden = !link;
+  $('#deskShareLink').value = link;
+  $('#deskShareCopy').hidden = !link;
+  $('#deskShareNewCode').hidden = desk.visibility !== 'code';
+  $('#deskShareNote').textContent = desk.visibility === 'code'
+    ? 'Anyone with this link can read the board. Switching to Private turns the link off; switching back turns the same link on again. Generate a new code to revoke it for good.'
+    : desk.visibility === 'public'
+      ? 'This desk is readable by anyone, signed in or not, and is linked from your profile.'
+      : '';
+}
+
+async function setDeskVisibility(v) {
+  if (!desk || deskOwner) return;
+  const previous = desk.visibility;
+  desk.visibility = v;
+  clearTimeout(deskSaveTimer); // a permission change applies now, not in 700ms
+  deskDirty = true;
+  try {
+    const r = await api('/api/desk', 'PUT', { desk });
+    deskDirty = false;
+    desk.visibility = r.visibility;
+    desk.code = r.code || '';
+    $('#deskShareError').textContent = '';
+  } catch (err) {
+    desk.visibility = previous;
+    deskDirty = false;
+    $('#deskShareError').textContent = 'Could not change sharing: ' + err.message;
+  }
+  fillDeskShare();
+  renderDesk();
+}
+
+for (const r of document.querySelectorAll('input[name="deskVis"]')) {
+  r.addEventListener('change', () => { if (r.checked) setDeskVisibility(r.value); });
+}
+$('#deskShareDone').addEventListener('click', () => closeSheets());
+$('#deskShareCopy').addEventListener('click', () => {
+  const link = $('#deskShareLink').value;
+  if (!link) return;
+  navigator.clipboard.writeText(link).then(
+    () => { $('#deskShareError').textContent = ''; $('#deskShareNote').textContent = 'Link copied to the clipboard.'; },
+    () => { $('#deskShareError').textContent = 'Your browser blocked clipboard access. Select the link and copy it manually.'; });
+});
+$('#deskShareNewCode').addEventListener('click', async () => {
+  if (!confirm('Generate a new code? The current link will stop working for everyone you have given it to.')) return;
+  try {
+    const r = await api('/api/desk/code', 'POST');
+    desk.code = r.code;
+    $('#deskShareError').textContent = '';
+    fillDeskShare();
+    $('#deskShareNote').textContent = 'New code generated. The previous link no longer works.';
+  } catch (err) {
+    $('#deskShareError').textContent = 'Could not generate a new code: ' + err.message;
+  }
+});
+
 function deskFlash(msg) {
   deskFlashText = msg;
   clearTimeout(deskFlashTimer);
@@ -4631,14 +4766,16 @@ function deskEditField(id, field, val) {
 const NEXT_PLACEHOLDER = 'Add the next step';
 
 function deskCardHtml(it) {
+  const ro = !!deskOwner; // someone else's board: read it, don't touch it
   const d = deskDays(it.moved);
-  const owner = it.state === 'waiting' ? (it.who || 'Unassigned') : 'Me';
+  const owner = it.state === 'waiting' ? (it.who || 'Unassigned') : (ro ? 'Them' : 'Me');
   const id = escapeHtml(it.id);
-  const mapName = it.mapRef ? deskMapName(it.mapRef) : null;
+  // a shared board arrives with its links already resolved for this viewer
+  const mapName = it.mapName || (it.mapRef ? deskMapName(it.mapRef) : null);
   return `
   <article class="dk-card" data-state="${it.state}" data-age="${deskAge(d)}">
     <div class="dk-card__top">
-      <h3 class="dk-card__title" contenteditable data-id="${id}" data-field="title">${escapeHtml(it.title)}</h3>
+      <h3 class="dk-card__title"${ro ? '' : ` contenteditable data-id="${id}" data-field="title"`}>${escapeHtml(it.title)}</h3>
       <span class="dk-card__clock" title="Days since this item was last updated">${deskDaysLabel(d)}</span>
     </div>
     <div class="dk-card__meta">${escapeHtml(owner)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
@@ -4646,11 +4783,11 @@ function deskCardHtml(it) {
       <button class="dk-maplink${mapName ? '' : ' dk-maplink--gone'}" data-act="openmap" data-map="${escapeHtml(it.mapRef)}"
         title="${mapName ? 'Open this map' : 'Open the linked map — it may have been deleted or unshared'}"
         >🗺 ${escapeHtml(mapName || 'Linked map')}</button>
-      <button class="dk-maplink__x" data-act="unlinkmap" data-id="${id}" title="Remove the linked map" aria-label="Remove the linked map">&times;</button>
+      ${ro ? '' : `<button class="dk-maplink__x" data-act="unlinkmap" data-id="${id}" title="Remove the linked map" aria-label="Remove the linked map">&times;</button>`}
     </div>` : ''}
-    <div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}" contenteditable
-         data-id="${id}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
-    <div class="dk-card__acts">
+    ${ro && !it.next ? '' : `<div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}"${ro ? '' : ` contenteditable data-id="${id}" data-field="next"`}
+         >${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>`}
+    ${ro ? '' : `<div class="dk-card__acts">
       <button class="dk-switch" data-act="reassign" data-id="${id}"
         title="${it.state === 'mine' ? 'Move this item to Waiting on others' : 'Assign this item to me'}"
         >${it.state === 'mine' ? 'Move to waiting' : 'Assign to me'}</button>
@@ -4658,13 +4795,37 @@ function deskCardHtml(it) {
       ${it.mapRef ? '' : `<button class="dk-btn" data-act="linkmap" data-id="${id}" title="Link one of your mind maps to this item">Link a map</button>`}
       <button class="dk-btn dk-btn--done" data-act="complete" data-id="${id}" title="Remove this item and add it to your completed count">Complete</button>
       <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item without counting it as completed">Delete</button>
-    </div>
+    </div>`}
     ${deskMapPickFor === it.id ? `<div class="dk-card__pick">
       ${deskMapSelectHtml(`data-act="pickmap" data-id="${id}"`, '', 'Choose a map…')}
       <button class="dk-btn" data-act="cancelmap">Cancel</button>
     </div>` : ''}
-    ${d >= deskStaleDays ? `<div class="dk-stalled"><span class="dk-stalled__txt">No activity for ${d} days</span><span class="dk-stalled__bar"></span><span class="dk-stalled__txt">Follow up or remove</span></div>` : ''}
+    ${d >= deskStaleDays ? `<div class="dk-stalled"><span class="dk-stalled__txt">No activity for ${d} days</span><span class="dk-stalled__bar"></span>${ro ? '' : '<span class="dk-stalled__txt">Follow up or remove</span>'}</div>` : ''}
   </article>`;
+}
+
+// Every project or reference already on the board, so the same one gets typed
+// once and picked thereafter. Sorted, case-insensitive, no duplicates.
+function deskTags() {
+  const seen = new Map();
+  for (const it of desk ? desk.items : []) {
+    if (it.tag && !seen.has(it.tag.toLowerCase())) seen.set(it.tag.toLowerCase(), it.tag);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// A plain text box until the board has projects to offer; from then on a
+// dropdown of them, with an entry that turns it back into a text box for a new
+// one. Swapping happens in place (see the change handler) so nothing else in
+// the half-filled form is disturbed.
+function deskTagFieldHtml() {
+  const tags = deskTags();
+  if (!tags.length) return '<input data-f="tag" maxlength="80" placeholder="Project or reference (optional)">';
+  return `<select class="dk-select" data-f="tag">
+    <option value="">No project or reference</option>
+    ${tags.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+    <option value="" data-new="1">＋ New project or reference…</option>
+  </select>`;
 }
 
 function deskFormHtml(state) {
@@ -4672,7 +4833,7 @@ function deskFormHtml(state) {
   return `
   <div class="dk-add">
     <input data-f="title" maxlength="200" placeholder="${mine ? 'What needs to be done?' : 'What are you waiting for?'}">
-    <input data-f="tag" maxlength="80" placeholder="Project or reference (optional)">
+    ${deskTagFieldHtml()}
     <input data-f="next" maxlength="300" placeholder="Next step (optional)">
     <input data-f="who" maxlength="80" placeholder="${mine ? 'Note (optional)' : 'Who it&rsquo;s with'}">
     ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
@@ -4697,11 +4858,16 @@ function renderDesk() {
   const stalled = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
+  const ro = !!deskOwner;
+  const whose = ro ? (deskOwner.name || '@' + deskOwner.username) : '';
+
   deskRoot.innerHTML = `
   <header class="dk-rig">
     <div>
       <h1 class="dk-rig__title">Standing Desk</h1>
-      <div class="dk-rig__sub">${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; Private to you</div>
+      <div class="dk-rig__sub">${ro
+        ? `${escapeHtml(whose)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
+        : `${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     </div>
     <div class="dk-tally">
       <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}<small>/${deskAssignedCap}</small></span></div>
@@ -4722,11 +4888,12 @@ function renderDesk() {
           <li class="dk-ref__row">
             ${r.mapRef ? `<button class="dk-ref__map" data-act="openmap" data-map="${escapeHtml(r.mapRef)}"
               title="Open ${escapeHtml(name || 'the linked map')}" aria-label="Open the linked map">🗺</button>` : ''}
-            <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r.text)}</span>
-            <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove reference">&times;</button>
+            <span class="dk-ref__txt"${ro ? '' : ` contenteditable data-ref="${n}"`}>${escapeHtml(r.text)}</span>
+            ${ro ? '' : `<button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove reference">&times;</button>`}
           </li>`; }).join('')}</ul>
-        ${desk.ref.length ? '' : '<p class="dk-empty">Details you refer to often.<br>Links, codes, contacts, targets, a map you keep reopening.</p>'}
-        ${deskForm === 'ref' ? `<div class="dk-add">
+        ${desk.ref.length ? '' : `<p class="dk-empty">${ro ? 'Nothing pinned here.'
+          : 'Details you refer to often.<br>Links, codes, contacts, targets, a map you keep reopening.'}</p>`}
+        ${ro ? '' : deskForm === 'ref' ? `<div class="dk-add">
             <input data-f="line" maxlength="200" placeholder="e.g. Release cutoff — Thursday 16:00">
             ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
             <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Add</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
@@ -4735,11 +4902,12 @@ function renderDesk() {
     </section>
 
     <section class="dk-panel">
-      <div class="dk-panel__head"><span class="dk-panel__name">Assigned to me</span><span class="dk-panel__note">limit ${deskAssignedCap}</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">${ro ? 'Assigned to them' : 'Assigned to me'}</span><span class="dk-panel__note">${ro ? 'their own work' : 'limit ' + deskAssignedCap}</span></div>
       <div class="dk-panel__body">
         ${mine.map(deskCardHtml).join('')}
-        ${mine.length ? '' : '<p class="dk-empty">No items assigned to you.<br>Add anything you&rsquo;re responsible for.</p>'}
-        ${deskForm === 'mine' ? deskFormHtml('mine')
+        ${mine.length ? '' : `<p class="dk-empty">${ro ? 'Nothing is assigned to them right now.'
+          : 'No items assigned to you.<br>Add anything you&rsquo;re responsible for.'}</p>`}
+        ${ro ? '' : deskForm === 'mine' ? deskFormHtml('mine')
           : `<button class="dk-opener" data-act="open" data-state="mine" ${mine.length >= deskAssignedCap ? 'disabled' : ''}>${mine.length >= deskAssignedCap ? 'Limit reached — complete an item first' : 'Add an item'}</button>`}
       </div>
     </section>
@@ -4748,18 +4916,19 @@ function renderDesk() {
       <div class="dk-panel__head"><span class="dk-panel__name">Waiting on others</span><span class="dk-panel__note">awaiting a response</span></div>
       <div class="dk-panel__body">
         ${waiting.map(deskCardHtml).join('')}
-        ${waiting.length ? '' : '<p class="dk-empty">You&rsquo;re not waiting on anyone.<br>Add an item when you hand work off or make a request.</p>'}
-        ${deskForm === 'waiting' ? deskFormHtml('waiting')
+        ${waiting.length ? '' : `<p class="dk-empty">${ro ? 'They are not waiting on anyone.'
+          : 'You&rsquo;re not waiting on anyone.<br>Add an item when you hand work off or make a request.'}</p>`}
+        ${ro ? '' : deskForm === 'waiting' ? deskFormHtml('waiting')
           : '<button class="dk-opener" data-act="open" data-state="waiting">Add an item you&rsquo;re waiting on</button>'}
       </div>
     </section>
 
-    <section class="dk-panel dk-panel--scratch">
-      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">not tracked or counted</span></div>
+    ${ro ? '' : `<section class="dk-panel dk-panel--scratch">
+      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">never shared, even when this desk is</span></div>
       <div class="dk-panel__body">
         <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Space to think something through.">${escapeHtml(desk.scratch || '')}</textarea>
       </div>
-    </section>
+    </section>`}
   </div>
 
   <div class="dk-foot">
@@ -4793,6 +4962,7 @@ deskRoot.addEventListener('click', e => {
   else if (act === 'open') { deskForm = b.dataset.state; deskFocusForm = true; renderDesk(); }
   else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
   else if (act === 'cancel') { deskForm = null; renderDesk(); }
+  else if (act === 'share') openDeskShare();
   else if (act === 'openmap') deskOpenMap(b.dataset.map);
   else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; renderDesk(); }
   else if (act === 'cancelmap') { deskMapPickFor = null; renderDesk(); }
@@ -4847,15 +5017,29 @@ deskRoot.addEventListener('blur', e => {
   }
 }, true);
 
-// the map picker on a card applies as soon as a map is chosen
 deskRoot.addEventListener('change', e => {
-  const sel = e.target.closest('select[data-act="pickmap"]');
-  if (!sel || !desk) return;
-  const it = desk.items.find(x => x.id === sel.dataset.id);
-  if (it) it.mapRef = sel.value;
-  deskMapPickFor = null;
-  saveDesk();
-  renderDesk();
+  if (!desk) return;
+  // the map picker on a card applies as soon as a map is chosen
+  const pick = e.target.closest('select[data-act="pickmap"]');
+  if (pick) {
+    const it = desk.items.find(x => x.id === pick.dataset.id);
+    if (it) it.mapRef = pick.value;
+    deskMapPickFor = null;
+    saveDesk();
+    renderDesk();
+    return;
+  }
+  // "New project or reference…" turns the dropdown into a text box. Swapped in
+  // place rather than re-rendered, so the rest of the form survives.
+  const tag = e.target.closest('select[data-f="tag"]');
+  if (tag && tag.selectedOptions[0] && tag.selectedOptions[0].dataset.new) {
+    const box = document.createElement('input');
+    box.dataset.f = 'tag';
+    box.maxLength = 80;
+    box.placeholder = 'New project or reference';
+    tag.replaceWith(box);
+    box.focus();
+  }
 });
 
 // clear the next-step prompt the moment someone types into it
@@ -4891,10 +5075,10 @@ function deskSummaryText() {
   const next = it => it.next || 'No next step recorded';
   const date = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
   return [
-    'Standing Desk — ' + date,
+    (deskOwner ? `Standing Desk of @${deskOwner.username} — ` : 'Standing Desk — ') + date,
     'Figures in brackets are days since each item was last updated.',
     '',
-    'ASSIGNED TO ME',
+    deskOwner ? 'ASSIGNED TO THEM' : 'ASSIGNED TO ME',
     ...(deskIn('mine').length ? deskIn('mine').map(it =>
       `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${age(it)}`) : ['- None']),
     '',

@@ -8,8 +8,8 @@ friends-only, or private, shared for real-time co-editing with built-in chat and
 attributed activity log — and there's a social side too: **follow** other people, see a
 **home feed** of their fresh maps, and **like** the ones you enjoy. You can even
 **generate a starting map from a text prompt with AI**. Alongside your maps, every
-account gets one private **Standing Desk** — a work board for what is actually on you
-right now, and what you're waiting on from someone else.
+account gets one **Standing Desk** — a work board for what is actually on you right now,
+and what you're waiting on from someone else, private by default and shareable by link.
 
 It runs as a single small Node server with a no-build web front end. With no
 configuration your data lives in a JSON file; it upgrades to **Postgres** for production
@@ -21,11 +21,18 @@ and turns on **AI generation** simply by setting environment variables.
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
   made three weeks ago reads as exactly that. Five assigned items at a time, plus reference
-  entries and a working-notes area. One board per person, private to them.
+  entries and a working-notes area. One board per person, private by default.
 - **Desk items and reference entries can link to a mind map** — pick one of your maps (or a
   map shared with you) when you add an item, or attach one later with **Link a map**. The
   link opens that map in the editor, and shows its current name, so renaming the map keeps
   the link accurate.
+- **Desks can be shared** — a desk is private until you say otherwise. Share it with **anyone
+  holding its link** (a secret code you can revoke at any time), or with **anyone at all**, in
+  which case it is linked from your profile. Viewers get a read-only board, and your **working
+  notes are never shared** under any setting.
+- **Project or reference is a dropdown** — once a project name is on the board, later items
+  pick it from a list instead of retyping it, with a **＋ New** entry for a name that isn't
+  there yet.
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -163,12 +170,28 @@ maps are for developing ideas, the desk is for tracking open work.
   **Link a map**. Following the link opens that map in the editor. Only the map's id is
   stored, so the desk always shows its current name; if the map is later deleted or
   unshared, the link says so instead of failing silently.
+- **One project or reference per item**, chosen from a dropdown of the ones already on the
+  board so the same name is typed once and picked thereafter. **＋ New project or reference**
+  turns the dropdown back into a text box for a name that isn't there yet.
 - **Reference** — short entries you refer to often (links, codes, contacts, targets, a map
   you keep reopening), edited in place and kept separate from the item list.
 - **Working notes** — a ruled area at the foot of the board for thinking something through.
   Saved with everything else, but nothing in it is tracked or counted.
 - **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,
   then what you are waiting on and from whom, each with its age.
+
+**Sharing.** The state of the board is shown in its header — click it to choose:
+
+- **Private** — only you. The default, and where every desk starts.
+- **Anyone with the link** — the board gets a secret code, and the link that carries it
+  (`…/#/desk/<you>/<code>`) opens a read-only copy for anyone, signed in or not. **Generate a
+  new code** revokes the old link immediately. Turning sharing off and on again keeps the same
+  link working, so a link you have handed out doesn't break by accident.
+- **Anyone** — readable by everyone and linked from your profile, no code needed.
+
+A viewer sees the items and reference entries, read-only, and can copy the summary. Your
+**working notes are never shared**, under any setting. Links to maps a viewer can't open are
+left out of what they're sent, rather than shown as something they can't reach.
 
 Everything autosaves as you type, and the board is included in **⤓ Export my data**.
 Deleting your account deletes it along with everything else.

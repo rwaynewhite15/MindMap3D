@@ -181,6 +181,7 @@
         <div id="profileName"></div>
         <div id="profileHandle" class="muted"></div>
       </div>
+      <button id="btnProfileDesk" class="tb" hidden title="Open this person's Standing Desk">Desk</button>
       <button id="btnFollowAction" class="tb" hidden></button>
       <button id="btnFriendAction" class="tb" hidden></button>
     </div>
@@ -291,7 +292,7 @@
       <p>We collect only what the Service needs to work:</p>
       <ul>
         <li><strong>Account information</strong> — your username, an optional display name, and your password. Passwords are never stored in plain text; we keep only a salted <em>scrypt</em> hash and cannot recover your original password.</li>
-        <li><strong>Content you create</strong> — the mind maps you build: bubble labels, notes, links, task states, groups, connections, and each map's name and visibility setting. Your Standing Desk (its items, reference entries, and working notes) is stored here too, and is always private to you — it is never shared, published, or shown on your profile. Optional profile fields (a short bio) are included here.</li>
+        <li><strong>Content you create</strong> — the mind maps you build: bubble labels, notes, links, task states, groups, connections, and each map's name and visibility setting. Your Standing Desk (its items, reference entries, and working notes) is stored here too. It is private by default; you can choose to share it, and its working notes are never included in what a viewer sees. Optional profile fields (a short bio) are included here.</li>
         <li><strong>Social data</strong> — your friend requests and friendships, who you follow and who follows you, the maps you like, and chat messages you send on maps you collaborate on.</li>
         <li><strong>A session cookie</strong> — one <code>HttpOnly</code> cookie that keeps you signed in. It holds a random session identifier, not your personal data.</li>
         <li><strong>Basic technical data</strong> — like most web servers, we may briefly process your IP address to rate-limit sign-ups and log-ins and to keep the Service secure. We do not use third-party advertising or analytics trackers.</li>
@@ -307,6 +308,7 @@
         <li><strong>Friends only</strong> — visible to you and your accepted friends. It is not listed on your profile to others, not counted in public totals, and cannot be opened by URL by non-friends.</li>
         <li><strong>Public</strong> — viewable (read-only) by anyone, including signed-out visitors, and eligible to appear in the discovery feed.</li>
       </ul>
+      <p>Your <strong>Standing Desk</strong> has its own setting, separate from any map. It is <strong>private</strong> unless you change it: you can share it with <strong>anyone holding its link</strong> (a secret code you can revoke at any time by generating a new one), or with <strong>anyone at all</strong>, in which case it is also linked from your profile. Viewers can only read it, and the working-notes area is never shared under any setting.</p>
       <p>Your username, and your display name if you choose to share it publicly, are visible to others when you interact socially or make maps public.</p>
 
       <h2>4. AI Map Generation</h2>
@@ -570,6 +572,26 @@
   <div id="mapLinkList" class="group-options"></div>
   <div class="sheet-row">
     <button id="mapLinkCancel" class="tb">Cancel</button>
+  </div>
+</div>
+
+<div id="sheetDeskShare" class="sheet" hidden>
+  <div class="sheet-title">Share this desk</div>
+  <div class="muted" style="margin-bottom:10px">Your working notes are never shared — a viewer sees the items and reference entries only, and cannot change anything.</div>
+  <label class="field-title">Who can see this desk?</label>
+  <label class="check"><input type="radio" name="deskVis" value="private"> Private — only me</label>
+  <label class="check"><input type="radio" name="deskVis" value="code"> Anyone with the link below</label>
+  <label class="check"><input type="radio" name="deskVis" value="public"> Anyone — and linked from my profile</label>
+  <div id="deskShareLinkWrap" hidden>
+    <label class="field-title">Share link</label>
+    <input id="deskShareLink" readonly onfocus="this.select()">
+    <div class="muted" id="deskShareNote" style="margin:6px 0 0"></div>
+  </div>
+  <div class="form-error" id="deskShareError"></div>
+  <div class="sheet-row">
+    <button id="deskShareNewCode" class="tb danger" hidden>Generate a new code</button>
+    <button id="deskShareCopy" class="tb" hidden>Copy link</button>
+    <button id="deskShareDone" class="tb primary-tb">Done</button>
   </div>
 </div>
 
