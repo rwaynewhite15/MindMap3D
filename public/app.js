@@ -1506,9 +1506,10 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
+const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
 
 function show(name) {
+  if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
   // the outline serves both the editor and the profile viewer; close it only when
   // leaving both (the rebuild for the new map happens after visibility flips below)
@@ -1552,6 +1553,7 @@ function route() {
 
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
+  if (h === 'desk') { show('desk'); loadDesk(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
@@ -4411,6 +4413,498 @@ function initProfileViewer() {
 }
 
 /* ================================================================
+   The Standing Desk — one private work board per account
+
+   Where a map holds ideas, the desk holds open work: what is assigned
+   to you, and what you are waiting on from someone else. Each item
+   records the date it was last updated, so a request made three weeks
+   ago is visible as exactly that. Nothing here is shared, published, or
+   shown on a profile — the board belongs to its owner alone.
+================================================================ */
+const DESK_DAY = 86400000;
+
+let desk = null;            // { ref, items, scratch, closed } — null until loaded
+let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
+let deskMaxItems = 40;      // items the board holds in total, both states
+let deskMaxRef = 40;        // reference entries the board holds
+let deskStaleDays = 14;     // no activity for this long and an item is stalled
+let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
+let deskFocusForm = false;  // a form just opened and should take the caret
+let deskMapPickFor = null;  // id of the item whose map picker is open, if any
+let deskFlashText = '';     // transient line above the board
+let deskFlashTimer = null;
+let deskSaveTimer = null;
+let deskDirty = false;
+
+const deskRoot = $('#deskRoot');
+
+const deskDays = ms => Math.max(0, Math.floor((Date.now() - ms) / DESK_DAY));
+const deskAge = d => (d >= deskStaleDays ? 'stalled' : d >= 7 ? 'aging' : 'current');
+const deskDaysLabel = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
+const deskUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const deskIn = state => (desk ? desk.items.filter(i => i.state === state) : []);
+
+/* ---------- links to mind maps ----------
+   An item or a reference entry may point at one of the maps on your own map
+   screen — your maps and the ones shared with you to edit. Only the map's id is
+   stored; the name is resolved at render time, so a rename shows through. */
+const deskLinkableMaps = () => [...mapsMine, ...mapsShared];
+const deskMapName = id => {
+  const m = deskLinkableMaps().find(x => x.id === id);
+  return m ? (m.name || 'Untitled map') : null;
+};
+
+function deskMapSelectHtml(attrs, selected, blankLabel) {
+  const option = m => `<option value="${escapeHtml(m.id)}"${m.id === selected ? ' selected' : ''}>` +
+    `${escapeHtml(m.name || 'Untitled map')}</option>`;
+  const group = (label, list) => (list.length
+    ? `<optgroup label="${label}">${list.map(option).join('')}</optgroup>` : '');
+  return `<select class="dk-select" ${attrs}>
+    <option value="">${blankLabel}</option>
+    ${group('My maps', mapsMine)}
+    ${group('Shared with me', mapsShared)}
+  </select>`;
+}
+
+// A linked map opens where you would actually work on it: in the editor when it
+// is one of yours, otherwise through the read-only viewer, which reports a map
+// that has been deleted or unshared.
+function deskOpenMap(mapId) {
+  if (!mapId) return;
+  flushDeskSave(); // leaving the desk — don't strand a pending edit
+  if (deskLinkableMaps().some(m => m.id === mapId)) {
+    location.hash = '#/map';
+    openMyMap(mapId).catch(err => alert(err.message));
+  } else {
+    openLinkedMap(mapId);
+  }
+}
+
+/* ---------- load / save ---------- */
+async function loadDesk() {
+  const first = !desk;
+  if (first) deskRoot.innerHTML = '<div class="dk-loading">Loading your desk…</div>';
+  // Unsaved local edits outrank a refetch — never pull the board out from
+  // under something the user just typed.
+  if (!deskDirty) {
+    try {
+      const data = await api('/api/desk');
+      desk = data.desk;
+      deskAssignedCap = data.cap;
+      deskMaxItems = data.maxItems;
+      deskMaxRef = data.maxRef;
+      deskStaleDays = data.staleDays;
+    } catch (err) {
+      if (first) {
+        deskRoot.innerHTML = '';
+        const p = document.createElement('div');
+        p.className = 'dk-loading';
+        p.textContent = 'This desk could not be loaded. ' + err.message;
+        deskRoot.appendChild(p);
+        return;
+      }
+      deskFlash('This board could not be refreshed. Showing your most recent local copy.');
+    }
+  }
+  renderDesk();
+}
+
+function saveDesk() {
+  if (!desk) return;
+  deskDirty = true;
+  clearTimeout(deskSaveTimer);
+  deskSaveTimer = setTimeout(doDeskSave, 700);
+}
+
+async function doDeskSave() {
+  if (!desk || !deskDirty) return;
+  try {
+    await api('/api/desk', 'PUT', { desk });
+    deskDirty = false;
+  } catch (err) {
+    // keep the edit in memory and keep trying; the board is the user's only copy
+    deskFlash('Changes have not been saved yet (' + err.message + '). Retrying.');
+    clearTimeout(deskSaveTimer);
+    deskSaveTimer = setTimeout(doDeskSave, 4000);
+  }
+}
+
+// Push a pending edit out before the page (or the session) goes away.
+// keepalive lets the request outlive the unload the way a queued beacon would.
+function flushDeskSave() {
+  clearTimeout(deskSaveTimer);
+  if (!desk || !deskDirty) return;
+  deskDirty = false;
+  fetch('/api/desk', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ desk }),
+    keepalive: true,
+    // a flush on the way out of the view still gets retried; one on the way out
+    // of the page has nothing left to retry with, and that is fine
+  }).catch(() => { deskDirty = true; deskSaveTimer = setTimeout(doDeskSave, 4000); });
+}
+window.addEventListener('pagehide', flushDeskSave);
+
+// Patched straight into the alert slot rather than re-rendered: a flash can
+// land while someone is mid-sentence in a card or an add form, and a full
+// re-render there would throw away what they had typed.
+function deskFlash(msg) {
+  deskFlashText = msg;
+  clearTimeout(deskFlashTimer);
+  paintDeskFlash();
+  deskFlashTimer = setTimeout(() => { deskFlashText = ''; paintDeskFlash(); }, 6000);
+}
+function paintDeskFlash() {
+  const slot = $('#dkAlert');
+  if (!slot) return; // board isn't on screen yet; renderDesk paints it in
+  slot.innerHTML = '';
+  if (!deskFlashText) return;
+  const box = document.createElement('div');
+  box.className = 'dk-alert';
+  box.setAttribute('role', 'status');
+  box.textContent = deskFlashText;
+  slot.appendChild(box);
+}
+
+/* ---------- mutations ---------- */
+function deskAdd(state, f) {
+  const title = f.title.trim();
+  if (!title) return;
+  if (state === 'mine' && deskIn('mine').length >= deskAssignedCap) {
+    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one, or move it to waiting, first.`);
+    return;
+  }
+  // The board itself has a ceiling. Say so rather than letting the save quietly
+  // drop the oldest item to fit.
+  if (desk.items.length >= deskMaxItems) {
+    deskFlash(`This board holds ${deskMaxItems} open items. Complete or delete one first.`);
+    return;
+  }
+  desk.items.unshift({
+    id: deskUid(), title, tag: f.tag.trim(), next: f.next.trim(), who: f.who.trim(),
+    mapRef: f.mapRef || '', state, moved: Date.now(),
+  });
+  deskForm = null;
+  saveDesk();
+  renderDesk();
+}
+
+// Reassigning an item is also an update to it, so the last-updated date is set
+// to now: the count that matters is the time since responsibility last moved.
+function deskReassign(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  if (it.state === 'waiting' && deskIn('mine').length >= deskAssignedCap) {
+    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one first.`);
+    return;
+  }
+  it.state = it.state === 'mine' ? 'waiting' : 'mine';
+  it.moved = Date.now();
+  saveDesk();
+  renderDesk();
+}
+
+function deskTouch(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  it.moved = Date.now();
+  saveDesk();
+  renderDesk();
+}
+
+function deskRemove(id, completed) {
+  desk.items = desk.items.filter(x => x.id !== id);
+  if (completed) desk.closed = (desk.closed || 0) + 1;
+  saveDesk();
+  renderDesk();
+}
+
+function deskEditField(id, field, val) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  it[field] = val.trim();
+  saveDesk();
+}
+
+/* ---------- render ---------- */
+const NEXT_PLACEHOLDER = 'Add the next step';
+
+function deskCardHtml(it) {
+  const d = deskDays(it.moved);
+  const owner = it.state === 'waiting' ? (it.who || 'Unassigned') : 'Me';
+  const id = escapeHtml(it.id);
+  const mapName = it.mapRef ? deskMapName(it.mapRef) : null;
+  return `
+  <article class="dk-card" data-state="${it.state}" data-age="${deskAge(d)}">
+    <div class="dk-card__top">
+      <h3 class="dk-card__title" contenteditable data-id="${id}" data-field="title">${escapeHtml(it.title)}</h3>
+      <span class="dk-card__clock" title="Days since this item was last updated">${deskDaysLabel(d)}</span>
+    </div>
+    <div class="dk-card__meta">${escapeHtml(owner)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
+    ${it.mapRef ? `<div class="dk-card__map">
+      <button class="dk-maplink${mapName ? '' : ' dk-maplink--gone'}" data-act="openmap" data-map="${escapeHtml(it.mapRef)}"
+        title="${mapName ? 'Open this map' : 'Open the linked map — it may have been deleted or unshared'}"
+        >🗺 ${escapeHtml(mapName || 'Linked map')}</button>
+      <button class="dk-maplink__x" data-act="unlinkmap" data-id="${id}" title="Remove the linked map" aria-label="Remove the linked map">&times;</button>
+    </div>` : ''}
+    <div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}" contenteditable
+         data-id="${id}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
+    <div class="dk-card__acts">
+      <button class="dk-switch" data-act="reassign" data-id="${id}"
+        title="${it.state === 'mine' ? 'Move this item to Waiting on others' : 'Assign this item to me'}"
+        >${it.state === 'mine' ? 'Move to waiting' : 'Assign to me'}</button>
+      <button class="dk-btn" data-act="touch" data-id="${id}" title="Reset the last-updated date to today">Mark updated</button>
+      ${it.mapRef ? '' : `<button class="dk-btn" data-act="linkmap" data-id="${id}" title="Link one of your mind maps to this item">Link a map</button>`}
+      <button class="dk-btn dk-btn--done" data-act="complete" data-id="${id}" title="Remove this item and add it to your completed count">Complete</button>
+      <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item without counting it as completed">Delete</button>
+    </div>
+    ${deskMapPickFor === it.id ? `<div class="dk-card__pick">
+      ${deskMapSelectHtml(`data-act="pickmap" data-id="${id}"`, '', 'Choose a map…')}
+      <button class="dk-btn" data-act="cancelmap">Cancel</button>
+    </div>` : ''}
+    ${d >= deskStaleDays ? `<div class="dk-stalled"><span class="dk-stalled__txt">No activity for ${d} days</span><span class="dk-stalled__bar"></span><span class="dk-stalled__txt">Follow up or remove</span></div>` : ''}
+  </article>`;
+}
+
+function deskFormHtml(state) {
+  const mine = state === 'mine';
+  return `
+  <div class="dk-add">
+    <input data-f="title" maxlength="200" placeholder="${mine ? 'What needs to be done?' : 'What are you waiting for?'}">
+    <input data-f="tag" maxlength="80" placeholder="Project or reference (optional)">
+    <input data-f="next" maxlength="300" placeholder="Next step (optional)">
+    <input data-f="who" maxlength="80" placeholder="${mine ? 'Note (optional)' : 'Who it&rsquo;s with'}">
+    ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
+    <div class="dk-add__row">
+      <button class="dk-btn dk-btn--go" data-act="save" data-state="${state}">Add item</button>
+      <button class="dk-btn" data-act="cancel">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function renderDesk() {
+  if (!desk) return;
+  // The working-notes area is the one field people type into continuously, and a
+  // re-render can land mid-sentence (a flash timer, a save retry). Put the
+  // caret back where it was.
+  const active = document.activeElement;
+  const scratchFocused = !!active && active.id === 'dkScratch';
+  const caret = scratchFocused ? [active.selectionStart, active.selectionEnd] : null;
+
+  const mine = deskIn('mine');
+  const waiting = deskIn('waiting');
+  const stalled = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
+  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+
+  deskRoot.innerHTML = `
+  <header class="dk-rig">
+    <div>
+      <h1 class="dk-rig__title">Standing Desk</h1>
+      <div class="dk-rig__sub">${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; Private to you</div>
+    </div>
+    <div class="dk-tally">
+      <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}<small>/${deskAssignedCap}</small></span></div>
+      <div class="dk-tally__cell dk-tally__cell--waiting"><span class="dk-tally__k">Waiting</span><span class="dk-tally__v">${waiting.length}</span></div>
+      <div class="dk-tally__cell dk-tally__cell--stalled" data-zero="${stalled ? 0 : 1}"><span class="dk-tally__k">Stalled</span><span class="dk-tally__v">${stalled}</span></div>
+    </div>
+  </header>
+
+  <div id="dkAlert"></div>
+
+  <div class="dk-board">
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">Reference</span><span class="dk-panel__note">kept until removed</span></div>
+      <div class="dk-panel__body">
+        <ul class="dk-ref">${desk.ref.map((r, n) => {
+          const name = r.mapRef ? deskMapName(r.mapRef) : null;
+          return `
+          <li class="dk-ref__row">
+            ${r.mapRef ? `<button class="dk-ref__map" data-act="openmap" data-map="${escapeHtml(r.mapRef)}"
+              title="Open ${escapeHtml(name || 'the linked map')}" aria-label="Open the linked map">🗺</button>` : ''}
+            <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r.text)}</span>
+            <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove reference">&times;</button>
+          </li>`; }).join('')}</ul>
+        ${desk.ref.length ? '' : '<p class="dk-empty">Details you refer to often.<br>Links, codes, contacts, targets, a map you keep reopening.</p>'}
+        ${deskForm === 'ref' ? `<div class="dk-add">
+            <input data-f="line" maxlength="200" placeholder="e.g. Release cutoff — Thursday 16:00">
+            ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
+            <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Add</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
+          </div>` : '<button class="dk-opener" data-act="openref">Add a reference</button>'}
+      </div>
+    </section>
+
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">Assigned to me</span><span class="dk-panel__note">limit ${deskAssignedCap}</span></div>
+      <div class="dk-panel__body">
+        ${mine.map(deskCardHtml).join('')}
+        ${mine.length ? '' : '<p class="dk-empty">No items assigned to you.<br>Add anything you&rsquo;re responsible for.</p>'}
+        ${deskForm === 'mine' ? deskFormHtml('mine')
+          : `<button class="dk-opener" data-act="open" data-state="mine" ${mine.length >= deskAssignedCap ? 'disabled' : ''}>${mine.length >= deskAssignedCap ? 'Limit reached — complete an item first' : 'Add an item'}</button>`}
+      </div>
+    </section>
+
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">Waiting on others</span><span class="dk-panel__note">awaiting a response</span></div>
+      <div class="dk-panel__body">
+        ${waiting.map(deskCardHtml).join('')}
+        ${waiting.length ? '' : '<p class="dk-empty">You&rsquo;re not waiting on anyone.<br>Add an item when you hand work off or make a request.</p>'}
+        ${deskForm === 'waiting' ? deskFormHtml('waiting')
+          : '<button class="dk-opener" data-act="open" data-state="waiting">Add an item you&rsquo;re waiting on</button>'}
+      </div>
+    </section>
+
+    <section class="dk-panel dk-panel--scratch">
+      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">not tracked or counted</span></div>
+      <div class="dk-panel__body">
+        <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Space to think something through.">${escapeHtml(desk.scratch || '')}</textarea>
+      </div>
+    </section>
+  </div>
+
+  <div class="dk-foot">
+    <span class="dk-foot__txt">Days shown are since each item was last updated. After ${deskStaleDays} days without activity, an item is flagged as stalled.</span>
+    <button class="dk-btn" data-act="copy" style="margin-left:auto">Copy summary</button>
+  </div>`;
+
+  paintDeskFlash();
+  if (caret) {
+    const box = $('#dkScratch');
+    box.focus();
+    try { box.setSelectionRange(caret[0], caret[1]); } catch { /* value changed under us */ }
+  } else if (deskFocusForm) {
+    // only on the render that opened the form — never steal the caret back
+    // from a field the user has already moved on to
+    deskFocusForm = false;
+    const first = deskRoot.querySelector('.dk-add input');
+    if (first) first.focus();
+  }
+}
+
+/* ---------- events (delegated; deskRoot itself survives every re-render) ---------- */
+deskRoot.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b || !desk) return;
+  const act = b.dataset.act;
+  if (act === 'reassign') deskReassign(b.dataset.id);
+  else if (act === 'touch') deskTouch(b.dataset.id);
+  else if (act === 'complete') deskRemove(b.dataset.id, true);
+  else if (act === 'delete') deskRemove(b.dataset.id, false);
+  else if (act === 'open') { deskForm = b.dataset.state; deskFocusForm = true; renderDesk(); }
+  else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
+  else if (act === 'cancel') { deskForm = null; renderDesk(); }
+  else if (act === 'openmap') deskOpenMap(b.dataset.map);
+  else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; renderDesk(); }
+  else if (act === 'cancelmap') { deskMapPickFor = null; renderDesk(); }
+  else if (act === 'unlinkmap') {
+    const it = desk.items.find(x => x.id === b.dataset.id);
+    if (it) { it.mapRef = ''; saveDesk(); renderDesk(); }
+  } else if (act === 'save') {
+    const form = b.closest('.dk-add');
+    const val = k => form.querySelector(`[data-f="${k}"]`).value;
+    deskAdd(b.dataset.state, {
+      title: val('title'), tag: val('tag'), next: val('next'),
+      who: val('who'), mapRef: val('mapRef'),
+    });
+  } else if (act === 'saveref') {
+    const form = b.closest('.dk-add');
+    const mapRef = form.querySelector('[data-f="mapRef"]').value;
+    // A reference that is only a map link still needs a label; the map's own
+    // name is the obvious one.
+    const v = form.querySelector('[data-f="line"]').value.trim() || (mapRef ? deskMapName(mapRef) || '' : '');
+    if (v && desk.ref.length >= deskMaxRef) {
+      deskFlash(`Reference holds ${deskMaxRef} entries. Remove one to add another.`);
+      return;
+    }
+    if (v) { desk.ref.push({ text: v, mapRef }); saveDesk(); }
+    deskForm = null;
+    renderDesk();
+  } else if (act === 'unref') {
+    desk.ref.splice(+b.dataset.n, 1);
+    saveDesk();
+    renderDesk();
+  } else if (act === 'copy') {
+    navigator.clipboard.writeText(deskSummaryText()).then(
+      () => deskFlash('Summary copied to the clipboard.'),
+      () => deskFlash('Your browser blocked clipboard access. Select the text and copy it manually.'));
+  }
+});
+
+// contenteditable commits on blur — captured, since blur does not bubble
+deskRoot.addEventListener('blur', e => {
+  const t = e.target;
+  if (!desk || !t.dataset) return;
+  if (t.dataset.field) {
+    const v = t.textContent.trim();
+    if (t.dataset.field === 'next' && v === NEXT_PLACEHOLDER) return; // untouched placeholder
+    deskEditField(t.dataset.id, t.dataset.field, v);
+    renderDesk();
+  } else if (t.dataset.ref !== undefined) {
+    const n = +t.dataset.ref, v = t.textContent.trim();
+    if (v) desk.ref[n].text = v; else desk.ref.splice(n, 1); // emptied a line = removed it
+    saveDesk();
+    renderDesk();
+  }
+}, true);
+
+// the map picker on a card applies as soon as a map is chosen
+deskRoot.addEventListener('change', e => {
+  const sel = e.target.closest('select[data-act="pickmap"]');
+  if (!sel || !desk) return;
+  const it = desk.items.find(x => x.id === sel.dataset.id);
+  if (it) it.mapRef = sel.value;
+  deskMapPickFor = null;
+  saveDesk();
+  renderDesk();
+});
+
+// clear the next-step prompt the moment someone types into it
+deskRoot.addEventListener('focus', e => {
+  const t = e.target;
+  if (t.classList && t.classList.contains('dk-card__next--empty')) t.textContent = '';
+}, true);
+
+deskRoot.addEventListener('input', e => {
+  if (e.target.id === 'dkScratch' && desk) { desk.scratch = e.target.value; saveDesk(); }
+});
+
+deskRoot.addEventListener('keydown', e => {
+  // the map editor's shortcuts are guarded on #view-map, but the sheet/menu
+  // handlers are not — keep desk typing to the desk
+  e.stopPropagation();
+  if (e.key === 'Enter' && e.target.matches('.dk-add input')) {
+    e.preventDefault();
+    e.target.closest('.dk-add').querySelector('[data-act="save"],[data-act="saveref"]').click();
+  } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'title') {
+    e.preventDefault(); // one line per title; commit it instead of adding a newline
+    e.target.blur();
+  } else if (e.key === 'Escape' && (deskForm || deskMapPickFor)) {
+    deskForm = null;
+    deskMapPickFor = null;
+    renderDesk();
+  }
+});
+
+// The board as plain text, for pasting into a status update or an email.
+function deskSummaryText() {
+  const age = it => '[' + deskDaysLabel(deskDays(it.moved)) + ']';
+  const next = it => it.next || 'No next step recorded';
+  const date = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  return [
+    'Standing Desk — ' + date,
+    'Figures in brackets are days since each item was last updated.',
+    '',
+    'ASSIGNED TO ME',
+    ...(deskIn('mine').length ? deskIn('mine').map(it =>
+      `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${age(it)}`) : ['- None']),
+    '',
+    'WAITING ON OTHERS',
+    ...(deskIn('waiting').length ? deskIn('waiting').map(it =>
+      `- ${it.who || 'Unassigned'}: ${it.title} — ${next(it)} ${age(it)}`) : ['- None']),
+  ].join('\n');
+}
+
+/* ================================================================
    Settings
 ================================================================ */
 function fillSettings() {
@@ -4445,6 +4939,7 @@ $('#formSettings').addEventListener('submit', async e => {
 
 $('#btnLogout').addEventListener('click', async () => {
   flushSave();
+  flushDeskSave();
   stopLive();
   closeChat();
   stopNotifications();
@@ -4454,6 +4949,7 @@ $('#btnLogout').addEventListener('click', async () => {
   mapsShared = [];
   currentMapId = null;
   currentMapInfo = null;
+  desk = null; // the next account to sign in here gets its own board
   location.hash = '';
   show('auth');
 });
@@ -4489,8 +4985,10 @@ $('#deleteAcctConfirm').addEventListener('click', async () => {
   $('#deleteAcctConfirm').disabled = true;
   try {
     await api('/api/me', 'DELETE', { password });
-    // fully reset client state, exactly like sign-out
+    // fully reset client state, exactly like sign-out. The desk went with the
+    // account server-side, so drop it here without trying to flush it.
     flushSave(); stopLive(); closeChat(); closeSheets();
+    clearTimeout(deskSaveTimer); deskDirty = false; desk = null;
     me = null; mapsMine = []; mapsShared = [];
     currentMapId = null; currentMapInfo = null;
     location.hash = '';
@@ -4518,6 +5016,7 @@ $('#tabRegister').addEventListener('click', () => {
 });
 
 async function afterSignIn() {
+  desk = null; // whoever just signed in gets their own board, not the last one's
   loadChatLayout();
   await loadMaps();
   refreshBadge();

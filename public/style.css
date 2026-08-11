@@ -1353,6 +1353,15 @@ button.primary {
 }
 .map-order-row .mo-move:disabled { opacity: 0.35; cursor: default; }
 
+/* ---------------- tablets / narrow desktop ----------------
+   Between the hamburger breakpoint below and a full-width window the top bar
+   has to fit the logo, the bell, and six nav links on one line. Drop the logo
+   tagline and tighten the links so nothing spills off the right edge. */
+@media (max-width: 760px) {
+  #logo em { display: none; }
+  #mainNav a { padding: 8px 7px; font-size: 12.5px; }
+}
+
 /* ---------------- small screens ---------------- */
 @media (max-width: 560px) {
   #logo { font-size: 13px; }
@@ -1429,3 +1438,215 @@ button.primary {
   #view-profile.has-tabs #profileHint { top: 108px; }
 }
 
+
+/* ================================================================
+   The Standing Desk — one private work board per account.
+
+   Deliberately a different material from the rest of the app: light
+   paper panels bolted to a steel rig, so it reads as the physical
+   board on your desk rather than another screen of the mind map.
+   Everything is prefixed `dk-` and scoped to #view-desk so none of it
+   can leak into the map, feed, or profile views.
+
+   No web fonts (the app's CSP is style-src 'self'); the condensed and
+   mono stacks below fall through to whatever the system provides.
+================================================================ */
+#view-desk {
+  --dk-steel: #242B2E;
+  --dk-steel-2: #2F383C;
+  --dk-edge: #414C51;
+  --dk-board: #F1F2EE;
+  --dk-board-line: #DDDFD7;
+  --dk-ink: #1B2123;
+  --dk-ink-2: #616B6E;
+  --dk-ink-3: #8A9296;
+  --dk-amber: #E3A21F;
+  --dk-red: #C24B3C;
+  --dk-blue: #35768F;
+  --dk-green: #6B8D50;
+  --dk-label: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', system-ui, sans-serif;
+  --dk-body: 'IBM Plex Sans', 'Space Grotesk', system-ui, sans-serif;
+  --dk-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--dk-steel);
+  font-family: var(--dk-body);
+  color: var(--dk-board);
+}
+.dk-root { flex: 1; overflow-y: auto; padding: 14px; -webkit-overflow-scrolling: touch; }
+#view-desk [contenteditable]:focus { outline: 2px solid var(--dk-blue); outline-offset: 2px; }
+#view-desk button:focus-visible,
+#view-desk textarea:focus-visible { outline: 2px solid var(--dk-blue); outline-offset: 2px; }
+
+/* ---------------- rig (header + tallies) ---------------- */
+.dk-rig {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px;
+  border-bottom: 2px solid var(--dk-edge);
+  padding: 2px 2px 12px;
+  margin-bottom: 14px;
+}
+.dk-rig__title {
+  font-family: var(--dk-label); font-weight: 700; font-size: 30px;
+  letter-spacing: 0.14em; text-transform: uppercase; line-height: 1;
+  color: var(--dk-board);
+}
+.dk-rig__sub { font-family: var(--dk-mono); font-size: 11px; color: var(--dk-ink-3); letter-spacing: 0.04em; margin-top: 5px; }
+.dk-tally { display: flex; gap: 2px; margin-left: auto; }
+.dk-tally__cell { background: var(--dk-steel-2); border: 1px solid var(--dk-edge); padding: 6px 13px 7px; min-width: 80px; }
+.dk-tally__k {
+  font-family: var(--dk-label); font-size: 11px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--dk-ink-3); display: block;
+}
+.dk-tally__v { font-family: var(--dk-mono); font-size: 21px; font-weight: 600; line-height: 1.15; display: block; }
+.dk-tally__v small { font-size: 12px; color: var(--dk-ink-3); }
+.dk-tally__cell--mine .dk-tally__v { color: var(--dk-blue); }
+.dk-tally__cell--waiting .dk-tally__v { color: var(--dk-board); }
+.dk-tally__cell--stalled .dk-tally__v { color: var(--dk-amber); }
+.dk-tally__cell--stalled[data-zero="1"] .dk-tally__v { color: var(--dk-ink-3); }
+
+/* ---------------- board grid + panels ---------------- */
+.dk-board { display: grid; grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.1fr) minmax(0, 1.1fr); gap: 12px; }
+.dk-panel {
+  background: var(--dk-board); color: var(--dk-ink);
+  border: 1px solid var(--dk-edge);
+  display: flex; flex-direction: column; min-height: 190px;
+}
+.dk-panel--scratch { grid-column: 1 / -1; margin-top: 12px; }
+.dk-panel__head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--dk-board-line);
+  background: #E7E9E3;
+}
+.dk-panel__name {
+  font-family: var(--dk-label); font-weight: 700; font-size: 14px;
+  letter-spacing: 0.15em; text-transform: uppercase; color: var(--dk-ink);
+}
+.dk-panel__note { font-family: var(--dk-mono); font-size: 10px; color: var(--dk-ink-3); margin-left: auto; letter-spacing: 0.02em; }
+.dk-panel__body { padding: 10px 12px 13px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
+
+/* ---------------- item cards ---------------- */
+/* The left rule carries the state: blue = assigned to me, amber = waiting on
+   someone else, red once the item has stalled. */
+.dk-card { position: relative; background: #fff; border: 1px solid var(--dk-board-line); padding: 9px 11px 10px 13px; }
+.dk-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--dk-ink-3); }
+.dk-card[data-state="mine"]::before { background: var(--dk-blue); }
+.dk-card[data-state="waiting"]::before { background: var(--dk-amber); }
+.dk-card[data-age="stalled"]::before { background: var(--dk-red); }
+.dk-card__top { display: flex; align-items: flex-start; gap: 8px; }
+.dk-card__title { font-weight: 600; font-size: 14.5px; line-height: 1.3; flex: 1; word-break: break-word; }
+.dk-card__clock {
+  font-family: var(--dk-mono); font-size: 11px; font-weight: 600;
+  color: var(--dk-ink-2); white-space: nowrap; padding-top: 2px; letter-spacing: -0.02em;
+}
+.dk-card[data-age="aging"] .dk-card__clock { color: #A8761A; }
+.dk-card[data-age="stalled"] .dk-card__clock { color: var(--dk-red); }
+.dk-card__meta { font-family: var(--dk-mono); font-size: 10.5px; color: var(--dk-ink-3); margin-top: 3px; letter-spacing: 0.01em; text-transform: uppercase; }
+.dk-card__next {
+  font-size: 13px; line-height: 1.4; margin-top: 7px; color: var(--dk-ink);
+  border-left: 2px solid var(--dk-board-line); padding: 1px 0 1px 8px; cursor: text;
+}
+.dk-card__next:hover { border-left-color: var(--dk-blue); }
+.dk-card__next--empty { color: var(--dk-red); font-style: italic; }
+.dk-card__acts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+
+/* the hand-off switch — the one control the whole board is built around */
+.dk-switch {
+  font-family: var(--dk-label); font-weight: 600; font-size: 11px; letter-spacing: 0.11em;
+  text-transform: uppercase; border: 1px solid var(--dk-ink); background: var(--dk-ink); color: #fff;
+  padding: 4px 10px 3px; display: inline-flex; align-items: center; gap: 6px;
+}
+.dk-switch:hover { background: var(--dk-blue); border-color: var(--dk-blue); }
+.dk-switch::before { content: ""; width: 6px; height: 6px; background: currentColor; display: block; }
+.dk-btn {
+  font-family: var(--dk-label); font-weight: 600; font-size: 11px; letter-spacing: 0.11em;
+  text-transform: uppercase; border: 1px solid var(--dk-board-line); background: #fff; color: var(--dk-ink-2);
+  padding: 4px 9px 3px;
+}
+.dk-btn:hover { border-color: var(--dk-ink-2); color: var(--dk-ink); }
+.dk-btn--done:hover { border-color: var(--dk-green); color: var(--dk-green); }
+.dk-btn--drop:hover { border-color: var(--dk-red); color: var(--dk-red); }
+
+/* hazard band on an item with no activity for two weeks */
+.dk-stalled { margin-top: 9px; display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--dk-board-line); padding-top: 8px; }
+.dk-stalled__bar { height: 9px; flex: 1; background: repeating-linear-gradient(45deg, var(--dk-amber) 0 6px, #2F383C 6px 12px); }
+.dk-stalled__txt {
+  font-family: var(--dk-label); font-weight: 700; font-size: 10.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: #8A6410; white-space: nowrap;
+}
+
+/* ---------------- reference lines ---------------- */
+.dk-ref { list-style: none; display: flex; flex-direction: column; }
+.dk-ref__row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px dotted var(--dk-board-line); }
+.dk-ref__txt { font-family: var(--dk-mono); font-size: 12px; flex: 1; line-height: 1.4; word-break: break-word; cursor: text; }
+.dk-ref__x { border: 0; background: none; color: var(--dk-ink-3); font-size: 14px; line-height: 1; padding: 0 2px; font-family: var(--dk-mono); }
+.dk-ref__x:hover { color: var(--dk-red); }
+
+/* ---------------- links to mind maps ---------------- */
+/* An item or reference entry can point at one of your maps. The link is styled
+   as a quiet secondary line, not a fifth action — following it leaves the board. */
+.dk-card__map { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.dk-maplink {
+  flex: 1; min-width: 0; text-align: left;
+  font-family: var(--dk-mono); font-size: 11.5px; letter-spacing: 0.01em;
+  border: 1px solid var(--dk-board-line); background: #FAFBF8; color: var(--dk-blue);
+  padding: 3px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dk-maplink:hover { border-color: var(--dk-blue); background: #fff; }
+.dk-maplink--gone { color: var(--dk-ink-3); font-style: italic; }
+.dk-maplink__x {
+  border: 0; background: none; color: var(--dk-ink-3);
+  font-size: 14px; line-height: 1; padding: 0 4px; font-family: var(--dk-mono); flex: none;
+}
+.dk-maplink__x:hover { color: var(--dk-red); }
+.dk-card__pick { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.dk-card__pick .dk-select { flex: 1; min-width: 0; }
+.dk-card__pick .dk-btn { flex: none; }
+/* reference rows put the link first, as a compact icon before the text */
+.dk-ref__map {
+  border: 0; background: none; padding: 0 2px; font-size: 12px; line-height: 1.4; flex: none;
+  filter: grayscale(0.35);
+}
+.dk-ref__map:hover { filter: none; }
+
+/* ---------------- add forms ---------------- */
+.dk-add { border: 1px dashed var(--dk-ink-3); padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; background: #FAFBF8; }
+.dk-add input, .dk-select {
+  font-family: var(--dk-body); font-size: 16px; padding: 5px 7px;
+  border: 1px solid var(--dk-board-line); background: #fff; color: var(--dk-ink); width: 100%;
+}
+.dk-add input:focus, .dk-select:focus, .dk-scratch:focus { outline: 2px solid var(--dk-blue); outline-offset: 1px; }
+.dk-add__row { display: flex; gap: 6px; }
+.dk-add__row .dk-btn { flex: 1; text-align: center; }
+.dk-add__row .dk-btn--go { background: var(--dk-ink); color: #fff; border-color: var(--dk-ink); }
+.dk-add__row .dk-btn--go:hover { background: var(--dk-blue); border-color: var(--dk-blue); color: #fff; }
+.dk-opener {
+  font-family: var(--dk-label); font-weight: 600; font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase;
+  border: 1px dashed var(--dk-ink-3); background: none; color: var(--dk-ink-2); padding: 7px; width: 100%;
+}
+.dk-opener:hover { border-color: var(--dk-blue); color: var(--dk-blue); }
+.dk-opener[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+.dk-scratch {
+  width: 100%; flex: 1; min-height: 110px; border: 0; resize: vertical;
+  font-family: var(--dk-mono); font-size: 12.5px; line-height: 1.65; color: var(--dk-ink);
+  background: repeating-linear-gradient(to bottom, transparent 0 20px, var(--dk-board-line) 20px 21px);
+  padding: 0;
+}
+
+.dk-empty { font-family: var(--dk-mono); font-size: 11.5px; color: var(--dk-ink-3); line-height: 1.6; padding: 4px 0; }
+.dk-loading { font-family: var(--dk-mono); font-size: 12px; color: var(--dk-ink-3); padding: 30px 2px; }
+.dk-alert { font-family: var(--dk-mono); font-size: 11.5px; color: var(--dk-amber); border: 1px solid var(--dk-amber); padding: 7px 10px; margin-bottom: 12px; line-height: 1.5; }
+
+.dk-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--dk-edge); }
+.dk-foot__txt { font-family: var(--dk-mono); font-size: 10.5px; color: var(--dk-ink-3); letter-spacing: 0.02em; }
+.dk-foot .dk-btn { background: var(--dk-steel-2); border-color: var(--dk-edge); color: var(--dk-ink-3); }
+.dk-foot .dk-btn:hover { color: var(--dk-board); border-color: var(--dk-ink-3); }
+
+@media (max-width: 900px) {
+  .dk-board { grid-template-columns: 1fr; }
+  .dk-panel--scratch { margin-top: 0; }
+  .dk-rig { gap: 10px; }
+  .dk-rig__title { font-size: 24px; }
+  .dk-tally { margin-left: 0; width: 100%; }
+  .dk-tally__cell { flex: 1; min-width: 0; }
+}

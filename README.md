@@ -7,7 +7,9 @@ task checkboxes, and keep as many separate maps as you like. Maps can be public,
 friends-only, or private, shared for real-time co-editing with built-in chat and an
 attributed activity log — and there's a social side too: **follow** other people, see a
 **home feed** of their fresh maps, and **like** the ones you enjoy. You can even
-**generate a starting map from a text prompt with AI**.
+**generate a starting map from a text prompt with AI**. Alongside your maps, every
+account gets one private **Standing Desk** — a work board for what is actually on you
+right now, and what you're waiting on from someone else.
 
 It runs as a single small Node server with a no-build web front end. With no
 configuration your data lives in a JSON file; it upgrades to **Postgres** for production
@@ -15,6 +17,15 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **The Standing Desk** — a second page for every account, next to your maps. Where a map
+  holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
+  on** from someone else, and the number of days since each was last updated — so a request
+  made three weeks ago reads as exactly that. Five assigned items at a time, plus reference
+  entries and a working-notes area. One board per person, private to them.
+- **Desk items and reference entries can link to a mind map** — pick one of your maps (or a
+  map shared with you) when you add an item, or attach one later with **Link a map**. The
+  link opens that map in the editor, and shows its current name, so renaming the map keeps
+  the link accurate.
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -127,6 +138,40 @@ tool.
 
 This flow highlights a key product advantage: one account can manage many distinct maps
 without clutter or context switching pain.
+
+### The Standing Desk — one work board per account
+
+Open **Desk** in the top navigation. Every account has exactly one, and it is **always
+private**: no visibility tier, no editors, never listed on a profile or in the feed. Where
+maps are for developing ideas, the desk is for tracking open work.
+
+- **Two states.** Every item is either **Assigned to me** or **Waiting on others**.
+  **Move to waiting** / **Assign to me** moves an item between them and **resets its
+  last-updated date**, since a reassignment is the point from which the next wait is
+  measured. **Mark updated** resets that date without moving the item — for when you
+  followed up and the position hasn't changed.
+- **A limit of five assigned items.** The board declines a sixth and explains why: complete
+  one, or move it to waiting. Nothing is ever deleted to make room.
+- **Age is tracked, not guessed.** Each item shows the days since it was last updated. At a
+  week it turns amber; after **14 days** it is flagged as stalled, with a red edge and a
+  band reading *follow up or remove*. The **Stalled** figure in the header counts them, so
+  an item that has quietly gone quiet stays visible.
+- **A next step on every item**, edited in place. Left empty it is shown in red — an item
+  with no next step is a note, not a commitment.
+- **A link to a mind map.** Items and reference entries can each point at one map — your own,
+  or one shared with you to edit — chosen when you add them or attached afterwards with
+  **Link a map**. Following the link opens that map in the editor. Only the map's id is
+  stored, so the desk always shows its current name; if the map is later deleted or
+  unshared, the link says so instead of failing silently.
+- **Reference** — short entries you refer to often (links, codes, contacts, targets, a map
+  you keep reopening), edited in place and kept separate from the item list.
+- **Working notes** — a ruled area at the foot of the board for thinking something through.
+  Saved with everything else, but nothing in it is tracked or counted.
+- **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,
+  then what you are waiting on and from whom, each with its age.
+
+Everything autosaves as you type, and the board is included in **⤓ Export my data**.
+Deleting your account deletes it along with everything else.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
@@ -319,7 +364,8 @@ lives in the database.
 ### Schema migrations are automatic and safe
 
 On boot the Postgres backend adds any missing columns with `ADD COLUMN IF NOT EXISTS`
-(including the `following`/`followers` follow graph) and runs a **one-time, idempotent**
+(including the `following`/`followers` follow graph and the `desk` board) and runs a
+**one-time, idempotent**
 migration that wraps each legacy single-map account into the multi-map shape. It only
 *reads* the old `map` column to build the first entry of the new `maps` array — it never
 drops or overwrites existing bubbles, and re-running it is a no-op. Notes, links, tasks,
@@ -330,7 +376,7 @@ is required for them.
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |
