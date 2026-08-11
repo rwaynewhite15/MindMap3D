@@ -7,7 +7,9 @@ task checkboxes, and keep as many separate maps as you like. Maps can be public,
 friends-only, or private, shared for real-time co-editing with built-in chat and an
 attributed activity log — and there's a social side too: **follow** other people, see a
 **home feed** of their fresh maps, and **like** the ones you enjoy. You can even
-**generate a starting map from a text prompt with AI**.
+**generate a starting map from a text prompt with AI**. Alongside your maps, every
+account gets one private **Standing Desk** — a work board for what is actually on you
+right now, and what you're waiting on from someone else.
 
 It runs as a single small Node server with a no-build web front end. With no
 configuration your data lives in a JSON file; it upgrades to **Postgres** for production
@@ -15,6 +17,13 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **The Standing Desk** — a second page for every account, next to your maps. Where a map
+  holds what you *think*, the desk holds what is actually **on you**: open items split by
+  whose court the ball is in, each with a clock that resets only when it changes hands, so
+  "waiting on Dana" can't quietly become three weeks. Five items max in your own court,
+  reference lines you look up constantly, and a scratch pad. One board per person, private
+  to you. (The name is a triple: the furniture, the *standing* items that sit on it, and the
+  **Copy for standup** button in the corner.)
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -127,6 +136,34 @@ tool.
 
 This flow highlights a key product advantage: one account can manage many distinct maps
 without clutter or context switching pain.
+
+### The Standing Desk — one work board per account
+
+Open **Desk** in the top navigation. Every account has exactly one, and it is **always
+private**: no visibility tier, no editors, never listed on a profile or in the feed.
+Where the maps are for thinking, the desk is for the state of play.
+
+- **Two courts.** Every item sits either **in your court** or **in their court**. The one
+  control the board is built around is the hand-off: **Hand it off** / **Take it back**
+  moves an item across and **restarts its clock**, because the wait that matters starts
+  the moment the ball changes hands. **Moved today** restarts the clock without moving the
+  item — for when you chased it and got nothing.
+- **A cap of five on your side.** The board refuses a sixth item in your own court and
+  tells you why: close one, or hand one off. Nothing is ever deleted to make room.
+- **The clock is the point.** Each card shows how long it has sat. At a week it turns
+  amber; at **14 days** it goes cold — a red edge and a hazard band reading *escalate or
+  erase*. The **Cold** tally at the top counts them so a stale item can't hide.
+- **A next physical action.** Each card carries one, edited in place. Left empty it shows
+  in red, because an item with no next action isn't tracked, it's just remembered.
+- **Reference** — short lines you look up constantly (asset tags, extensions, targets).
+  Pinned, edited in place, and never swept up with the items.
+- **Scratch** — a ruled thinking space at the foot of the board. Saved with everything
+  else, but nothing in it is tracked or counted.
+- **Copy for standup** puts the whole board on your clipboard as plain text — what's on
+  you, then what you're owed and from whom, each with its age.
+
+Everything autosaves as you type, and the board rides along in **⤓ Export my data**.
+Deleting your account deletes it with everything else.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed
@@ -319,7 +356,8 @@ lives in the database.
 ### Schema migrations are automatic and safe
 
 On boot the Postgres backend adds any missing columns with `ADD COLUMN IF NOT EXISTS`
-(including the `following`/`followers` follow graph) and runs a **one-time, idempotent**
+(including the `following`/`followers` follow graph and the `desk` board) and runs a
+**one-time, idempotent**
 migration that wraps each legacy single-map account into the multi-map shape. It only
 *reads* the old `map` column to build the first entry of the new `maps` array — it never
 drops or overwrites existing bubbles, and re-running it is a no-op. Notes, links, tasks,
@@ -330,7 +368,7 @@ is required for them.
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |

@@ -37,6 +37,64 @@ function normVisibility(v) {
   return VISIBILITIES.includes(v) ? v : 'friends';
 }
 
+/* ----------------------------------------------------------------
+   The Standing Desk — one work board per account, always private.
+   Where a mind map holds what you think, the desk holds what is
+   actually on you: open items split by whose court the ball is in, a
+   clock on each that resets when it changes hands, reference lines you
+   look up constantly, and a scratch area.
+   Declared up here (with normVisibility) because the storage backends
+   normalize users at construction time, before the domain section runs.
+---------------------------------------------------------------- */
+const MAX_DESK_ITEMS = 40;      // open items on the board, both courts together
+const MAX_DESK_REF = 40;        // pinned reference lines
+const MAX_DESK_SCRATCH = 8000;  // characters in the scratch area
+// How many items may sit in your own court at once. This is a discipline
+// rule the board enforces in the UI, not a storage limit: nothing here ever
+// deletes a card to satisfy it.
+const DESK_COURT_CAP = 5;
+const DESK_STALE_DAYS = 14;     // untouched this long and an item has gone cold
+
+function makeDesk() {
+  return { ref: [], items: [], scratch: '', closed: 0, updatedAt: 0 };
+}
+
+// Always returns a valid desk — used both to normalize what we read out of
+// storage and to validate what a client PUTs in.
+function sanitizeDesk(input) {
+  const d = input && typeof input === 'object' ? input : {};
+  const text = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  const items = [];
+  for (const raw of Array.isArray(d.items) ? d.items : []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const title = text(raw.title, 200);
+    if (!title) continue; // a card with nothing written on it isn't a card
+    const moved = Number(raw.moved);
+    items.push({
+      id: text(raw.id, 24) || newId(),
+      title,
+      tag: text(raw.tag, 80),
+      next: text(raw.next, 300),
+      who: text(raw.who, 80),
+      court: raw.court === 'them' ? 'them' : 'me',
+      // Clamped to now: a future timestamp would make an item permanently
+      // fresh, and the whole point of the board is that the clock runs.
+      moved: Number.isFinite(moved) && moved > 0 ? Math.min(moved, Date.now()) : Date.now(),
+    });
+    if (items.length >= MAX_DESK_ITEMS) break;
+  }
+  const closed = Math.floor(Number(d.closed));
+  return {
+    ref: (Array.isArray(d.ref) ? d.ref : [])
+      .map(line => text(line, 200)).filter(Boolean).slice(0, MAX_DESK_REF),
+    items,
+    // not trimmed: leading blank lines and indentation are the user's own
+    scratch: String(d.scratch == null ? '' : d.scratch).slice(0, MAX_DESK_SCRATCH),
+    closed: Number.isFinite(closed) ? Math.max(0, Math.min(1e6, closed)) : 0,
+    updatedAt: Number.isFinite(Number(d.updatedAt)) ? Number(d.updatedAt) : 0,
+  };
+}
+
 /* ================================================================
    Storage — two backends, one async API:
      init(), getUserById, getUsersByIds, getUserByUsername,
@@ -68,6 +126,7 @@ function pgStore() {
     pushSubs: r.push_subs,
     map: r.map,
     maps: r.maps,
+    desk: r.desk,
   });
 
   return {
@@ -97,6 +156,8 @@ function pgStore() {
       // notification bell feed + Web Push subscriptions
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications JSONB NOT NULL DEFAULT '[]'`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_subs JSONB NOT NULL DEFAULT '[]'`);
+      // the Standing Desk — one private work board per account
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS desk JSONB NOT NULL DEFAULT '{}'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -148,27 +209,29 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers, notifications, push_subs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb)`,
+                            following, followers, notifications, push_subs, desk)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
-         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
+         JSON.stringify(u.desk || makeDesk())]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
                           following=$10::jsonb, followers=$11::jsonb,
-                          notifications=$12::jsonb, push_subs=$13::jsonb
+                          notifications=$12::jsonb, push_subs=$13::jsonb, desk=$14::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
-         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || [])]);
+         JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
+         JSON.stringify(u.desk || makeDesk())]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -382,6 +445,7 @@ function normalizeUser(u) {
   if (!Array.isArray(u.followers)) u.followers = [];
   if (!Array.isArray(u.notifications)) u.notifications = []; // bell feed (chat/comment alerts)
   if (!Array.isArray(u.pushSubs)) u.pushSubs = []; // Web Push subscriptions
+  u.desk = sanitizeDesk(u.desk); // the Standing Desk; absent on accounts made before it existed
   if (!Array.isArray(u.maps)) u.maps = [];
   if (!u.maps.length) {
     const m = makeMap('My Map', u.visibility, u.displayName || u.username);
@@ -1385,6 +1449,7 @@ async function handleApi(req, res, pathname) {
       following: [], followers: [],
       notifications: [], pushSubs: [],
       maps: [makeMap('My Map', body.visibility, displayName || username)],
+      desk: makeDesk(),
     };
     try {
       await store.createUser(u);
@@ -1614,6 +1679,16 @@ async function handleApi(req, res, pathname) {
         following: unames(user.following),
         followers: unames(user.followers),
       },
+      desk: {
+        reference: user.desk.ref,
+        items: user.desk.items.map(i => ({
+          title: i.title, tag: i.tag, next: i.next, who: i.who,
+          court: i.court === 'me' ? 'on me' : 'waiting on them',
+          movedAt: new Date(i.moved).toISOString(),
+        })),
+        scratch: user.desk.scratch,
+        closedAllTime: user.desk.closed,
+      },
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
         editors: unames(m.editors),
@@ -1705,6 +1780,34 @@ async function handleApi(req, res, pathname) {
       await store.saveUser(user);
     }
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // --- the Standing Desk (one private work board per account) ---
+  // The board is never shared: no visibility tier, no editors, not on profiles.
+  // Reads and writes are always the signed-in user's own row.
+  if (route === 'GET /api/desk') {
+    return sendJSON(res, 200, {
+      desk: user.desk,
+      cap: DESK_COURT_CAP,
+      maxItems: MAX_DESK_ITEMS,
+      maxRef: MAX_DESK_REF,
+      staleDays: DESK_STALE_DAYS,
+    });
+  }
+
+  // Whole-board replace, like the map PUT — the client owns the state and
+  // autosaves it. A body without a desk object is rejected rather than treated
+  // as an empty board, so a malformed request can never wipe someone's desk.
+  if (route === 'PUT /api/desk') {
+    const body = await readBody(req);
+    if (!body || typeof body.desk !== 'object' || body.desk === null) {
+      return sendJSON(res, 400, { error: 'Invalid desk.' });
+    }
+    const desk = sanitizeDesk(body.desk);
+    desk.updatedAt = Date.now();
+    user.desk = desk;
+    await store.saveUser(user);
+    return sendJSON(res, 200, { ok: true, updatedAt: desk.updatedAt });
   }
 
   // --- maps ---

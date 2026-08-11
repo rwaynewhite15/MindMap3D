@@ -1506,9 +1506,10 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
-const sections = ['auth', 'home', 'map', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
+const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
 
 function show(name) {
+  if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
   // the outline serves both the editor and the profile viewer; close it only when
   // leaving both (the rebuild for the new map happens after visibility flips below)
@@ -1552,6 +1553,7 @@ function route() {
 
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
+  if (h === 'desk') { show('desk'); loadDesk(); return; }
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
@@ -4411,6 +4413,409 @@ function initProfileViewer() {
 }
 
 /* ================================================================
+   The Standing Desk — one private work board per account
+
+   Where a map holds what you think, the desk holds what is actually on
+   you. Every item sits in somebody's court and carries a clock that
+   resets only when the ball changes hands, so "waiting on Dana" can't
+   quietly become three weeks. Nothing here is shared, published, or
+   shown on a profile — it is the user's own board.
+================================================================ */
+const DESK_DAY = 86400000;
+
+let desk = null;            // { ref, items, scratch, closed } — null until loaded
+let deskCourtCap = 5;       // items allowed in your own court (the server names it)
+let deskMaxItems = 40;      // items the board holds in total, both courts
+let deskMaxRef = 40;        // reference lines the board holds
+let deskStaleDays = 14;     // untouched this long and an item is called cold
+let deskForm = null;        // which add form is open: 'me' | 'them' | 'ref' | null
+let deskFocusForm = false;  // a form just opened and should take the caret
+let deskFlashText = '';     // transient line above the board
+let deskFlashTimer = null;
+let deskSaveTimer = null;
+let deskDirty = false;
+
+const deskRoot = $('#deskRoot');
+
+const deskDays = ms => Math.max(0, Math.floor((Date.now() - ms) / DESK_DAY));
+const deskBand = d => (d >= deskStaleDays ? 'hot' : d >= 7 ? 'warm' : 'cool');
+const deskClock = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
+const deskUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const deskInCourt = court => (desk ? desk.items.filter(i => i.court === court) : []);
+
+/* ---------- load / save ---------- */
+async function loadDesk() {
+  const first = !desk;
+  if (first) deskRoot.innerHTML = '<div class="dk-loading">Loading your desk…</div>';
+  // Unsaved local edits outrank a refetch — never pull the board out from
+  // under something the user just typed.
+  if (!deskDirty) {
+    try {
+      const data = await api('/api/desk');
+      desk = data.desk;
+      deskCourtCap = data.cap;
+      deskMaxItems = data.maxItems;
+      deskMaxRef = data.maxRef;
+      deskStaleDays = data.staleDays;
+    } catch (err) {
+      if (first) {
+        deskRoot.innerHTML = '';
+        const p = document.createElement('div');
+        p.className = 'dk-loading';
+        p.textContent = 'Could not load your desk: ' + err.message;
+        deskRoot.appendChild(p);
+        return;
+      }
+      deskFlash('Could not refresh the board. Showing what you had.');
+    }
+  }
+  renderDesk();
+}
+
+function saveDesk() {
+  if (!desk) return;
+  deskDirty = true;
+  clearTimeout(deskSaveTimer);
+  deskSaveTimer = setTimeout(doDeskSave, 700);
+}
+
+async function doDeskSave() {
+  if (!desk || !deskDirty) return;
+  try {
+    await api('/api/desk', 'PUT', { desk });
+    deskDirty = false;
+  } catch (err) {
+    // keep the edit in memory and keep trying; the board is the user's only copy
+    deskFlash('Changes have not saved yet (' + err.message + '). Still trying.');
+    clearTimeout(deskSaveTimer);
+    deskSaveTimer = setTimeout(doDeskSave, 4000);
+  }
+}
+
+// Push a pending edit out before the page (or the session) goes away.
+// keepalive lets the request outlive the unload the way a queued beacon would.
+function flushDeskSave() {
+  clearTimeout(deskSaveTimer);
+  if (!desk || !deskDirty) return;
+  deskDirty = false;
+  fetch('/api/desk', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ desk }),
+    keepalive: true,
+    // a flush on the way out of the view still gets retried; one on the way out
+    // of the page has nothing left to retry with, and that is fine
+  }).catch(() => { deskDirty = true; deskSaveTimer = setTimeout(doDeskSave, 4000); });
+}
+window.addEventListener('pagehide', flushDeskSave);
+
+// Patched straight into the alert slot rather than re-rendered: a flash can
+// land while someone is mid-sentence in a card or an add form, and a full
+// re-render there would throw away what they had typed.
+function deskFlash(msg) {
+  deskFlashText = msg;
+  clearTimeout(deskFlashTimer);
+  paintDeskFlash();
+  deskFlashTimer = setTimeout(() => { deskFlashText = ''; paintDeskFlash(); }, 6000);
+}
+function paintDeskFlash() {
+  const slot = $('#dkAlert');
+  if (!slot) return; // board isn't on screen yet; renderDesk paints it in
+  slot.innerHTML = '';
+  if (!deskFlashText) return;
+  const box = document.createElement('div');
+  box.className = 'dk-alert';
+  box.setAttribute('role', 'status');
+  box.textContent = deskFlashText;
+  slot.appendChild(box);
+}
+
+/* ---------- mutations ---------- */
+function deskAdd(court, f) {
+  const title = f.title.trim();
+  if (!title) return;
+  if (court === 'me' && deskInCourt('me').length >= deskCourtCap) {
+    deskFlash(`${deskCourtCap} is the cap on your side. Close something or hand it off first.`);
+    return;
+  }
+  // The board itself has a ceiling. Say so rather than letting the save quietly
+  // drop the oldest card to fit.
+  if (desk.items.length >= deskMaxItems) {
+    deskFlash(`The board holds ${deskMaxItems} open items. Close or erase something first.`);
+    return;
+  }
+  desk.items.unshift({
+    id: deskUid(), title, tag: f.tag.trim(), next: f.next.trim(), who: f.who.trim(),
+    court, moved: Date.now(),
+  });
+  deskForm = null;
+  saveDesk();
+  renderDesk();
+}
+
+// The signature move: hand an item over, or take it back. Either way the
+// clock restarts, because the wait that matters starts now.
+function deskFlip(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  if (it.court === 'them' && deskInCourt('me').length >= deskCourtCap) {
+    deskFlash(`${deskCourtCap} is the cap on your side. Close something before taking this back.`);
+    return;
+  }
+  it.court = it.court === 'me' ? 'them' : 'me';
+  it.moved = Date.now();
+  saveDesk();
+  renderDesk();
+}
+
+function deskBump(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  it.moved = Date.now();
+  saveDesk();
+  renderDesk();
+}
+
+function deskClose(id, counted) {
+  desk.items = desk.items.filter(x => x.id !== id);
+  if (counted) desk.closed = (desk.closed || 0) + 1;
+  saveDesk();
+  renderDesk();
+}
+
+function deskEditField(id, field, val) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it) return;
+  it[field] = val.trim();
+  saveDesk();
+}
+
+/* ---------- render ---------- */
+const NEXT_PLACEHOLDER = 'Write the next physical action';
+
+function deskCardHtml(it) {
+  const d = deskDays(it.moved);
+  const who = it.court === 'them' ? (it.who || 'unassigned') : 'you';
+  return `
+  <article class="dk-card" data-court="${it.court}" data-age="${deskBand(d)}">
+    <div class="dk-card__top">
+      <h3 class="dk-card__title" contenteditable data-id="${escapeHtml(it.id)}" data-field="title">${escapeHtml(it.title)}</h3>
+      <span class="dk-card__clock">${deskClock(d)}</span>
+    </div>
+    <div class="dk-card__meta">${escapeHtml(who)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
+    <div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}" contenteditable
+         data-id="${escapeHtml(it.id)}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
+    <div class="dk-card__acts">
+      <button class="dk-switch" data-act="flip" data-id="${escapeHtml(it.id)}">${it.court === 'me' ? 'Hand it off' : 'Take it back'}</button>
+      <button class="dk-btn" data-act="bump" data-id="${escapeHtml(it.id)}">Moved today</button>
+      <button class="dk-btn dk-btn--done" data-act="done" data-id="${escapeHtml(it.id)}">Closed</button>
+      <button class="dk-btn dk-btn--drop" data-act="drop" data-id="${escapeHtml(it.id)}">Erase</button>
+    </div>
+    ${d >= deskStaleDays ? `<div class="dk-cold"><span class="dk-cold__txt">${d} days cold</span><span class="dk-cold__bar"></span><span class="dk-cold__txt">Escalate or erase</span></div>` : ''}
+  </article>`;
+}
+
+function deskFormHtml(court) {
+  const mine = court === 'me';
+  return `
+  <div class="dk-add">
+    <input data-f="title" maxlength="200" placeholder="${mine ? 'What is the problem?' : 'What are you waiting on?'}">
+    <input data-f="tag" maxlength="80" placeholder="Map, project, or part number">
+    <input data-f="next" maxlength="300" placeholder="Next physical action">
+    <input data-f="who" maxlength="80" placeholder="${mine ? 'Your note (optional)' : 'Who owes it to you'}">
+    <div class="dk-add__row">
+      <button class="dk-btn dk-btn--go" data-act="save" data-court="${court}">Put on the board</button>
+      <button class="dk-btn" data-act="cancel">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function renderDesk() {
+  if (!desk) return;
+  // The scratch pad is the one field people type into continuously, and a
+  // re-render can land mid-sentence (a flash timer, a save retry). Put the
+  // caret back where it was.
+  const active = document.activeElement;
+  const scratchFocused = !!active && active.id === 'dkScratch';
+  const caret = scratchFocused ? [active.selectionStart, active.selectionEnd] : null;
+
+  const mine = deskInCourt('me');
+  const theirs = deskInCourt('them');
+  const cold = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
+  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+
+  deskRoot.innerHTML = `
+  <header class="dk-rig">
+    <div>
+      <h1 class="dk-rig__title">Standing Desk</h1>
+      <div class="dk-rig__sub">${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} closed all time &nbsp;·&nbsp; private to you</div>
+    </div>
+    <div class="dk-tally">
+      <div class="dk-tally__cell dk-tally__cell--me"><span class="dk-tally__k">On you</span><span class="dk-tally__v">${mine.length}<small>/${deskCourtCap}</small></span></div>
+      <div class="dk-tally__cell dk-tally__cell--them"><span class="dk-tally__k">On them</span><span class="dk-tally__v">${theirs.length}</span></div>
+      <div class="dk-tally__cell dk-tally__cell--cold" data-zero="${cold ? 0 : 1}"><span class="dk-tally__k">Cold</span><span class="dk-tally__v">${cold}</span></div>
+    </div>
+  </header>
+
+  <div id="dkAlert"></div>
+
+  <div class="dk-board">
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">Reference</span><span class="dk-panel__note">never erased</span></div>
+      <div class="dk-panel__body">
+        <ul class="dk-ref">${desk.ref.map((r, n) => `
+          <li class="dk-ref__row">
+            <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r)}</span>
+            <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove line">&times;</button>
+          </li>`).join('')}</ul>
+        ${desk.ref.length ? '' : '<p class="dk-empty">Things you look up constantly.<br>Numbers, extensions, targets, the map you keep reopening.</p>'}
+        ${deskForm === 'ref' ? `<div class="dk-add">
+            <input data-f="line" maxlength="200" placeholder="e.g. Release cutoff — Thursday 16:00">
+            <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Pin it</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
+          </div>` : '<button class="dk-opener" data-act="openref">Pin a line</button>'}
+      </div>
+    </section>
+
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">In your court</span><span class="dk-panel__note">cap ${deskCourtCap}</span></div>
+      <div class="dk-panel__body">
+        ${mine.map(deskCardHtml).join('')}
+        ${mine.length ? '' : '<p class="dk-empty">Nothing is waiting on you.<br>Either you are clear, or something is missing.</p>'}
+        ${deskForm === 'me' ? deskFormHtml('me')
+          : `<button class="dk-opener" data-act="open" data-court="me" ${mine.length >= deskCourtCap ? 'disabled' : ''}>${mine.length >= deskCourtCap ? 'At the cap — close one first' : 'Add a problem'}</button>`}
+      </div>
+    </section>
+
+    <section class="dk-panel">
+      <div class="dk-panel__head"><span class="dk-panel__name">In their court</span><span class="dk-panel__note">clock is running</span></div>
+      <div class="dk-panel__body">
+        ${theirs.map(deskCardHtml).join('')}
+        ${theirs.length ? '' : '<p class="dk-empty">Nobody owes you anything.<br>Log it here the moment they do.</p>'}
+        ${deskForm === 'them' ? deskFormHtml('them')
+          : '<button class="dk-opener" data-act="open" data-court="them">Add something you are waiting on</button>'}
+      </div>
+    </section>
+
+    <section class="dk-panel dk-panel--scratch">
+      <div class="dk-panel__head"><span class="dk-panel__name">Scratch</span><span class="dk-panel__note">thinking space — clear it often</span></div>
+      <div class="dk-panel__body">
+        <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Sketch it out. Nothing here is tracked.">${escapeHtml(desk.scratch || '')}</textarea>
+      </div>
+    </section>
+  </div>
+
+  <div class="dk-foot">
+    <span class="dk-foot__txt">The clock on every card resets when the ball changes hands. At ${deskStaleDays} days it goes cold.</span>
+    <button class="dk-btn" data-act="copy" style="margin-left:auto">Copy for standup</button>
+  </div>`;
+
+  paintDeskFlash();
+  if (caret) {
+    const box = $('#dkScratch');
+    box.focus();
+    try { box.setSelectionRange(caret[0], caret[1]); } catch { /* value changed under us */ }
+  } else if (deskFocusForm) {
+    // only on the render that opened the form — never steal the caret back
+    // from a field the user has already moved on to
+    deskFocusForm = false;
+    const first = deskRoot.querySelector('.dk-add input');
+    if (first) first.focus();
+  }
+}
+
+/* ---------- events (delegated; deskRoot itself survives every re-render) ---------- */
+deskRoot.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b || !desk) return;
+  const act = b.dataset.act;
+  if (act === 'flip') deskFlip(b.dataset.id);
+  else if (act === 'bump') deskBump(b.dataset.id);
+  else if (act === 'done') deskClose(b.dataset.id, true);
+  else if (act === 'drop') deskClose(b.dataset.id, false);
+  else if (act === 'open') { deskForm = b.dataset.court; deskFocusForm = true; renderDesk(); }
+  else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
+  else if (act === 'cancel') { deskForm = null; renderDesk(); }
+  else if (act === 'save') {
+    const form = b.closest('.dk-add');
+    const val = k => form.querySelector(`[data-f="${k}"]`).value;
+    deskAdd(b.dataset.court, { title: val('title'), tag: val('tag'), next: val('next'), who: val('who') });
+  } else if (act === 'saveref') {
+    const v = b.closest('.dk-add').querySelector('[data-f="line"]').value.trim();
+    if (v && desk.ref.length >= deskMaxRef) {
+      deskFlash(`Reference holds ${deskMaxRef} lines. Clear one to pin another.`);
+      return;
+    }
+    if (v) { desk.ref.push(v); saveDesk(); }
+    deskForm = null;
+    renderDesk();
+  } else if (act === 'unref') {
+    desk.ref.splice(+b.dataset.n, 1);
+    saveDesk();
+    renderDesk();
+  } else if (act === 'copy') {
+    navigator.clipboard.writeText(deskStandupText()).then(
+      () => deskFlash('Copied. Paste it into your standup notes.'),
+      () => deskFlash('Copy was blocked by the browser. Select the cards and copy by hand.'));
+  }
+});
+
+// contenteditable commits on blur — captured, since blur does not bubble
+deskRoot.addEventListener('blur', e => {
+  const t = e.target;
+  if (!desk || !t.dataset) return;
+  if (t.dataset.field) {
+    const v = t.textContent.trim();
+    if (t.dataset.field === 'next' && v === NEXT_PLACEHOLDER) return; // untouched placeholder
+    deskEditField(t.dataset.id, t.dataset.field, v);
+    renderDesk();
+  } else if (t.dataset.ref !== undefined) {
+    const n = +t.dataset.ref, v = t.textContent.trim();
+    if (v) desk.ref[n] = v; else desk.ref.splice(n, 1); // emptied a line = removed it
+    saveDesk();
+    renderDesk();
+  }
+}, true);
+
+// clear the "write the next action" prompt the moment someone types into it
+deskRoot.addEventListener('focus', e => {
+  const t = e.target;
+  if (t.classList && t.classList.contains('dk-card__next--empty')) t.textContent = '';
+}, true);
+
+deskRoot.addEventListener('input', e => {
+  if (e.target.id === 'dkScratch' && desk) { desk.scratch = e.target.value; saveDesk(); }
+});
+
+deskRoot.addEventListener('keydown', e => {
+  // the map editor's shortcuts are guarded on #view-map, but the sheet/menu
+  // handlers are not — keep desk typing to the desk
+  e.stopPropagation();
+  if (e.key === 'Enter' && e.target.matches('.dk-add input')) {
+    e.preventDefault();
+    e.target.closest('.dk-add').querySelector('[data-act="save"],[data-act="saveref"]').click();
+  } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'title') {
+    e.preventDefault(); // one line per title; commit it instead of adding a newline
+    e.target.blur();
+  } else if (e.key === 'Escape' && deskForm) {
+    deskForm = null;
+    renderDesk();
+  }
+});
+
+// The board as a paste-able status: what is on you, then what you are owed.
+function deskStandupText() {
+  const clock = it => '[' + deskClock(deskDays(it.moved)) + ']';
+  const next = it => it.next || 'NO NEXT ACTION';
+  return [
+    'ON ME',
+    ...deskInCourt('me').map(it => `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${clock(it)}`),
+    '',
+    'WAITING ON',
+    ...deskInCourt('them').map(it => `- ${it.who || 'unassigned'}: ${it.title} — ${next(it)} ${clock(it)}`),
+  ].join('\n');
+}
+
+/* ================================================================
    Settings
 ================================================================ */
 function fillSettings() {
@@ -4445,6 +4850,7 @@ $('#formSettings').addEventListener('submit', async e => {
 
 $('#btnLogout').addEventListener('click', async () => {
   flushSave();
+  flushDeskSave();
   stopLive();
   closeChat();
   stopNotifications();
@@ -4454,6 +4860,7 @@ $('#btnLogout').addEventListener('click', async () => {
   mapsShared = [];
   currentMapId = null;
   currentMapInfo = null;
+  desk = null; // the next account to sign in here gets its own board
   location.hash = '';
   show('auth');
 });
@@ -4489,8 +4896,10 @@ $('#deleteAcctConfirm').addEventListener('click', async () => {
   $('#deleteAcctConfirm').disabled = true;
   try {
     await api('/api/me', 'DELETE', { password });
-    // fully reset client state, exactly like sign-out
+    // fully reset client state, exactly like sign-out. The desk went with the
+    // account server-side, so drop it here without trying to flush it.
     flushSave(); stopLive(); closeChat(); closeSheets();
+    clearTimeout(deskSaveTimer); deskDirty = false; desk = null;
     me = null; mapsMine = []; mapsShared = [];
     currentMapId = null; currentMapInfo = null;
     location.hash = '';
@@ -4518,6 +4927,7 @@ $('#tabRegister').addEventListener('click', () => {
 });
 
 async function afterSignIn() {
+  desk = null; // whoever just signed in gets their own board, not the last one's
   loadChatLayout();
   await loadMaps();
   refreshBadge();
