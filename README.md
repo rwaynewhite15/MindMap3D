@@ -199,8 +199,9 @@ ideas, the desk is for tracking open work.
   last writing in.
 - **Copy summary** puts the whole board on the clipboard as plain text: what is assigned to
   you, what you are waiting on and from whom (each with its age), what you have completed,
-  and every note that has something in it, listed under its own name with its lists and line
-  breaks intact.
+  and every note that has something in it, listed under its own name — bulleted lists keep
+  their bullets, numbered lists keep their numbers, and line breaks land where they did on
+  the board.
 
 **Sharing.** The state of the board is shown in its header — click it to choose:
 

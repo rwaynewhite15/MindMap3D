@@ -4953,21 +4953,31 @@ function deskRenameNote(id, title) {
 }
 
 // A note as plain text — for telling an empty note from a full one, and for the
-// copied summary. Block ends become line breaks and list items keep a bullet, so
-// a note reads on the clipboard roughly the way it looked on the board. Kept in
-// step with noteHtmlToText in server.js, which does the same job for the export.
+// copied summary. Kept in step with the copy in server.js, which produces the
+// same text for the data export.
 function noteHtmlToText(html) {
+  // Markers for a list item and a block boundary, so the two can be normalised
+  // separately at the end: a run of block boundaries is one line break, and a
+  // list item always starts a line without leaving a blank one above it.
+  const ITEM = '\u0001', BREAK = '\u0002';
   return String(html || '')
-    .replace(/<(ul|ol)\b[^>]*>/gi, '') // the container itself contributes nothing
-    .replace(/<(br|\/div|\/p|\/ul|\/ol)\b[^>]*>/gi, '\n')
-    // a list item starts its own line and keeps a bullet, absorbing the newline
-    // the block before it produced rather than leaving a blank line
-    .replace(/\n*<li\b[^>]*>/gi, '\n- ')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '') // no stray control characters
+    // An ordered list is numbered here, before the general pass: one sweep over
+    // the whole document cannot tell which list a given item belongs to.
+    .replace(/<ol\b[^>]*>([\s\S]*?)<\/ol>/gi, (all, inner) => {
+      let n = 0;
+      return BREAK + inner.replace(/<li\b[^>]*>/gi, () => ITEM + (++n) + '. ') + BREAK;
+    })
+    .replace(/<li\b[^>]*>/gi, ITEM + '- ') // every item left belongs to a bulleted list
+    .replace(/<br\b[^>]*>/gi, '\n')
+    .replace(/<\/?(div|p|ul|ol|li|h[1-6])\b[^>]*>/gi, BREAK)
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&') // last, so "&amp;lt;" doesn't become "<"
+    .replace(/\u0002+/g, '\n')
+    .replace(/\n*\u0001/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
