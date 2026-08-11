@@ -18,12 +18,10 @@ and turns on **AI generation** simply by setting environment variables.
 ## What's new
 
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
-  holds what you *think*, the desk holds what is actually **on you**: open items split by
-  whose court the ball is in, each with a clock that resets only when it changes hands, so
-  "waiting on Dana" can't quietly become three weeks. Five items max in your own court,
-  reference lines you look up constantly, and a scratch pad. One board per person, private
-  to you. (The name is a triple: the furniture, the *standing* items that sit on it, and the
-  **Copy for standup** button in the corner.)
+  holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
+  on** from someone else, and the number of days since each was last updated — so a request
+  made three weeks ago reads as exactly that. Five assigned items at a time, plus reference
+  entries and a working-notes area. One board per person, private to them.
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -140,30 +138,31 @@ without clutter or context switching pain.
 ### The Standing Desk — one work board per account
 
 Open **Desk** in the top navigation. Every account has exactly one, and it is **always
-private**: no visibility tier, no editors, never listed on a profile or in the feed.
-Where the maps are for thinking, the desk is for the state of play.
+private**: no visibility tier, no editors, never listed on a profile or in the feed. Where
+maps are for developing ideas, the desk is for tracking open work.
 
-- **Two courts.** Every item sits either **in your court** or **in their court**. The one
-  control the board is built around is the hand-off: **Hand it off** / **Take it back**
-  moves an item across and **restarts its clock**, because the wait that matters starts
-  the moment the ball changes hands. **Moved today** restarts the clock without moving the
-  item — for when you chased it and got nothing.
-- **A cap of five on your side.** The board refuses a sixth item in your own court and
-  tells you why: close one, or hand one off. Nothing is ever deleted to make room.
-- **The clock is the point.** Each card shows how long it has sat. At a week it turns
-  amber; at **14 days** it goes cold — a red edge and a hazard band reading *escalate or
-  erase*. The **Cold** tally at the top counts them so a stale item can't hide.
-- **A next physical action.** Each card carries one, edited in place. Left empty it shows
-  in red, because an item with no next action isn't tracked, it's just remembered.
-- **Reference** — short lines you look up constantly (asset tags, extensions, targets).
-  Pinned, edited in place, and never swept up with the items.
-- **Scratch** — a ruled thinking space at the foot of the board. Saved with everything
-  else, but nothing in it is tracked or counted.
-- **Copy for standup** puts the whole board on your clipboard as plain text — what's on
-  you, then what you're owed and from whom, each with its age.
+- **Two states.** Every item is either **Assigned to me** or **Waiting on others**.
+  **Move to waiting** / **Assign to me** moves an item between them and **resets its
+  last-updated date**, since a reassignment is the point from which the next wait is
+  measured. **Mark updated** resets that date without moving the item — for when you
+  followed up and the position hasn't changed.
+- **A limit of five assigned items.** The board declines a sixth and explains why: complete
+  one, or move it to waiting. Nothing is ever deleted to make room.
+- **Age is tracked, not guessed.** Each item shows the days since it was last updated. At a
+  week it turns amber; after **14 days** it is flagged as stalled, with a red edge and a
+  band reading *follow up or remove*. The **Stalled** figure in the header counts them, so
+  an item that has quietly gone quiet stays visible.
+- **A next step on every item**, edited in place. Left empty it is shown in red — an item
+  with no next step is a note, not a commitment.
+- **Reference** — short entries you refer to often (links, codes, contacts, targets), edited
+  in place and kept separate from the item list.
+- **Working notes** — a ruled area at the foot of the board for thinking something through.
+  Saved with everything else, but nothing in it is tracked or counted.
+- **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,
+  then what you are waiting on and from whom, each with its age.
 
-Everything autosaves as you type, and the board rides along in **⤓ Export my data**.
-Deleting your account deletes it with everything else.
+Everything autosaves as you type, and the board is included in **⤓ Export my data**.
+Deleting your account deletes it along with everything else.
 
 ### Privacy — friends-only maps are truly hidden
 - A map set to **Friends only** is invisible to anyone who isn't your friend: not listed

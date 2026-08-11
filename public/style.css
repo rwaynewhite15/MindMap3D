@@ -1497,10 +1497,10 @@ button.primary {
 }
 .dk-tally__v { font-family: var(--dk-mono); font-size: 21px; font-weight: 600; line-height: 1.15; display: block; }
 .dk-tally__v small { font-size: 12px; color: var(--dk-ink-3); }
-.dk-tally__cell--me .dk-tally__v { color: var(--dk-blue); }
-.dk-tally__cell--them .dk-tally__v { color: var(--dk-board); }
-.dk-tally__cell--cold .dk-tally__v { color: var(--dk-amber); }
-.dk-tally__cell--cold[data-zero="1"] .dk-tally__v { color: var(--dk-ink-3); }
+.dk-tally__cell--mine .dk-tally__v { color: var(--dk-blue); }
+.dk-tally__cell--waiting .dk-tally__v { color: var(--dk-board); }
+.dk-tally__cell--stalled .dk-tally__v { color: var(--dk-amber); }
+.dk-tally__cell--stalled[data-zero="1"] .dk-tally__v { color: var(--dk-ink-3); }
 
 /* ---------------- board grid + panels ---------------- */
 .dk-board { display: grid; grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.1fr) minmax(0, 1.1fr); gap: 12px; }
@@ -1524,21 +1524,21 @@ button.primary {
 .dk-panel__body { padding: 10px 12px 13px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
 
 /* ---------------- item cards ---------------- */
-/* The left rule carries the state: blue = on you, amber = on them, red once
-   the item has gone cold. */
+/* The left rule carries the state: blue = assigned to me, amber = waiting on
+   someone else, red once the item has stalled. */
 .dk-card { position: relative; background: #fff; border: 1px solid var(--dk-board-line); padding: 9px 11px 10px 13px; }
 .dk-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--dk-ink-3); }
-.dk-card[data-court="me"]::before { background: var(--dk-blue); }
-.dk-card[data-court="them"]::before { background: var(--dk-amber); }
-.dk-card[data-age="hot"]::before { background: var(--dk-red); }
+.dk-card[data-state="mine"]::before { background: var(--dk-blue); }
+.dk-card[data-state="waiting"]::before { background: var(--dk-amber); }
+.dk-card[data-age="stalled"]::before { background: var(--dk-red); }
 .dk-card__top { display: flex; align-items: flex-start; gap: 8px; }
 .dk-card__title { font-weight: 600; font-size: 14.5px; line-height: 1.3; flex: 1; word-break: break-word; }
 .dk-card__clock {
   font-family: var(--dk-mono); font-size: 11px; font-weight: 600;
   color: var(--dk-ink-2); white-space: nowrap; padding-top: 2px; letter-spacing: -0.02em;
 }
-.dk-card[data-age="warm"] .dk-card__clock { color: #A8761A; }
-.dk-card[data-age="hot"] .dk-card__clock { color: var(--dk-red); }
+.dk-card[data-age="aging"] .dk-card__clock { color: #A8761A; }
+.dk-card[data-age="stalled"] .dk-card__clock { color: var(--dk-red); }
 .dk-card__meta { font-family: var(--dk-mono); font-size: 10.5px; color: var(--dk-ink-3); margin-top: 3px; letter-spacing: 0.01em; text-transform: uppercase; }
 .dk-card__next {
   font-size: 13px; line-height: 1.4; margin-top: 7px; color: var(--dk-ink);
@@ -1565,10 +1565,10 @@ button.primary {
 .dk-btn--done:hover { border-color: var(--dk-green); color: var(--dk-green); }
 .dk-btn--drop:hover { border-color: var(--dk-red); color: var(--dk-red); }
 
-/* hazard band on an item nobody has touched in two weeks */
-.dk-cold { margin-top: 9px; display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--dk-board-line); padding-top: 8px; }
-.dk-cold__bar { height: 9px; flex: 1; background: repeating-linear-gradient(45deg, var(--dk-amber) 0 6px, #2F383C 6px 12px); }
-.dk-cold__txt {
+/* hazard band on an item with no activity for two weeks */
+.dk-stalled { margin-top: 9px; display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--dk-board-line); padding-top: 8px; }
+.dk-stalled__bar { height: 9px; flex: 1; background: repeating-linear-gradient(45deg, var(--dk-amber) 0 6px, #2F383C 6px 12px); }
+.dk-stalled__txt {
   font-family: var(--dk-label); font-weight: 700; font-size: 10.5px; letter-spacing: 0.13em;
   text-transform: uppercase; color: #8A6410; white-space: nowrap;
 }

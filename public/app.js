@@ -4415,20 +4415,20 @@ function initProfileViewer() {
 /* ================================================================
    The Standing Desk — one private work board per account
 
-   Where a map holds what you think, the desk holds what is actually on
-   you. Every item sits in somebody's court and carries a clock that
-   resets only when the ball changes hands, so "waiting on Dana" can't
-   quietly become three weeks. Nothing here is shared, published, or
-   shown on a profile — it is the user's own board.
+   Where a map holds ideas, the desk holds open work: what is assigned
+   to you, and what you are waiting on from someone else. Each item
+   records the date it was last updated, so a request made three weeks
+   ago is visible as exactly that. Nothing here is shared, published, or
+   shown on a profile — the board belongs to its owner alone.
 ================================================================ */
 const DESK_DAY = 86400000;
 
 let desk = null;            // { ref, items, scratch, closed } — null until loaded
-let deskCourtCap = 5;       // items allowed in your own court (the server names it)
-let deskMaxItems = 40;      // items the board holds in total, both courts
-let deskMaxRef = 40;        // reference lines the board holds
-let deskStaleDays = 14;     // untouched this long and an item is called cold
-let deskForm = null;        // which add form is open: 'me' | 'them' | 'ref' | null
+let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
+let deskMaxItems = 40;      // items the board holds in total, both states
+let deskMaxRef = 40;        // reference entries the board holds
+let deskStaleDays = 14;     // no activity for this long and an item is stalled
+let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
 let deskFocusForm = false;  // a form just opened and should take the caret
 let deskFlashText = '';     // transient line above the board
 let deskFlashTimer = null;
@@ -4438,10 +4438,10 @@ let deskDirty = false;
 const deskRoot = $('#deskRoot');
 
 const deskDays = ms => Math.max(0, Math.floor((Date.now() - ms) / DESK_DAY));
-const deskBand = d => (d >= deskStaleDays ? 'hot' : d >= 7 ? 'warm' : 'cool');
-const deskClock = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
+const deskAge = d => (d >= deskStaleDays ? 'stalled' : d >= 7 ? 'aging' : 'current');
+const deskDaysLabel = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
 const deskUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const deskInCourt = court => (desk ? desk.items.filter(i => i.court === court) : []);
+const deskIn = state => (desk ? desk.items.filter(i => i.state === state) : []);
 
 /* ---------- load / save ---------- */
 async function loadDesk() {
@@ -4453,7 +4453,7 @@ async function loadDesk() {
     try {
       const data = await api('/api/desk');
       desk = data.desk;
-      deskCourtCap = data.cap;
+      deskAssignedCap = data.cap;
       deskMaxItems = data.maxItems;
       deskMaxRef = data.maxRef;
       deskStaleDays = data.staleDays;
@@ -4462,11 +4462,11 @@ async function loadDesk() {
         deskRoot.innerHTML = '';
         const p = document.createElement('div');
         p.className = 'dk-loading';
-        p.textContent = 'Could not load your desk: ' + err.message;
+        p.textContent = 'This desk could not be loaded. ' + err.message;
         deskRoot.appendChild(p);
         return;
       }
-      deskFlash('Could not refresh the board. Showing what you had.');
+      deskFlash('This board could not be refreshed. Showing your most recent local copy.');
     }
   }
   renderDesk();
@@ -4486,7 +4486,7 @@ async function doDeskSave() {
     deskDirty = false;
   } catch (err) {
     // keep the edit in memory and keep trying; the board is the user's only copy
-    deskFlash('Changes have not saved yet (' + err.message + '). Still trying.');
+    deskFlash('Changes have not been saved yet (' + err.message + '). Retrying.');
     clearTimeout(deskSaveTimer);
     deskSaveTimer = setTimeout(doDeskSave, 4000);
   }
@@ -4531,44 +4531,44 @@ function paintDeskFlash() {
 }
 
 /* ---------- mutations ---------- */
-function deskAdd(court, f) {
+function deskAdd(state, f) {
   const title = f.title.trim();
   if (!title) return;
-  if (court === 'me' && deskInCourt('me').length >= deskCourtCap) {
-    deskFlash(`${deskCourtCap} is the cap on your side. Close something or hand it off first.`);
+  if (state === 'mine' && deskIn('mine').length >= deskAssignedCap) {
+    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one, or move it to waiting, first.`);
     return;
   }
   // The board itself has a ceiling. Say so rather than letting the save quietly
-  // drop the oldest card to fit.
+  // drop the oldest item to fit.
   if (desk.items.length >= deskMaxItems) {
-    deskFlash(`The board holds ${deskMaxItems} open items. Close or erase something first.`);
+    deskFlash(`This board holds ${deskMaxItems} open items. Complete or delete one first.`);
     return;
   }
   desk.items.unshift({
     id: deskUid(), title, tag: f.tag.trim(), next: f.next.trim(), who: f.who.trim(),
-    court, moved: Date.now(),
+    state, moved: Date.now(),
   });
   deskForm = null;
   saveDesk();
   renderDesk();
 }
 
-// The signature move: hand an item over, or take it back. Either way the
-// clock restarts, because the wait that matters starts now.
-function deskFlip(id) {
+// Reassigning an item is also an update to it, so the last-updated date is set
+// to now: the count that matters is the time since responsibility last moved.
+function deskReassign(id) {
   const it = desk.items.find(x => x.id === id);
   if (!it) return;
-  if (it.court === 'them' && deskInCourt('me').length >= deskCourtCap) {
-    deskFlash(`${deskCourtCap} is the cap on your side. Close something before taking this back.`);
+  if (it.state === 'waiting' && deskIn('mine').length >= deskAssignedCap) {
+    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one first.`);
     return;
   }
-  it.court = it.court === 'me' ? 'them' : 'me';
+  it.state = it.state === 'mine' ? 'waiting' : 'mine';
   it.moved = Date.now();
   saveDesk();
   renderDesk();
 }
 
-function deskBump(id) {
+function deskTouch(id) {
   const it = desk.items.find(x => x.id === id);
   if (!it) return;
   it.moved = Date.now();
@@ -4576,9 +4576,9 @@ function deskBump(id) {
   renderDesk();
 }
 
-function deskClose(id, counted) {
+function deskRemove(id, completed) {
   desk.items = desk.items.filter(x => x.id !== id);
-  if (counted) desk.closed = (desk.closed || 0) + 1;
+  if (completed) desk.closed = (desk.closed || 0) + 1;
   saveDesk();
   renderDesk();
 }
@@ -4591,40 +4591,43 @@ function deskEditField(id, field, val) {
 }
 
 /* ---------- render ---------- */
-const NEXT_PLACEHOLDER = 'Write the next physical action';
+const NEXT_PLACEHOLDER = 'Add the next step';
 
 function deskCardHtml(it) {
   const d = deskDays(it.moved);
-  const who = it.court === 'them' ? (it.who || 'unassigned') : 'you';
+  const owner = it.state === 'waiting' ? (it.who || 'Unassigned') : 'Me';
+  const id = escapeHtml(it.id);
   return `
-  <article class="dk-card" data-court="${it.court}" data-age="${deskBand(d)}">
+  <article class="dk-card" data-state="${it.state}" data-age="${deskAge(d)}">
     <div class="dk-card__top">
-      <h3 class="dk-card__title" contenteditable data-id="${escapeHtml(it.id)}" data-field="title">${escapeHtml(it.title)}</h3>
-      <span class="dk-card__clock">${deskClock(d)}</span>
+      <h3 class="dk-card__title" contenteditable data-id="${id}" data-field="title">${escapeHtml(it.title)}</h3>
+      <span class="dk-card__clock" title="Days since this item was last updated">${deskDaysLabel(d)}</span>
     </div>
-    <div class="dk-card__meta">${escapeHtml(who)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
+    <div class="dk-card__meta">${escapeHtml(owner)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
     <div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}" contenteditable
-         data-id="${escapeHtml(it.id)}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
+         data-id="${id}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
     <div class="dk-card__acts">
-      <button class="dk-switch" data-act="flip" data-id="${escapeHtml(it.id)}">${it.court === 'me' ? 'Hand it off' : 'Take it back'}</button>
-      <button class="dk-btn" data-act="bump" data-id="${escapeHtml(it.id)}">Moved today</button>
-      <button class="dk-btn dk-btn--done" data-act="done" data-id="${escapeHtml(it.id)}">Closed</button>
-      <button class="dk-btn dk-btn--drop" data-act="drop" data-id="${escapeHtml(it.id)}">Erase</button>
+      <button class="dk-switch" data-act="reassign" data-id="${id}"
+        title="${it.state === 'mine' ? 'Move this item to Waiting on others' : 'Assign this item to me'}"
+        >${it.state === 'mine' ? 'Move to waiting' : 'Assign to me'}</button>
+      <button class="dk-btn" data-act="touch" data-id="${id}" title="Reset the last-updated date to today">Mark updated</button>
+      <button class="dk-btn dk-btn--done" data-act="complete" data-id="${id}" title="Remove this item and add it to your completed count">Complete</button>
+      <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item without counting it as completed">Delete</button>
     </div>
-    ${d >= deskStaleDays ? `<div class="dk-cold"><span class="dk-cold__txt">${d} days cold</span><span class="dk-cold__bar"></span><span class="dk-cold__txt">Escalate or erase</span></div>` : ''}
+    ${d >= deskStaleDays ? `<div class="dk-stalled"><span class="dk-stalled__txt">No activity for ${d} days</span><span class="dk-stalled__bar"></span><span class="dk-stalled__txt">Follow up or remove</span></div>` : ''}
   </article>`;
 }
 
-function deskFormHtml(court) {
-  const mine = court === 'me';
+function deskFormHtml(state) {
+  const mine = state === 'mine';
   return `
   <div class="dk-add">
-    <input data-f="title" maxlength="200" placeholder="${mine ? 'What is the problem?' : 'What are you waiting on?'}">
-    <input data-f="tag" maxlength="80" placeholder="Map, project, or part number">
-    <input data-f="next" maxlength="300" placeholder="Next physical action">
-    <input data-f="who" maxlength="80" placeholder="${mine ? 'Your note (optional)' : 'Who owes it to you'}">
+    <input data-f="title" maxlength="200" placeholder="${mine ? 'What needs to be done?' : 'What are you waiting for?'}">
+    <input data-f="tag" maxlength="80" placeholder="Project or reference (optional)">
+    <input data-f="next" maxlength="300" placeholder="Next step (optional)">
+    <input data-f="who" maxlength="80" placeholder="${mine ? 'Note (optional)' : 'Who it&rsquo;s with'}">
     <div class="dk-add__row">
-      <button class="dk-btn dk-btn--go" data-act="save" data-court="${court}">Put on the board</button>
+      <button class="dk-btn dk-btn--go" data-act="save" data-state="${state}">Add item</button>
       <button class="dk-btn" data-act="cancel">Cancel</button>
     </div>
   </div>`;
@@ -4632,28 +4635,28 @@ function deskFormHtml(court) {
 
 function renderDesk() {
   if (!desk) return;
-  // The scratch pad is the one field people type into continuously, and a
+  // The working-notes area is the one field people type into continuously, and a
   // re-render can land mid-sentence (a flash timer, a save retry). Put the
   // caret back where it was.
   const active = document.activeElement;
   const scratchFocused = !!active && active.id === 'dkScratch';
   const caret = scratchFocused ? [active.selectionStart, active.selectionEnd] : null;
 
-  const mine = deskInCourt('me');
-  const theirs = deskInCourt('them');
-  const cold = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
+  const mine = deskIn('mine');
+  const waiting = deskIn('waiting');
+  const stalled = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
   deskRoot.innerHTML = `
   <header class="dk-rig">
     <div>
       <h1 class="dk-rig__title">Standing Desk</h1>
-      <div class="dk-rig__sub">${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} closed all time &nbsp;·&nbsp; private to you</div>
+      <div class="dk-rig__sub">${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; Private to you</div>
     </div>
     <div class="dk-tally">
-      <div class="dk-tally__cell dk-tally__cell--me"><span class="dk-tally__k">On you</span><span class="dk-tally__v">${mine.length}<small>/${deskCourtCap}</small></span></div>
-      <div class="dk-tally__cell dk-tally__cell--them"><span class="dk-tally__k">On them</span><span class="dk-tally__v">${theirs.length}</span></div>
-      <div class="dk-tally__cell dk-tally__cell--cold" data-zero="${cold ? 0 : 1}"><span class="dk-tally__k">Cold</span><span class="dk-tally__v">${cold}</span></div>
+      <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}<small>/${deskAssignedCap}</small></span></div>
+      <div class="dk-tally__cell dk-tally__cell--waiting"><span class="dk-tally__k">Waiting</span><span class="dk-tally__v">${waiting.length}</span></div>
+      <div class="dk-tally__cell dk-tally__cell--stalled" data-zero="${stalled ? 0 : 1}"><span class="dk-tally__k">Stalled</span><span class="dk-tally__v">${stalled}</span></div>
     </div>
   </header>
 
@@ -4661,52 +4664,52 @@ function renderDesk() {
 
   <div class="dk-board">
     <section class="dk-panel">
-      <div class="dk-panel__head"><span class="dk-panel__name">Reference</span><span class="dk-panel__note">never erased</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">Reference</span><span class="dk-panel__note">kept until removed</span></div>
       <div class="dk-panel__body">
         <ul class="dk-ref">${desk.ref.map((r, n) => `
           <li class="dk-ref__row">
             <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r)}</span>
-            <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove line">&times;</button>
+            <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove reference">&times;</button>
           </li>`).join('')}</ul>
-        ${desk.ref.length ? '' : '<p class="dk-empty">Things you look up constantly.<br>Numbers, extensions, targets, the map you keep reopening.</p>'}
+        ${desk.ref.length ? '' : '<p class="dk-empty">Details you refer to often.<br>Links, codes, contacts, targets.</p>'}
         ${deskForm === 'ref' ? `<div class="dk-add">
             <input data-f="line" maxlength="200" placeholder="e.g. Release cutoff — Thursday 16:00">
-            <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Pin it</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
-          </div>` : '<button class="dk-opener" data-act="openref">Pin a line</button>'}
+            <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Add</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
+          </div>` : '<button class="dk-opener" data-act="openref">Add a reference</button>'}
       </div>
     </section>
 
     <section class="dk-panel">
-      <div class="dk-panel__head"><span class="dk-panel__name">In your court</span><span class="dk-panel__note">cap ${deskCourtCap}</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">Assigned to me</span><span class="dk-panel__note">limit ${deskAssignedCap}</span></div>
       <div class="dk-panel__body">
         ${mine.map(deskCardHtml).join('')}
-        ${mine.length ? '' : '<p class="dk-empty">Nothing is waiting on you.<br>Either you are clear, or something is missing.</p>'}
-        ${deskForm === 'me' ? deskFormHtml('me')
-          : `<button class="dk-opener" data-act="open" data-court="me" ${mine.length >= deskCourtCap ? 'disabled' : ''}>${mine.length >= deskCourtCap ? 'At the cap — close one first' : 'Add a problem'}</button>`}
+        ${mine.length ? '' : '<p class="dk-empty">No items assigned to you.<br>Add anything you&rsquo;re responsible for.</p>'}
+        ${deskForm === 'mine' ? deskFormHtml('mine')
+          : `<button class="dk-opener" data-act="open" data-state="mine" ${mine.length >= deskAssignedCap ? 'disabled' : ''}>${mine.length >= deskAssignedCap ? 'Limit reached — complete an item first' : 'Add an item'}</button>`}
       </div>
     </section>
 
     <section class="dk-panel">
-      <div class="dk-panel__head"><span class="dk-panel__name">In their court</span><span class="dk-panel__note">clock is running</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">Waiting on others</span><span class="dk-panel__note">awaiting a response</span></div>
       <div class="dk-panel__body">
-        ${theirs.map(deskCardHtml).join('')}
-        ${theirs.length ? '' : '<p class="dk-empty">Nobody owes you anything.<br>Log it here the moment they do.</p>'}
-        ${deskForm === 'them' ? deskFormHtml('them')
-          : '<button class="dk-opener" data-act="open" data-court="them">Add something you are waiting on</button>'}
+        ${waiting.map(deskCardHtml).join('')}
+        ${waiting.length ? '' : '<p class="dk-empty">You&rsquo;re not waiting on anyone.<br>Add an item when you hand work off or make a request.</p>'}
+        ${deskForm === 'waiting' ? deskFormHtml('waiting')
+          : '<button class="dk-opener" data-act="open" data-state="waiting">Add an item you&rsquo;re waiting on</button>'}
       </div>
     </section>
 
     <section class="dk-panel dk-panel--scratch">
-      <div class="dk-panel__head"><span class="dk-panel__name">Scratch</span><span class="dk-panel__note">thinking space — clear it often</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">not tracked or counted</span></div>
       <div class="dk-panel__body">
-        <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Sketch it out. Nothing here is tracked.">${escapeHtml(desk.scratch || '')}</textarea>
+        <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Space to think something through.">${escapeHtml(desk.scratch || '')}</textarea>
       </div>
     </section>
   </div>
 
   <div class="dk-foot">
-    <span class="dk-foot__txt">The clock on every card resets when the ball changes hands. At ${deskStaleDays} days it goes cold.</span>
-    <button class="dk-btn" data-act="copy" style="margin-left:auto">Copy for standup</button>
+    <span class="dk-foot__txt">Days shown are since each item was last updated. After ${deskStaleDays} days without activity, an item is flagged as stalled.</span>
+    <button class="dk-btn" data-act="copy" style="margin-left:auto">Copy summary</button>
   </div>`;
 
   paintDeskFlash();
@@ -4728,21 +4731,21 @@ deskRoot.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (!b || !desk) return;
   const act = b.dataset.act;
-  if (act === 'flip') deskFlip(b.dataset.id);
-  else if (act === 'bump') deskBump(b.dataset.id);
-  else if (act === 'done') deskClose(b.dataset.id, true);
-  else if (act === 'drop') deskClose(b.dataset.id, false);
-  else if (act === 'open') { deskForm = b.dataset.court; deskFocusForm = true; renderDesk(); }
+  if (act === 'reassign') deskReassign(b.dataset.id);
+  else if (act === 'touch') deskTouch(b.dataset.id);
+  else if (act === 'complete') deskRemove(b.dataset.id, true);
+  else if (act === 'delete') deskRemove(b.dataset.id, false);
+  else if (act === 'open') { deskForm = b.dataset.state; deskFocusForm = true; renderDesk(); }
   else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
   else if (act === 'cancel') { deskForm = null; renderDesk(); }
   else if (act === 'save') {
     const form = b.closest('.dk-add');
     const val = k => form.querySelector(`[data-f="${k}"]`).value;
-    deskAdd(b.dataset.court, { title: val('title'), tag: val('tag'), next: val('next'), who: val('who') });
+    deskAdd(b.dataset.state, { title: val('title'), tag: val('tag'), next: val('next'), who: val('who') });
   } else if (act === 'saveref') {
     const v = b.closest('.dk-add').querySelector('[data-f="line"]').value.trim();
     if (v && desk.ref.length >= deskMaxRef) {
-      deskFlash(`Reference holds ${deskMaxRef} lines. Clear one to pin another.`);
+      deskFlash(`Reference holds ${deskMaxRef} entries. Remove one to add another.`);
       return;
     }
     if (v) { desk.ref.push(v); saveDesk(); }
@@ -4753,9 +4756,9 @@ deskRoot.addEventListener('click', e => {
     saveDesk();
     renderDesk();
   } else if (act === 'copy') {
-    navigator.clipboard.writeText(deskStandupText()).then(
-      () => deskFlash('Copied. Paste it into your standup notes.'),
-      () => deskFlash('Copy was blocked by the browser. Select the cards and copy by hand.'));
+    navigator.clipboard.writeText(deskSummaryText()).then(
+      () => deskFlash('Summary copied to the clipboard.'),
+      () => deskFlash('Your browser blocked clipboard access. Select the text and copy it manually.'));
   }
 });
 
@@ -4776,7 +4779,7 @@ deskRoot.addEventListener('blur', e => {
   }
 }, true);
 
-// clear the "write the next action" prompt the moment someone types into it
+// clear the next-step prompt the moment someone types into it
 deskRoot.addEventListener('focus', e => {
   const t = e.target;
   if (t.classList && t.classList.contains('dk-card__next--empty')) t.textContent = '';
@@ -4802,16 +4805,22 @@ deskRoot.addEventListener('keydown', e => {
   }
 });
 
-// The board as a paste-able status: what is on you, then what you are owed.
-function deskStandupText() {
-  const clock = it => '[' + deskClock(deskDays(it.moved)) + ']';
-  const next = it => it.next || 'NO NEXT ACTION';
+// The board as plain text, for pasting into a status update or an email.
+function deskSummaryText() {
+  const age = it => '[' + deskDaysLabel(deskDays(it.moved)) + ']';
+  const next = it => it.next || 'No next step recorded';
+  const date = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
   return [
-    'ON ME',
-    ...deskInCourt('me').map(it => `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${clock(it)}`),
+    'Standing Desk — ' + date,
+    'Figures in brackets are days since each item was last updated.',
     '',
-    'WAITING ON',
-    ...deskInCourt('them').map(it => `- ${it.who || 'unassigned'}: ${it.title} — ${next(it)} ${clock(it)}`),
+    'ASSIGNED TO ME',
+    ...(deskIn('mine').length ? deskIn('mine').map(it =>
+      `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${age(it)}`) : ['- None']),
+    '',
+    'WAITING ON OTHERS',
+    ...(deskIn('waiting').length ? deskIn('waiting').map(it =>
+      `- ${it.who || 'Unassigned'}: ${it.title} — ${next(it)} ${age(it)}`) : ['- None']),
   ].join('\n');
 }
 

@@ -39,21 +39,21 @@ function normVisibility(v) {
 
 /* ----------------------------------------------------------------
    The Standing Desk — one work board per account, always private.
-   Where a mind map holds what you think, the desk holds what is
-   actually on you: open items split by whose court the ball is in, a
-   clock on each that resets when it changes hands, reference lines you
-   look up constantly, and a scratch area.
+   Where a mind map holds ideas, the desk holds open work: items split
+   into those assigned to the account holder and those they are waiting
+   on from someone else, each carrying the date it was last updated,
+   plus reference entries and a working-notes area.
    Declared up here (with normVisibility) because the storage backends
    normalize users at construction time, before the domain section runs.
 ---------------------------------------------------------------- */
-const MAX_DESK_ITEMS = 40;      // open items on the board, both courts together
-const MAX_DESK_REF = 40;        // pinned reference lines
-const MAX_DESK_SCRATCH = 8000;  // characters in the scratch area
-// How many items may sit in your own court at once. This is a discipline
-// rule the board enforces in the UI, not a storage limit: nothing here ever
-// deletes a card to satisfy it.
-const DESK_COURT_CAP = 5;
-const DESK_STALE_DAYS = 14;     // untouched this long and an item has gone cold
+const MAX_DESK_ITEMS = 40;      // open items on the board, both states together
+const MAX_DESK_REF = 40;        // reference entries
+const MAX_DESK_SCRATCH = 8000;  // characters in the working-notes area
+// How many items may be assigned to the account holder at once. The UI
+// enforces this to keep the list of active work honest; it is not a storage
+// limit, and nothing here ever deletes an item to satisfy it.
+const DESK_ASSIGNED_CAP = 5;
+const DESK_STALE_DAYS = 14;     // no activity for this long and an item is stalled
 
 function makeDesk() {
   return { ref: [], items: [], scratch: '', closed: 0, updatedAt: 0 };
@@ -68,17 +68,20 @@ function sanitizeDesk(input) {
   for (const raw of Array.isArray(d.items) ? d.items : []) {
     if (!raw || typeof raw !== 'object') continue;
     const title = text(raw.title, 200);
-    if (!title) continue; // a card with nothing written on it isn't a card
+    if (!title) continue; // an item with no description isn't an item
     const moved = Number(raw.moved);
+    // `court` is the field's earlier name, read here so boards written before
+    // the rename keep their assignments.
+    const state = raw.state || (raw.court === 'them' ? 'waiting' : raw.court ? 'mine' : '');
     items.push({
       id: text(raw.id, 24) || newId(),
       title,
       tag: text(raw.tag, 80),
       next: text(raw.next, 300),
       who: text(raw.who, 80),
-      court: raw.court === 'them' ? 'them' : 'me',
-      // Clamped to now: a future timestamp would make an item permanently
-      // fresh, and the whole point of the board is that the clock runs.
+      state: state === 'waiting' ? 'waiting' : 'mine',
+      // Last-updated date, clamped to now: a future timestamp would leave an
+      // item permanently fresh, and the age of an item is the point of it.
       moved: Number.isFinite(moved) && moved > 0 ? Math.min(moved, Date.now()) : Date.now(),
     });
     if (items.length >= MAX_DESK_ITEMS) break;
@@ -1682,12 +1685,15 @@ async function handleApi(req, res, pathname) {
       desk: {
         reference: user.desk.ref,
         items: user.desk.items.map(i => ({
-          title: i.title, tag: i.tag, next: i.next, who: i.who,
-          court: i.court === 'me' ? 'on me' : 'waiting on them',
-          movedAt: new Date(i.moved).toISOString(),
+          title: i.title,
+          tag: i.tag,
+          nextStep: i.next,
+          assignedTo: i.who,
+          status: i.state === 'mine' ? 'Assigned to me' : 'Waiting on others',
+          lastUpdatedAt: new Date(i.moved).toISOString(),
         })),
-        scratch: user.desk.scratch,
-        closedAllTime: user.desk.closed,
+        workingNotes: user.desk.scratch,
+        completedAllTime: user.desk.closed,
       },
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
@@ -1788,7 +1794,7 @@ async function handleApi(req, res, pathname) {
   if (route === 'GET /api/desk') {
     return sendJSON(res, 200, {
       desk: user.desk,
-      cap: DESK_COURT_CAP,
+      cap: DESK_ASSIGNED_CAP,
       maxItems: MAX_DESK_ITEMS,
       maxRef: MAX_DESK_REF,
       staleDays: DESK_STALE_DAYS,
