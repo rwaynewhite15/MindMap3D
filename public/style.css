@@ -1552,6 +1552,20 @@ button.primary {
 .dk-card[data-age="aging"] .dk-card__clock { color: #A8761A; }
 .dk-card[data-age="stalled"] .dk-card__clock { color: var(--dk-red); }
 .dk-card__meta { font-family: var(--dk-mono); font-size: 10.5px; color: var(--dk-ink-3); margin-top: 3px; letter-spacing: 0.01em; text-transform: uppercase; }
+/* the meta line is editable in place: who the item is with, and its project */
+.dk-card__who, .dk-card__tag {
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+  color: var(--dk-ink-2); background: none; border: 0; padding: 0;
+  border-bottom: 1px dotted var(--dk-ink-3); /* the only sign these two are editable */
+}
+.dk-card__tag { cursor: pointer; }
+.dk-card__who:hover, .dk-card__tag:hover { color: var(--dk-blue); border-bottom-color: var(--dk-blue); }
+.dk-card__who:focus { outline: 2px solid var(--dk-blue); outline-offset: 2px; border-bottom-color: transparent; }
+.dk-meta--empty { color: var(--dk-ink-3); font-style: italic; }
+/* the placeholder is cleared the moment the field is entered, and an inline box
+   with nothing in it collapses out from under the caret — hold the space open */
+.dk-card__who.dk-meta--empty { display: inline-block; min-width: 5em; }
+
 .dk-card__next {
   font-size: 13px; line-height: 1.4; margin-top: 7px; color: var(--dk-ink);
   border-left: 2px solid var(--dk-board-line); padding: 1px 0 1px 8px; cursor: text;
