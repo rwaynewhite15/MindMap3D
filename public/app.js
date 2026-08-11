@@ -4442,7 +4442,10 @@ let deskAssignedCap = 5;    // items that may be assigned to you (the server set
 let deskMaxItems = 40;      // open items the board holds, both states together
 let deskMaxDone = 100;      // completed items, which stay until they are deleted
 let deskMaxRef = 40;        // reference entries the board holds
-let deskMaxNotes = 20000;   // characters of working-notes markup
+let deskMaxNotes = 20000;   // characters of markup in one note
+let deskMaxNoteCount = 20;  // separate notes a board can hold
+let deskNoteId = null;      // which note the editor is showing
+let deskFocusNote = false;  // a note was just created and should take the caret
 let deskStaleDays = 14;     // no activity for this long and an item is stalled
 let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
 let deskFocusForm = false;  // a form just opened and should take the caret
@@ -4520,6 +4523,8 @@ async function loadDesk() {
       deskMaxDone = data.maxDone;
       deskMaxRef = data.maxRef;
       deskMaxNotes = data.maxNotes;
+      deskMaxNoteCount = data.maxNoteCount;
+      try { deskNoteId = localStorage.getItem(deskNoteKey()); } catch { deskNoteId = null; }
       deskStaleDays = data.staleDays;
     } catch (err) {
       if (first) {
@@ -4605,6 +4610,7 @@ async function loadSharedDesk(username, code) {
   // your own share link belongs in your own editable board
   if (data.isOwner) { location.hash = '#/desk'; return; }
   desk = { ...data.desk, visibility: data.visibility, code: '' };
+  deskNoteId = null;
   deskOwner = data.owner;
   deskAssignedCap = data.cap;
   deskStaleDays = data.staleDays;
@@ -4820,6 +4826,20 @@ const NOTE_CLASSES = new Set([...NOTE_SIZES.map(s => s.cls), ...Object.values(NO
 
 const notesEl = () => $('#dkNotes');
 
+// Which note the editor is on. Remembered per account, so coming back to the
+// desk reopens the one you were last writing in rather than the first.
+const deskNoteKey = () => 'mms:desknote:' + (me ? me.username : '-');
+function deskNotes() { return desk && Array.isArray(desk.notes) ? desk.notes : []; }
+function activeNote() {
+  const all = deskNotes();
+  if (!all.length) return null;
+  return all.find(n => n.id === deskNoteId) || all[0];
+}
+function setActiveNote(id) {
+  deskNoteId = id;
+  if (!deskOwner) { try { localStorage.setItem(deskNoteKey(), id); } catch { /* private mode */ } }
+}
+
 // Fold what execCommand produced back into our own vocabulary: <font size> and
 // text-align styles become classes, and anything else is stripped. Runs after
 // every command, so nothing outside the allowlist is ever held in the document.
@@ -4886,13 +4906,55 @@ function restoreNotesCaret(el, caret) {
 
 function saveNotes() {
   const el = notesEl();
-  if (!el || !desk || deskOwner) return;
+  const note = activeNote();
+  if (!el || !desk || deskOwner || !note) return;
   normalizeNotes(el);
-  desk.notes = el.innerHTML;
-  if (desk.notes.length > deskMaxNotes) {
-    deskFlash(`Working notes are full (${deskMaxNotes} characters of formatting). Older text may be trimmed when it saves.`);
+  note.html = el.innerHTML;
+  if (note.html.length > deskMaxNotes) {
+    deskFlash(`This note is full (${deskMaxNotes} characters of formatting). Older text may be trimmed when it saves. Start another note with + Note.`);
   }
   saveDesk();
+}
+
+/* ---------- one board, several notes ---------- */
+function deskAddNote() {
+  if (!desk || deskOwner) return;
+  if (deskNotes().length >= deskMaxNoteCount) {
+    deskFlash(`A board holds ${deskMaxNoteCount} notes. Delete one before adding another.`);
+    return;
+  }
+  const note = { id: deskUid(), title: 'Notes ' + (deskNotes().length + 1), html: '' };
+  desk.notes.push(note);
+  setActiveNote(note.id);
+  deskFocusNote = true;
+  saveDesk();
+  renderDesk();
+}
+
+function deskDeleteNote(id) {
+  if (!desk || deskOwner) return;
+  const note = deskNotes().find(n => n.id === id);
+  if (!note) return;
+  const emptyNote = !noteHtmlToText(note.html);
+  if (!emptyNote && !confirm(`Delete the note "${note.title}"? Its contents go with it.`)) return;
+  desk.notes = deskNotes().filter(n => n.id !== id);
+  // a board always keeps a note, so deleting the last one leaves a clean one
+  if (!desk.notes.length) desk.notes.push({ id: deskUid(), title: 'Notes', html: '' });
+  setActiveNote(desk.notes[0].id);
+  saveDesk();
+  renderDesk();
+}
+
+function deskRenameNote(id, title) {
+  const note = deskNotes().find(n => n.id === id);
+  if (!note || deskOwner) return;
+  note.title = title.slice(0, 60) || 'Notes';
+  saveDesk();
+}
+
+// Enough of the markup to tell an empty note from one with something in it.
+function noteHtmlToText(html) {
+  return String(html || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
 }
 
 function runNoteCommand(cmd) {
@@ -4985,6 +5047,32 @@ function refreshNoteToolbar() {
   for (const [dir, cls] of Object.entries(NOTE_ALIGN)) {
     on(`[data-align="${dir}"]`, node && node.closest('.' + cls));
   }
+}
+
+// One tab per note. The active tab carries the title as editable text so a note
+// is renamed where it is named; the others are plain buttons that switch to it.
+function noteTabsHtml() {
+  const ro = !!deskOwner;
+  const all = ro ? deskNotes().filter(n => n.html) : deskNotes();
+  const current = activeNote();
+  // a single untitled note on your own board needs no tab strip at all
+  if (!ro && all.length === 1 && all[0].title === 'Notes') {
+    return `<div class="dk-tabs"><button class="dk-tab-add" data-act="addnote" title="Start another note">+ Note</button></div>`;
+  }
+  if (ro && all.length < 2) return '';
+  return `<div class="dk-tabs">
+    ${all.map(n => {
+      const id = escapeHtml(n.id);
+      if (current && n.id === current.id) {
+        return `<span class="dk-tab dk-tab--on">
+          <span class="dk-tab__name"${ro ? '' : ` contenteditable data-note-title="${id}"`}>${escapeHtml(n.title)}</span>
+          ${ro ? '' : `<button class="dk-tab__x" data-act="delnote" data-id="${id}" title="Delete this note" aria-label="Delete this note">&times;</button>`}
+        </span>`;
+      }
+      return `<button class="dk-tab" data-act="note" data-id="${id}" title="Open this note">${escapeHtml(n.title)}</button>`;
+    }).join('')}
+    ${ro ? '' : '<button class="dk-tab-add" data-act="addnote" title="Start another note">+ Note</button>'}
+  </div>`;
 }
 
 function noteToolbarHtml() {
@@ -5117,6 +5205,7 @@ function renderDesk() {
   const mine = deskIn('mine');
   const waiting = deskIn('waiting');
   const done = deskDone();
+  const note = activeNote();
   // a completed item has stopped ageing, so it is never counted as stalled
   const stalled = desk.items.filter(i => !i.done && deskDays(i.moved) >= deskStaleDays).length;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
@@ -5193,12 +5282,13 @@ function renderDesk() {
       </div>
     </section>` : ''}
 
-    ${ro && !desk.notes ? '' : `<section class="dk-panel dk-panel--notes">
+    ${ro && !deskNotes().length ? '' : `<section class="dk-panel dk-panel--notes">
       <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">${ro ? 'read-only'
         : desk.visibility === 'private' ? 'private to you' : 'shared with anyone who can see this desk'}</span></div>
       <div class="dk-panel__body">
+        ${noteTabsHtml()}
         ${ro ? '' : noteToolbarHtml()}
-        <div class="dk-notes" id="dkNotes"${ro ? '' : ' contenteditable data-placeholder="Space to think something through."'}>${desk.notes || ''}</div>
+        <div class="dk-notes" id="dkNotes"${ro ? '' : ' contenteditable data-placeholder="Space to think something through."'}>${note ? note.html : ''}</div>
       </div>
     </section>`}
   </div>
@@ -5212,6 +5302,10 @@ function renderDesk() {
   if (caret) {
     restoreNotesCaret(notesEl(), caret);
     refreshNoteToolbar();
+  } else if (deskFocusNote) {
+    deskFocusNote = false;
+    const box = notesEl();
+    if (box) box.focus();
   } else if (deskFocusForm) {
     // only on the render that opened the form — never steal the caret back
     // from a field the user has already moved on to
@@ -5235,6 +5329,9 @@ deskRoot.addEventListener('click', e => {
   else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
   else if (act === 'cancel') { deskForm = null; renderDesk(); }
   else if (act === 'share') openDeskShare();
+  else if (act === 'note') { setActiveNote(b.dataset.id); renderDesk(); }
+  else if (act === 'addnote') deskAddNote();
+  else if (act === 'delnote') deskDeleteNote(b.dataset.id);
   else if (act === 'openmap') deskOpenMap(b.dataset.map);
   else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; renderDesk(); }
   else if (act === 'cancelmap') { deskMapPickFor = null; renderDesk(); }
@@ -5280,6 +5377,9 @@ deskRoot.addEventListener('blur', e => {
     const v = t.textContent.trim();
     if (t.dataset.field === 'next' && v === NEXT_PLACEHOLDER) return; // untouched placeholder
     deskEditField(t.dataset.id, t.dataset.field, v);
+    renderDesk();
+  } else if (t.dataset.noteTitle) {
+    deskRenameNote(t.dataset.noteTitle, t.textContent.trim());
     renderDesk();
   } else if (t.dataset.ref !== undefined) {
     const n = +t.dataset.ref, v = t.textContent.trim();
@@ -5363,6 +5463,9 @@ deskRoot.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('.dk-add input')) {
     e.preventDefault();
     e.target.closest('.dk-add').querySelector('[data-act="save"],[data-act="saveref"]').click();
+  } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.noteTitle) {
+    e.preventDefault(); // a note title is one line
+    e.target.blur();
   } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'title') {
     e.preventDefault(); // one line per title; commit it instead of adding a newline
     e.target.blur();
