@@ -4439,7 +4439,8 @@ let desk = null;            // { ref, items, notes, closed } — null until load
 let deskOwner = null;       // whose desk is on screen; null means your own
                             // (set → read-only: someone else's shared board)
 let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
-let deskMaxItems = 40;      // items the board holds in total, both states
+let deskMaxItems = 40;      // open items the board holds, both states together
+let deskMaxDone = 100;      // completed items, which stay until they are deleted
 let deskMaxRef = 40;        // reference entries the board holds
 let deskMaxNotes = 20000;   // characters of working-notes markup
 let deskStaleDays = 14;     // no activity for this long and an item is stalled
@@ -4457,7 +4458,14 @@ const deskDays = ms => Math.max(0, Math.floor((Date.now() - ms) / DESK_DAY));
 const deskAge = d => (d >= deskStaleDays ? 'stalled' : d >= 7 ? 'aging' : 'current');
 const deskDaysLabel = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
 const deskUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const deskIn = state => (desk ? desk.items.filter(i => i.state === state) : []);
+// The two working columns hold open items only; a completed one drops out of
+// them and into its own section, newest first, until it is deleted.
+const deskIn = state => (desk ? desk.items.filter(i => i.state === state && !i.done) : []);
+const deskDone = () => (desk ? desk.items.filter(i => i.done).sort((a, b) => b.done - a.done) : []);
+const deskDoneWhen = it => {
+  const d = deskDays(it.done);
+  return d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
+};
 
 /* ---------- links to mind maps ----------
    An item or a reference entry may point at one of the maps on your own map
@@ -4509,6 +4517,7 @@ async function loadDesk() {
       desk = data.desk;
       deskAssignedCap = data.cap;
       deskMaxItems = data.maxItems;
+      deskMaxDone = data.maxDone;
       deskMaxRef = data.maxRef;
       deskMaxNotes = data.maxNotes;
       deskStaleDays = data.staleDays;
@@ -4714,7 +4723,7 @@ function deskAdd(state, f) {
   }
   // The board itself has a ceiling. Say so rather than letting the save quietly
   // drop the oldest item to fit.
-  if (desk.items.length >= deskMaxItems) {
+  if (desk.items.filter(i => !i.done).length >= deskMaxItems) {
     deskFlash(`This board holds ${deskMaxItems} open items. Complete or delete one first.`);
     return;
   }
@@ -4750,9 +4759,36 @@ function deskTouch(id) {
   renderDesk();
 }
 
-function deskRemove(id, completed) {
+// Completing an item no longer takes it off the board — it moves to Completed
+// and stays there, so what got done is still in front of you, until you delete
+// it or put it back.
+function deskComplete(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it || it.done) return;
+  if (deskDone().length >= deskMaxDone) {
+    deskFlash(`Completed holds ${deskMaxDone} items. Delete some of them first.`);
+    return;
+  }
+  it.done = Date.now();
+  saveDesk();
+  renderDesk();
+}
+
+function deskReopen(id) {
+  const it = desk.items.find(x => x.id === id);
+  if (!it || !it.done) return;
+  if (it.state === 'mine' && deskIn('mine').length >= deskAssignedCap) {
+    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one first.`);
+    return;
+  }
+  it.done = 0;
+  it.moved = Date.now(); // it is live again, so its clock starts again
+  saveDesk();
+  renderDesk();
+}
+
+function deskRemove(id) {
   desk.items = desk.items.filter(x => x.id !== id);
-  if (completed) desk.closed = (desk.closed || 0) + 1;
   saveDesk();
   renderDesk();
 }
@@ -5038,6 +5074,22 @@ function deskTagFieldHtml() {
   </select>`;
 }
 
+// A completed item is a settled record rather than live work, so it shows as a
+// compact row instead of a card: what it was, when it was finished, and the two
+// things you can still do with it.
+function deskDoneRowHtml(it) {
+  const ro = !!deskOwner;
+  const id = escapeHtml(it.id);
+  const when = deskDoneWhen(it);
+  return `
+  <li class="dk-done__row">
+    <span class="dk-done__txt">${escapeHtml(it.title)}${it.tag ? '<span class="dk-done__tag">' + escapeHtml(it.tag) + '</span>' : ''}</span>
+    <span class="dk-done__when" title="Completed ${escapeHtml(new Date(it.done).toLocaleDateString())}">${when}</span>
+    ${ro ? '' : `<button class="dk-btn" data-act="reopen" data-id="${id}" title="Put this back on the board">Reopen</button>
+    <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item for good">Delete</button>`}
+  </li>`;
+}
+
 function deskFormHtml(state) {
   const mine = state === 'mine';
   return `
@@ -5064,7 +5116,9 @@ function renderDesk() {
 
   const mine = deskIn('mine');
   const waiting = deskIn('waiting');
-  const stalled = desk.items.filter(i => deskDays(i.moved) >= deskStaleDays).length;
+  const done = deskDone();
+  // a completed item has stopped ageing, so it is never counted as stalled
+  const stalled = desk.items.filter(i => !i.done && deskDays(i.moved) >= deskStaleDays).length;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
   const ro = !!deskOwner;
@@ -5075,8 +5129,8 @@ function renderDesk() {
     <div>
       <h1 class="dk-rig__title">Standing Desk</h1>
       <div class="dk-rig__sub">${ro
-        ? `${escapeHtml(whose)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
-        : `${escapeHtml(today)} &nbsp;·&nbsp; ${desk.closed || 0} completed to date &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
+        ? `${escapeHtml(whose)} &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
+        : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     </div>
     <div class="dk-tally">
       <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}<small>/${deskAssignedCap}</small></span></div>
@@ -5132,6 +5186,13 @@ function renderDesk() {
       </div>
     </section>
 
+    ${done.length ? `<section class="dk-panel dk-panel--done">
+      <div class="dk-panel__head"><span class="dk-panel__name">Completed</span><span class="dk-panel__note">kept until deleted</span></div>
+      <div class="dk-panel__body">
+        <ul class="dk-done">${done.map(deskDoneRowHtml).join('')}</ul>
+      </div>
+    </section>` : ''}
+
     ${ro && !desk.notes ? '' : `<section class="dk-panel dk-panel--notes">
       <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">${ro ? 'read-only'
         : desk.visibility === 'private' ? 'private to you' : 'shared with anyone who can see this desk'}</span></div>
@@ -5167,8 +5228,9 @@ deskRoot.addEventListener('click', e => {
   const act = b.dataset.act;
   if (act === 'reassign') deskReassign(b.dataset.id);
   else if (act === 'touch') deskTouch(b.dataset.id);
-  else if (act === 'complete') deskRemove(b.dataset.id, true);
-  else if (act === 'delete') deskRemove(b.dataset.id, false);
+  else if (act === 'complete') deskComplete(b.dataset.id);
+  else if (act === 'reopen') deskReopen(b.dataset.id);
+  else if (act === 'delete') deskRemove(b.dataset.id);
   else if (act === 'open') { deskForm = b.dataset.state; deskFocusForm = true; renderDesk(); }
   else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
   else if (act === 'cancel') { deskForm = null; renderDesk(); }
@@ -5321,12 +5383,16 @@ function deskSummaryText() {
     'Figures in brackets are days since each item was last updated.',
     '',
     deskOwner ? 'ASSIGNED TO THEM' : 'ASSIGNED TO ME',
+    // (open items only; anything completed is listed at the end)
     ...(deskIn('mine').length ? deskIn('mine').map(it =>
       `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} — ${next(it)} ${age(it)}`) : ['- None']),
     '',
     'WAITING ON OTHERS',
     ...(deskIn('waiting').length ? deskIn('waiting').map(it =>
       `- ${it.who || 'Unassigned'}: ${it.title} — ${next(it)} ${age(it)}`) : ['- None']),
+    // what has been finished is on the board now, so it belongs in the report too
+    ...(deskDone().length ? ['', 'COMPLETED', ...deskDone().map(it =>
+      `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} [completed ${deskDoneWhen(it)}]`)] : []),
   ].join('\n');
 }
 

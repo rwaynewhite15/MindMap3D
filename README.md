@@ -31,6 +31,10 @@ and turns on **AI generation** simply by setting environment variables.
   which case it is linked from your profile. Viewers get a read-only copy of the whole board.
 - **Working notes take formatting** — bold, italic, underline, three text sizes, bulleted and
   numbered lists, and left/centre/right alignment, from a toolbar above the notes area.
+- **Completed items stay on the board** — completing something moves it to a **Completed**
+  list rather than removing it, and it stays there until you delete it. **Reopen** puts one
+  back. There is no running count of completions any more; what you finished is simply
+  listed.
 - **Project or reference is a dropdown** — once a project name is on the board, later items
   pick it from a list instead of retyping it, with a **＋ New** entry for a name that isn't
   there yet.
@@ -149,9 +153,9 @@ without clutter or context switching pain.
 
 ### The Standing Desk — one work board per account
 
-Open **Desk** in the top navigation. Every account has exactly one, and it is **always
-private**: no visibility tier, no editors, never listed on a profile or in the feed. Where
-maps are for developing ideas, the desk is for tracking open work.
+Open **Desk** in the top navigation. Every account has exactly one, and it starts
+**private** — see *Sharing* below for the other two settings. Where maps are for developing
+ideas, the desk is for tracking open work.
 
 - **Two states.** Every item is either **Assigned to me** or **Waiting on others**.
   **Move to waiting** / **Assign to me** moves an item between them and **resets its
@@ -166,6 +170,11 @@ maps are for developing ideas, the desk is for tracking open work.
   an item that has quietly gone quiet stays visible.
 - **A next step on every item**, edited in place. Left empty it is shown in red — an item
   with no next step is a note, not a commitment.
+- **Completed work stays visible.** **Complete** takes an item out of the working columns and
+  into a **Completed** list below them, newest first, where it stays until you **Delete** it.
+  Nothing is counted or tallied — the finished items themselves are the record. **Reopen**
+  puts one back where it came from with its clock restarted, so a mis-click costs nothing.
+  A completed item is never counted toward the limit of five and never flagged as stalled.
 - **A link to a mind map.** Items and reference entries can each point at one map — your own,
   or one shared with you to edit — chosen when you add them or attached afterwards with
   **Link a map**. Following the link opens that map in the editor. Only the map's id is

@@ -47,6 +47,7 @@ function normVisibility(v) {
    normalize users at construction time, before the domain section runs.
 ---------------------------------------------------------------- */
 const MAX_DESK_ITEMS = 40;      // open items on the board, both states together
+const MAX_DESK_DONE = 100;      // completed items, which stay until they are deleted
 const MAX_DESK_REF = 40;        // reference entries
 const MAX_DESK_NOTES = 20000;   // characters of working-notes markup
 // How many items may be assigned to the account holder at once. The UI
@@ -153,7 +154,7 @@ function noteHtmlToText(html) {
 }
 
 function makeDesk() {
-  return { ref: [], items: [], notes: '', closed: 0, visibility: 'private', code: '', updatedAt: 0 };
+  return { ref: [], items: [], notes: '', visibility: 'private', code: '', updatedAt: 0 };
 }
 
 // Always returns a valid desk — used both to normalize what we read out of
@@ -162,11 +163,20 @@ function sanitizeDesk(input) {
   const d = input && typeof input === 'object' ? input : {};
   const text = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
   const items = [];
+  let open = 0, completed = 0;
   for (const raw of Array.isArray(d.items) ? d.items : []) {
     if (!raw || typeof raw !== 'object') continue;
     const title = text(raw.title, 200);
     if (!title) continue; // an item with no description isn't an item
     const moved = Number(raw.moved);
+    // When it was completed. 0 is an open item; a completed one stays on the
+    // board, out of the two working columns, until it is deleted.
+    const doneAt = Number(raw.done);
+    const done = Number.isFinite(doneAt) && doneAt > 0 ? Math.min(doneAt, Date.now()) : 0;
+    // Open and completed items are held to their own limits, so a long list of
+    // finished work can never crowd out room for new work.
+    if (done ? completed >= MAX_DESK_DONE : open >= MAX_DESK_ITEMS) continue;
+    if (done) completed++; else open++;
     // `court` is the field's earlier name, read here so boards written before
     // the rename keep their assignments.
     const state = raw.state || (raw.court === 'them' ? 'waiting' : raw.court ? 'mine' : '');
@@ -184,8 +194,8 @@ function sanitizeDesk(input) {
       // Last-updated date, clamped to now: a future timestamp would leave an
       // item permanently fresh, and the age of an item is the point of it.
       moved: Number.isFinite(moved) && moved > 0 ? Math.min(moved, Date.now()) : Date.now(),
+      done,
     });
-    if (items.length >= MAX_DESK_ITEMS) break;
   }
   // Reference entries carry an optional map link too, so each is an object.
   // Entries written before that were plain strings; both shapes normalize here.
@@ -199,14 +209,12 @@ function sanitizeDesk(input) {
     ref.push({ text: line, mapRef: cleanMapRef(entry.mapRef) });
     if (ref.length >= MAX_DESK_REF) break;
   }
-  const closed = Math.floor(Number(d.closed));
   return {
     ref,
     items,
     // `scratch` is the plain-text notes field this replaced; a desk that still
     // has one is converted on the first read and keeps its notes.
     notes: sanitizeNoteHtml(d.notes == null && d.scratch ? plainToNoteHtml(d.scratch) : d.notes),
-    closed: Number.isFinite(closed) ? Math.max(0, Math.min(1e6, closed)) : 0,
     visibility: normDeskVisibility(d.visibility),
     // Shape-checked only. The share code is minted by the server and the write
     // route keeps the stored one, so a client can never choose its own.
@@ -1709,7 +1717,7 @@ async function handleApi(req, res, pathname) {
           const link = linkFor(i.mapRef);
           return {
             id: i.id, title: i.title, tag: i.tag, next: i.next, who: i.who,
-            state: i.state, moved: i.moved,
+            state: i.state, moved: i.moved, done: i.done,
             mapRef: link ? link.id : '', mapName: link ? link.name : '',
           };
         }),
@@ -1718,7 +1726,6 @@ async function handleApi(req, res, pathname) {
           return { text: r.text, mapRef: link ? link.id : '', mapName: link ? link.name : '' };
         }),
         notes: d.notes,
-        closed: d.closed,
       },
       staleDays: DESK_STALE_DAYS,
       cap: DESK_ASSIGNED_CAP,
@@ -1884,13 +1891,13 @@ async function handleApi(req, res, pathname) {
           tag: i.tag,
           nextStep: i.next,
           assignedTo: i.who,
-          status: i.state === 'mine' ? 'Assigned to me' : 'Waiting on others',
+          status: i.done ? 'Completed' : i.state === 'mine' ? 'Assigned to me' : 'Waiting on others',
+          completedAt: i.done ? new Date(i.done).toISOString() : null,
           linkedMap: linkedMapOut(i.mapRef),
           lastUpdatedAt: new Date(i.moved).toISOString(),
         })),
         workingNotes: noteHtmlToText(user.desk.notes),
         workingNotesHtml: user.desk.notes,
-        completedAllTime: user.desk.closed,
       },
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
@@ -1993,6 +2000,7 @@ async function handleApi(req, res, pathname) {
       desk: user.desk,
       cap: DESK_ASSIGNED_CAP,
       maxItems: MAX_DESK_ITEMS,
+      maxDone: MAX_DESK_DONE,
       maxRef: MAX_DESK_REF,
       maxNotes: MAX_DESK_NOTES,
       staleDays: DESK_STALE_DAYS,
