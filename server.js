@@ -145,12 +145,17 @@ function plainToNoteHtml(text) {
 // Notes as readable text, for the data export.
 function noteHtmlToText(html) {
   return String(html || '')
-    .replace(/<(br|\/div|\/p|\/li|\/ul|\/ol)\b[^>]*>/gi, '\n')
+    .replace(/<(ul|ol)\b[^>]*>/gi, '') // the container itself contributes nothing
+    .replace(/<(br|\/div|\/p|\/ul|\/ol)\b[^>]*>/gi, '\n')
+    // a list item starts its own line and keeps a bullet, absorbing the newline
+    // the block before it produced rather than leaving a blank line
+    .replace(/\n*<li\b[^>]*>/gi, '\n- ')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&') // last, so "&amp;lt;" doesn't become "<"
+    .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

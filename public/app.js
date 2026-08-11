@@ -4952,9 +4952,25 @@ function deskRenameNote(id, title) {
   saveDesk();
 }
 
-// Enough of the markup to tell an empty note from one with something in it.
+// A note as plain text — for telling an empty note from a full one, and for the
+// copied summary. Block ends become line breaks and list items keep a bullet, so
+// a note reads on the clipboard roughly the way it looked on the board. Kept in
+// step with noteHtmlToText in server.js, which does the same job for the export.
 function noteHtmlToText(html) {
-  return String(html || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+  return String(html || '')
+    .replace(/<(ul|ol)\b[^>]*>/gi, '') // the container itself contributes nothing
+    .replace(/<(br|\/div|\/p|\/ul|\/ol)\b[^>]*>/gi, '\n')
+    // a list item starts its own line and keeps a bullet, absorbing the newline
+    // the block before it produced rather than leaving a blank line
+    .replace(/\n*<li\b[^>]*>/gi, '\n- ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&') // last, so "&amp;lt;" doesn't become "<"
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function runNoteCommand(cmd) {
@@ -5477,6 +5493,20 @@ deskRoot.addEventListener('keydown', e => {
 });
 
 // The board as plain text, for pasting into a status update or an email.
+// Every note that has something in it, under one heading, each body indented
+// beneath its own name so the titles stay legible in a wall of pasted text.
+// A note left empty contributes nothing, and with no notes at all the whole
+// section is left out.
+function deskNoteLines() {
+  const out = [];
+  for (const n of deskNotes()) {
+    const body = noteHtmlToText(n.html);
+    if (!body) continue;
+    out.push('', n.title, ...body.split('\n').map(line => (line ? '  ' + line : '')));
+  }
+  return out.length ? ['', 'WORKING NOTES', ...out] : [];
+}
+
 function deskSummaryText() {
   const age = it => '[' + deskDaysLabel(deskDays(it.moved)) + ']';
   const next = it => it.next || 'No next step recorded';
@@ -5496,6 +5526,7 @@ function deskSummaryText() {
     // what has been finished is on the board now, so it belongs in the report too
     ...(deskDone().length ? ['', 'COMPLETED', ...deskDone().map(it =>
       `- ${it.title}${it.tag ? ' (' + it.tag + ')' : ''} [completed ${deskDoneWhen(it)}]`)] : []),
+    ...deskNoteLines(),
   ].join('\n');
 }
 
