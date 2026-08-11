@@ -31,6 +31,8 @@ and turns on **AI generation** simply by setting environment variables.
   which case it is linked from your profile. Viewers get a read-only copy of the whole board.
 - **Working notes take formatting** — bold, italic, underline, three text sizes, bulleted and
   numbered lists, and left/centre/right alignment, from a toolbar above the notes area.
+- **Several notes per board** — **+ Note** starts another one, each with its own name, and a
+  tab strip switches between them. The one you were last writing in is the one that reopens.
 - **Completed items stay on the board** — completing something moves it to a **Completed**
   list rather than removing it, and it stays there until you delete it. **Reopen** puts one
   back. There is no running count of completions any more; what you finished is simply
@@ -190,6 +192,11 @@ ideas, the desk is for tracking open work.
   **bulleted and numbered lists**, and **left / centre / right alignment**. Nothing in it is
   tracked or counted. Pasted text arrives as plain text, so formatting only ever comes from
   the toolbar.
+- **As many notes as you need**, up to twenty. **+ Note** starts another; a tab strip across
+  the top switches between them, and a note is renamed by typing over its own tab. Deleting
+  one asks first if it has anything in it, and a board always keeps a note to write in — so
+  deleting your last one leaves a clean one behind. The desk reopens whichever note you were
+  last writing in.
 - **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,
   then what you are waiting on and from whom, each with its age.
 
@@ -202,8 +209,8 @@ ideas, the desk is for tracking open work.
   link working, so a link you have handed out doesn't break by accident.
 - **Anyone** — readable by everyone and linked from your profile, no code needed.
 
-A viewer sees the whole board — items, reference entries and working notes — read-only, and
-can copy the summary. Links to maps a viewer can't open are left out of what they're sent,
+A viewer sees the whole board — items, reference entries and every note that has something
+in it — read-only, and can copy the summary. Links to maps a viewer can't open are left out of what they're sent,
 rather than shown as something they can't reach.
 
 Because a shared board's notes are rendered in someone else's browser, the markup is

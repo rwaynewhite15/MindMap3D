@@ -49,7 +49,9 @@ function normVisibility(v) {
 const MAX_DESK_ITEMS = 40;      // open items on the board, both states together
 const MAX_DESK_DONE = 100;      // completed items, which stay until they are deleted
 const MAX_DESK_REF = 40;        // reference entries
-const MAX_DESK_NOTES = 20000;   // characters of working-notes markup
+const MAX_DESK_NOTES = 20000;   // characters of markup in one note
+const MAX_DESK_NOTE_COUNT = 20; // separate notes a board can hold
+const MAX_DESK_NOTE_TITLE = 60;
 // How many items may be assigned to the account holder at once. The UI
 // enforces this to keep the list of active work honest; it is not a storage
 // limit, and nothing here ever deletes an item to satisfy it.
@@ -154,7 +156,12 @@ function noteHtmlToText(html) {
 }
 
 function makeDesk() {
-  return { ref: [], items: [], notes: '', visibility: 'private', code: '', updatedAt: 0 };
+  // one note from the start, so a new board has somewhere to write without
+  // needing sanitizeDesk to fill it in first
+  return {
+    ref: [], items: [], notes: [{ id: newId(), title: 'Notes', html: '' }],
+    visibility: 'private', code: '', updatedAt: 0,
+  };
 }
 
 // Always returns a valid desk — used both to normalize what we read out of
@@ -209,12 +216,29 @@ function sanitizeDesk(input) {
     ref.push({ text: line, mapRef: cleanMapRef(entry.mapRef) });
     if (ref.length >= MAX_DESK_REF) break;
   }
+  // Working notes are a list of separately titled notes. Two earlier shapes fold
+  // into it: a single markup string (one notes area), and before that `scratch`,
+  // a plain-text textarea. Both convert on the first read, once.
+  const rawNotes = Array.isArray(d.notes) ? d.notes
+    : typeof d.notes === 'string' ? [{ title: '', html: d.notes }]
+      : d.scratch ? [{ title: '', html: plainToNoteHtml(d.scratch) }] : [];
+  const notes = [];
+  for (const raw of rawNotes) {
+    if (!raw || typeof raw !== 'object') continue;
+    notes.push({
+      id: text(raw.id, 24) || newId(),
+      title: text(raw.title, MAX_DESK_NOTE_TITLE) || 'Notes',
+      html: sanitizeNoteHtml(raw.html),
+    });
+    if (notes.length >= MAX_DESK_NOTE_COUNT) break;
+  }
+  // A board always keeps one note, so there is somewhere to write straight away.
+  if (!notes.length) notes.push({ id: newId(), title: 'Notes', html: '' });
+
   return {
     ref,
     items,
-    // `scratch` is the plain-text notes field this replaced; a desk that still
-    // has one is converted on the first read and keeps its notes.
-    notes: sanitizeNoteHtml(d.notes == null && d.scratch ? plainToNoteHtml(d.scratch) : d.notes),
+    notes,
     visibility: normDeskVisibility(d.visibility),
     // Shape-checked only. The share code is minted by the server and the write
     // route keeps the stored one, so a client can never choose its own.
@@ -1725,7 +1749,7 @@ async function handleApi(req, res, pathname) {
           const link = linkFor(r.mapRef);
           return { text: r.text, mapRef: link ? link.id : '', mapName: link ? link.name : '' };
         }),
-        notes: d.notes,
+        notes: d.notes.filter(n => n.html),
       },
       staleDays: DESK_STALE_DAYS,
       cap: DESK_ASSIGNED_CAP,
@@ -1896,8 +1920,11 @@ async function handleApi(req, res, pathname) {
           linkedMap: linkedMapOut(i.mapRef),
           lastUpdatedAt: new Date(i.moved).toISOString(),
         })),
-        workingNotes: noteHtmlToText(user.desk.notes),
-        workingNotesHtml: user.desk.notes,
+        workingNotes: user.desk.notes.map(n => ({
+          title: n.title,
+          text: noteHtmlToText(n.html),
+          html: n.html,
+        })),
       },
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
@@ -2003,6 +2030,7 @@ async function handleApi(req, res, pathname) {
       maxDone: MAX_DESK_DONE,
       maxRef: MAX_DESK_REF,
       maxNotes: MAX_DESK_NOTES,
+      maxNoteCount: MAX_DESK_NOTE_COUNT,
       staleDays: DESK_STALE_DAYS,
     });
   }

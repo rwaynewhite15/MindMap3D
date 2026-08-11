@@ -7,3 +7,7 @@ data/
 # dependencies & local secrets
 node_modules/
 .env
+
+# screenshots a browser test dropped in the working directory. The ones the
+# README uses live in public/screenshots/ and are committed.
+/*.png

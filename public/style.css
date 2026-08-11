@@ -1686,6 +1686,31 @@ button.primary {
 .dk-notes .dk-al-center { text-align: center; }
 .dk-notes .dk-al-right { text-align: right; }
 
+/* note tabs: one per note, the open one raised out of the strip */
+.dk-tabs {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 3px;
+  margin-bottom: 8px;
+}
+.dk-tab, .dk-tab-add {
+  font-family: var(--dk-label); font-weight: 600; font-size: 11.5px; letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--dk-board-line); background: #E7E9E3; color: var(--dk-ink-2);
+  padding: 4px 10px 3px; max-width: 220px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.dk-tab { overflow: hidden; }
+.dk-tab:not(.dk-tab--on) { cursor: pointer; white-space: nowrap; text-overflow: ellipsis; display: block; }
+.dk-tab:not(.dk-tab--on):hover { border-color: var(--dk-ink-2); color: var(--dk-ink); background: #fff; }
+.dk-tab--on { background: var(--dk-ink); border-color: var(--dk-ink); color: #fff; }
+.dk-tab__name { outline-offset: 3px; overflow-wrap: anywhere; }
+.dk-tab__x {
+  border: 0; background: none; color: #fff; opacity: 0.55;
+  font-size: 14px; line-height: 1; padding: 0 1px; font-family: var(--dk-mono); flex: none;
+}
+.dk-tab__x:hover { opacity: 1; color: var(--dk-red); }
+.dk-tab-add { border-style: dashed; background: none; }
+.dk-tab-add:hover { border-color: var(--dk-blue); color: var(--dk-blue); }
+
 /* formatting toolbar */
 .dk-notes-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
