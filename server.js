@@ -48,7 +48,7 @@ function normVisibility(v) {
 ---------------------------------------------------------------- */
 const MAX_DESK_ITEMS = 40;      // open items on the board, both states together
 const MAX_DESK_REF = 40;        // reference entries
-const MAX_DESK_SCRATCH = 8000;  // characters in the working-notes area
+const MAX_DESK_NOTES = 20000;   // characters of working-notes markup
 // How many items may be assigned to the account holder at once. The UI
 // enforces this to keep the list of active work honest; it is not a storage
 // limit, and nothing here ever deletes an item to satisfy it.
@@ -77,8 +77,83 @@ function newDeskCode() {
   return out;
 }
 
+/* ---- working notes: a small amount of formatting, stored as HTML ----
+   The notes area accepts bold, italic, three text sizes, bullet and numbered
+   lists, and alignment. Because a shared desk shows its notes to other people,
+   what is stored has to be safe to drop into someone else's page, so it is
+   rebuilt here rather than filtered: every tag we keep is emitted fresh from
+   the allowlist below with only a class attribute drawn from a second
+   allowlist, and anything else is dropped. Nothing the client sends is ever
+   echoed into markup — the worst a hostile payload can do is come back as
+   visible text. */
+const DESK_NOTE_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 'br', 'div', 'p', 'span', 'ul', 'ol', 'li']);
+const DESK_NOTE_VOID = new Set(['br']);
+const DESK_NOTE_CLASSES = new Set([
+  'dk-t-sm', 'dk-t-md', 'dk-t-lg',            // text size
+  'dk-al-left', 'dk-al-center', 'dk-al-right', // alignment
+]);
+
+function sanitizeNoteHtml(input) {
+  const src = String(input == null ? '' : input).slice(0, MAX_DESK_NOTES);
+  const open = []; // tags we have emitted and still owe a closing tag
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const lt = src.indexOf('<', i);
+    if (lt === -1) { out += src.slice(i); break; }
+    // Text is passed through as-is: it is already HTML text, so escaping it
+    // again would turn every saved "&amp;" into "&amp;amp;" on the next round
+    // trip. Entities in text position cannot create an element, and a "<" only
+    // reaches here as the escaped form below.
+    out += src.slice(i, lt);
+    const gt = src.indexOf('>', lt);
+    const raw = gt === -1 ? '' : src.slice(lt + 1, gt);
+    const named = raw.match(/^(\/?)([A-Za-z][A-Za-z0-9]*)/);
+    if (gt === -1 || !named) { out += '&lt;'; i = lt + 1; continue; } // a bare "<" in prose
+    i = gt + 1;
+    const tag = named[2].toLowerCase();
+    if (!DESK_NOTE_TAGS.has(tag)) continue; // unknown tag dropped; its text stays
+    if (named[1]) { // closing tag — close through to it so nesting stays balanced
+      const at = open.lastIndexOf(tag);
+      if (at === -1) continue;
+      while (open.length > at) out += '</' + open.pop() + '>';
+      continue;
+    }
+    if (DESK_NOTE_VOID.has(tag)) { out += '<' + tag + '>'; continue; }
+    const cls = raw.match(/\sclass\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i);
+    const keep = cls
+      ? cls[1].replace(/^['"]|['"]$/g, '').split(/\s+/).filter(c => DESK_NOTE_CLASSES.has(c))
+      : [];
+    out += '<' + tag + (keep.length ? ' class="' + keep.join(' ') + '"' : '') + '>';
+    open.push(tag);
+    if (open.length > 60) break; // absurd nesting: stop and let the unwind close it
+  }
+  while (open.length) out += '</' + open.pop() + '>';
+  return out;
+}
+
+// The notes area used to be a plain textarea. Desks written then hold their
+// text in `scratch`; this converts one to markup, once, on first read.
+function plainToNoteHtml(text) {
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  return String(text || '').split(/\r?\n/).map(line => '<div>' + (esc(line) || '<br>') + '</div>').join('');
+}
+
+// Notes as readable text, for the data export.
+function noteHtmlToText(html) {
+  return String(html || '')
+    .replace(/<(br|\/div|\/p|\/li|\/ul|\/ol)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&') // last, so "&amp;lt;" doesn't become "<"
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function makeDesk() {
-  return { ref: [], items: [], scratch: '', closed: 0, visibility: 'private', code: '', updatedAt: 0 };
+  return { ref: [], items: [], notes: '', closed: 0, visibility: 'private', code: '', updatedAt: 0 };
 }
 
 // Always returns a valid desk — used both to normalize what we read out of
@@ -128,8 +203,9 @@ function sanitizeDesk(input) {
   return {
     ref,
     items,
-    // not trimmed: leading blank lines and indentation are the user's own
-    scratch: String(d.scratch == null ? '' : d.scratch).slice(0, MAX_DESK_SCRATCH),
+    // `scratch` is the plain-text notes field this replaced; a desk that still
+    // has one is converted on the first read and keeps its notes.
+    notes: sanitizeNoteHtml(d.notes == null && d.scratch ? plainToNoteHtml(d.scratch) : d.notes),
     closed: Number.isFinite(closed) ? Math.max(0, Math.min(1e6, closed)) : 0,
     visibility: normDeskVisibility(d.visibility),
     // Shape-checked only. The share code is minted by the server and the write
@@ -1603,7 +1679,8 @@ async function handleApi(req, res, pathname) {
 
   // Read someone's Standing Desk. Open to signed-out visitors too: a public desk
   // is public, and for a code-shared one the code in ?code= is the credential.
-  // Working notes are never included — that area is the owner's alone.
+  // Sharing a desk shares the whole board, working notes included; the notes
+  // went through sanitizeNoteHtml on the way in, so they are safe to render.
   const deskViewMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})\/desk$/);
   if (req.method === 'GET' && deskViewMatch) {
     const owner = await store.getUserByUsername(deskViewMatch[1]);
@@ -1640,6 +1717,7 @@ async function handleApi(req, res, pathname) {
           const link = linkFor(r.mapRef);
           return { text: r.text, mapRef: link ? link.id : '', mapName: link ? link.name : '' };
         }),
+        notes: d.notes,
         closed: d.closed,
       },
       staleDays: DESK_STALE_DAYS,
@@ -1810,7 +1888,8 @@ async function handleApi(req, res, pathname) {
           linkedMap: linkedMapOut(i.mapRef),
           lastUpdatedAt: new Date(i.moved).toISOString(),
         })),
-        workingNotes: user.desk.scratch,
+        workingNotes: noteHtmlToText(user.desk.notes),
+        workingNotesHtml: user.desk.notes,
         completedAllTime: user.desk.closed,
       },
       maps: user.maps.map(m => ({
@@ -1915,6 +1994,7 @@ async function handleApi(req, res, pathname) {
       cap: DESK_ASSIGNED_CAP,
       maxItems: MAX_DESK_ITEMS,
       maxRef: MAX_DESK_REF,
+      maxNotes: MAX_DESK_NOTES,
       staleDays: DESK_STALE_DAYS,
     });
   }

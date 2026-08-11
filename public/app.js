@@ -4435,12 +4435,13 @@ function initProfileViewer() {
 ================================================================ */
 const DESK_DAY = 86400000;
 
-let desk = null;            // { ref, items, scratch, closed } — null until loaded
+let desk = null;            // { ref, items, notes, closed } — null until loaded
 let deskOwner = null;       // whose desk is on screen; null means your own
                             // (set → read-only: someone else's shared board)
 let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
 let deskMaxItems = 40;      // items the board holds in total, both states
 let deskMaxRef = 40;        // reference entries the board holds
+let deskMaxNotes = 20000;   // characters of working-notes markup
 let deskStaleDays = 14;     // no activity for this long and an item is stalled
 let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
 let deskFocusForm = false;  // a form just opened and should take the caret
@@ -4509,6 +4510,7 @@ async function loadDesk() {
       deskAssignedCap = data.cap;
       deskMaxItems = data.maxItems;
       deskMaxRef = data.maxRef;
+      deskMaxNotes = data.maxNotes;
       deskStaleDays = data.staleDays;
     } catch (err) {
       if (first) {
@@ -4593,7 +4595,7 @@ async function loadSharedDesk(username, code) {
   }
   // your own share link belongs in your own editable board
   if (data.isOwner) { location.hash = '#/desk'; return; }
-  desk = { ...data.desk, scratch: '', visibility: data.visibility, code: '' };
+  desk = { ...data.desk, visibility: data.visibility, code: '' };
   deskOwner = data.owner;
   deskAssignedCap = data.cap;
   deskStaleDays = data.staleDays;
@@ -4633,9 +4635,9 @@ function fillDeskShare() {
   $('#deskShareCopy').hidden = !link;
   $('#deskShareNewCode').hidden = desk.visibility !== 'code';
   $('#deskShareNote').textContent = desk.visibility === 'code'
-    ? 'Anyone with this link can read the board. Switching to Private turns the link off; switching back turns the same link on again. Generate a new code to revoke it for good.'
+    ? 'Anyone with this link can read the whole board, working notes included. Switching to Private turns the link off; switching back turns the same link on again. Generate a new code to revoke it for good.'
     : desk.visibility === 'public'
-      ? 'This desk is readable by anyone, signed in or not, and is linked from your profile.'
+      ? 'The whole board, working notes included, is readable by anyone — signed in or not — and is linked from your profile.'
       : '';
 }
 
@@ -4762,6 +4764,214 @@ function deskEditField(id, field, val) {
   saveDesk();
 }
 
+/* ---------- working notes: a small rich-text editor ----------
+   Bold, italic, three sizes, bullets, numbering and alignment, on a
+   contenteditable driven by document.execCommand. execCommand is deprecated
+   but is the only formatting engine every browser ships, and this app has no
+   build step to bring in an editor library.
+
+   Everything execCommand emits is normalised straight afterwards into the
+   small tag-and-class vocabulary the server accepts (see sanitizeNoteHtml), so
+   what the editor holds is always what will be stored — and what a viewer of a
+   shared desk will be shown. */
+const NOTE_SIZES = [
+  { cls: 'dk-t-sm', label: 'Small' },
+  { cls: 'dk-t-md', label: 'Normal' },
+  { cls: 'dk-t-lg', label: 'Large' },
+];
+const NOTE_ALIGN = { left: 'dk-al-left', center: 'dk-al-center', right: 'dk-al-right' };
+const NOTE_CLASSES = new Set([...NOTE_SIZES.map(s => s.cls), ...Object.values(NOTE_ALIGN)]);
+
+const notesEl = () => $('#dkNotes');
+
+// Fold what execCommand produced back into our own vocabulary: <font size> and
+// text-align styles become classes, and anything else is stripped. Runs after
+// every command, so nothing outside the allowlist is ever held in the document.
+function normalizeNotes(el) {
+  for (const f of [...el.querySelectorAll('font')]) f.replaceWith(...f.childNodes);
+  for (const n of [...el.querySelectorAll('[style]')]) {
+    const align = (n.style.textAlign || '').toLowerCase();
+    n.removeAttribute('style');
+    if (NOTE_ALIGN[align]) {
+      n.classList.remove(...Object.values(NOTE_ALIGN));
+      n.classList.add(NOTE_ALIGN[align]);
+    }
+  }
+  for (const n of [...el.querySelectorAll('[class]')]) {
+    for (const c of [...n.classList]) if (!NOTE_CLASSES.has(c)) n.classList.remove(c);
+    if (!n.classList.length) n.removeAttribute('class');
+  }
+  // Alignment lands on the editor itself when there is no block to take it;
+  // give it one so the choice survives being saved.
+  const rootAlign = (el.style.textAlign || '').toLowerCase();
+  el.removeAttribute('style');
+  if (NOTE_ALIGN[rootAlign]) {
+    const block = document.createElement('div');
+    block.className = NOTE_ALIGN[rootAlign];
+    while (el.firstChild) block.appendChild(el.firstChild);
+    el.appendChild(block);
+  }
+}
+
+// Caret position as a character offset into the editor's text, so it can be put
+// back after a re-render replaces the nodes it pointed at.
+function notesCaret(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+  const range = sel.getRangeAt(0);
+  const before = range.cloneRange();
+  before.selectNodeContents(el);
+  before.setEnd(range.startContainer, range.startOffset);
+  return { at: before.toString().length, len: range.toString().length };
+}
+
+function restoreNotesCaret(el, caret) {
+  if (!caret) return;
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const point = target => {
+    let seen = 0;
+    walk.currentNode = el;
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (seen + n.length >= target) return [n, target - seen];
+      seen += n.length;
+    }
+    return [el, el.childNodes.length];
+  };
+  const range = document.createRange();
+  const [sn, so] = point(caret.at);
+  range.setStart(sn, so);
+  const [en, eo] = point(caret.at + caret.len);
+  try { range.setEnd(en, eo); } catch { range.collapse(true); }
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  el.focus();
+}
+
+function saveNotes() {
+  const el = notesEl();
+  if (!el || !desk || deskOwner) return;
+  normalizeNotes(el);
+  desk.notes = el.innerHTML;
+  if (desk.notes.length > deskMaxNotes) {
+    deskFlash(`Working notes are full (${deskMaxNotes} characters of formatting). Older text may be trimmed when it saves.`);
+  }
+  saveDesk();
+}
+
+function runNoteCommand(cmd) {
+  const el = notesEl();
+  if (!el) return;
+  el.focus();
+  document.execCommand(cmd);
+  normalizeNotes(el);
+  saveNotes();
+  refreshNoteToolbar();
+}
+
+// Size is applied over the range directly rather than through execCommand,
+// whose 'fontSize' reports success and does nothing in current engines. Every
+// size is an explicit one, so the innermost wins and Normal genuinely resets a
+// stretch of larger text.
+const NOTE_BLOCKS = new Set(['DIV', 'P', 'UL', 'OL', 'LI']);
+const NOTE_SIZE_CLASSES = NOTE_SIZES.map(s => s.cls);
+
+function applyNoteSize(cls) {
+  const el = notesEl();
+  const sel = window.getSelection();
+  if (!el || !sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.commonAncestorContainer)) return;
+  if (range.collapsed) { deskFlash('Select some text first, then choose a size.'); return; }
+
+  const frag = range.extractContents();
+  // any size already inside gives way to the one being applied
+  for (const n of frag.querySelectorAll('[class]')) n.classList.remove(...NOTE_SIZE_CLASSES);
+  const blocks = [...frag.children];
+  const allBlocks = blocks.length > 0 && blocks.length === frag.childNodes.length &&
+    blocks.every(n => NOTE_BLOCKS.has(n.tagName));
+  let first, last;
+  if (allBlocks) {
+    // whole lines selected — size the lines themselves rather than nesting a
+    // span around block elements
+    for (const b of blocks) b.classList.add(cls);
+    first = blocks[0];
+    last = blocks[blocks.length - 1];
+    range.insertNode(frag);
+  } else {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.appendChild(frag);
+    range.insertNode(span);
+    first = last = span;
+  }
+  // keep the same text selected, so a second command lands on it
+  const after = document.createRange();
+  after.setStartBefore(first);
+  after.setEndAfter(last);
+  sel.removeAllRanges();
+  sel.addRange(after);
+  el.focus();
+  normalizeNotes(el);
+  saveNotes();
+  refreshNoteToolbar();
+}
+
+// The element the selection starts in. Where a range begins *before* an
+// element — which is how a freshly applied size leaves things — the anchor node
+// is the parent, so step into the child the offset points at.
+function noteSelectionNode(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!el.contains(r.commonAncestorContainer)) return null;
+  let n = r.startContainer;
+  if (n.nodeType === 1 && n.childNodes[r.startOffset]) n = n.childNodes[r.startOffset];
+  return n.nodeType === 1 ? n : n.parentElement;
+}
+
+// Light up the buttons that describe the text under the caret.
+function refreshNoteToolbar() {
+  const el = notesEl();
+  if (!el || deskOwner) return;
+  const on = (sel, state) => {
+    const b = deskRoot.querySelector(sel);
+    if (b) b.classList.toggle('dk-fmt--on', !!state);
+  };
+  const q = c => { try { return document.queryCommandState(c); } catch { return false; } };
+  on('[data-cmd="bold"]', q('bold'));
+  on('[data-cmd="italic"]', q('italic'));
+  on('[data-cmd="underline"]', q('underline'));
+  on('[data-cmd="insertUnorderedList"]', q('insertUnorderedList'));
+  on('[data-cmd="insertOrderedList"]', q('insertOrderedList'));
+  const node = noteSelectionNode(el);
+  for (const s of NOTE_SIZES) on(`[data-size="${s.cls}"]`, node && node.closest('.' + s.cls));
+  for (const [dir, cls] of Object.entries(NOTE_ALIGN)) {
+    on(`[data-align="${dir}"]`, node && node.closest('.' + cls));
+  }
+}
+
+function noteToolbarHtml() {
+  const btn = (attr, label, title) =>
+    `<button class="dk-fmt" ${attr} title="${title}" aria-label="${title}">${label}</button>`;
+  return `<div class="dk-notes-bar">
+    ${btn('data-cmd="bold"', '<b>B</b>', 'Bold')}
+    ${btn('data-cmd="italic"', '<i>I</i>', 'Italic')}
+    ${btn('data-cmd="underline"', '<u>U</u>', 'Underline')}
+    <span class="dk-fmt-sep"></span>
+    ${NOTE_SIZES.map(s => btn(`data-size="${s.cls}"`, s.label, s.label + ' text')).join('')}
+    <span class="dk-fmt-sep"></span>
+    ${btn('data-cmd="insertUnorderedList"', '&bull; List', 'Bulleted list')}
+    ${btn('data-cmd="insertOrderedList"', '1. List', 'Numbered list')}
+    <span class="dk-fmt-sep"></span>
+    ${btn('data-align="left"', 'Left', 'Align left')}
+    ${btn('data-align="center"', 'Center', 'Align center')}
+    ${btn('data-align="right"', 'Right', 'Align right')}
+    <span class="dk-fmt-sep"></span>
+    ${btn('data-cmd="removeFormat"', 'Clear', 'Remove formatting')}
+  </div>`;
+}
+
 /* ---------- render ---------- */
 const NEXT_PLACEHOLDER = 'Add the next step';
 
@@ -4849,9 +5059,8 @@ function renderDesk() {
   // The working-notes area is the one field people type into continuously, and a
   // re-render can land mid-sentence (a flash timer, a save retry). Put the
   // caret back where it was.
-  const active = document.activeElement;
-  const scratchFocused = !!active && active.id === 'dkScratch';
-  const caret = scratchFocused ? [active.selectionStart, active.selectionEnd] : null;
+  const editor = notesEl();
+  const caret = editor && editor.contains(document.activeElement) ? notesCaret(editor) : null;
 
   const mine = deskIn('mine');
   const waiting = deskIn('waiting');
@@ -4923,10 +5132,12 @@ function renderDesk() {
       </div>
     </section>
 
-    ${ro ? '' : `<section class="dk-panel dk-panel--scratch">
-      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">never shared, even when this desk is</span></div>
+    ${ro && !desk.notes ? '' : `<section class="dk-panel dk-panel--notes">
+      <div class="dk-panel__head"><span class="dk-panel__name">Working notes</span><span class="dk-panel__note">${ro ? 'read-only'
+        : desk.visibility === 'private' ? 'private to you' : 'shared with anyone who can see this desk'}</span></div>
       <div class="dk-panel__body">
-        <textarea class="dk-scratch" id="dkScratch" maxlength="8000" placeholder="Space to think something through.">${escapeHtml(desk.scratch || '')}</textarea>
+        ${ro ? '' : noteToolbarHtml()}
+        <div class="dk-notes" id="dkNotes"${ro ? '' : ' contenteditable data-placeholder="Space to think something through."'}>${desk.notes || ''}</div>
       </div>
     </section>`}
   </div>
@@ -4938,9 +5149,8 @@ function renderDesk() {
 
   paintDeskFlash();
   if (caret) {
-    const box = $('#dkScratch');
-    box.focus();
-    try { box.setSelectionRange(caret[0], caret[1]); } catch { /* value changed under us */ }
+    restoreNotesCaret(notesEl(), caret);
+    refreshNoteToolbar();
   } else if (deskFocusForm) {
     // only on the render that opened the form — never steal the caret back
     // from a field the user has already moved on to
@@ -5049,7 +5259,39 @@ deskRoot.addEventListener('focus', e => {
 }, true);
 
 deskRoot.addEventListener('input', e => {
-  if (e.target.id === 'dkScratch' && desk) { desk.scratch = e.target.value; saveDesk(); }
+  if (e.target.id === 'dkNotes' && desk && !deskOwner) saveNotes();
+});
+
+/* ---------- working-notes editor wiring ---------- */
+// A toolbar button must not take focus, or the selection it is meant to act on
+// is gone before the click lands.
+deskRoot.addEventListener('mousedown', e => {
+  if (e.target.closest('.dk-fmt')) e.preventDefault();
+});
+
+deskRoot.addEventListener('click', e => {
+  const b = e.target.closest('.dk-fmt');
+  if (!b || !desk || deskOwner) return;
+  if (b.dataset.cmd) runNoteCommand(b.dataset.cmd);
+  else if (b.dataset.size) applyNoteSize(b.dataset.size);
+  else if (b.dataset.align) runNoteCommand('justify' + b.dataset.align[0].toUpperCase() + b.dataset.align.slice(1));
+});
+
+// Paste arrives as plain text. Formatting is applied from the toolbar, so the
+// editor never has to hold markup from somewhere else — which also keeps a
+// pasted script or image handler from ever reaching the document.
+deskRoot.addEventListener('paste', e => {
+  if (e.target.id !== 'dkNotes' || deskOwner) return;
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+  document.execCommand('insertText', false, text);
+});
+
+// Keep the toolbar showing what the caret is actually sitting in.
+document.addEventListener('selectionchange', () => {
+  const el = notesEl();
+  if (!el || !el.contains(document.activeElement)) return;
+  refreshNoteToolbar();
 });
 
 deskRoot.addEventListener('keydown', e => {
