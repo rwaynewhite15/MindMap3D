@@ -1521,7 +1521,7 @@ button.primary {
   border: 1px solid var(--dk-edge);
   display: flex; flex-direction: column; min-height: 190px;
 }
-.dk-panel--scratch { grid-column: 1 / -1; margin-top: 12px; }
+.dk-panel--notes { grid-column: 1 / -1; margin-top: 12px; }
 .dk-panel__head {
   display: flex; align-items: baseline; gap: 8px;
   padding: 9px 12px 8px;
@@ -1626,7 +1626,7 @@ button.primary {
   font-family: var(--dk-body); font-size: 16px; padding: 5px 7px;
   border: 1px solid var(--dk-board-line); background: #fff; color: var(--dk-ink); width: 100%;
 }
-.dk-add input:focus, .dk-select:focus, .dk-scratch:focus { outline: 2px solid var(--dk-blue); outline-offset: 1px; }
+.dk-add input:focus, .dk-select:focus { outline: 2px solid var(--dk-blue); outline-offset: 1px; }
 .dk-add__row { display: flex; gap: 6px; }
 .dk-add__row .dk-btn { flex: 1; text-align: center; }
 .dk-add__row .dk-btn--go { background: var(--dk-ink); color: #fff; border-color: var(--dk-ink); }
@@ -1638,12 +1638,50 @@ button.primary {
 .dk-opener:hover { border-color: var(--dk-blue); color: var(--dk-blue); }
 .dk-opener[disabled] { opacity: 0.45; cursor: not-allowed; }
 
-.dk-scratch {
-  width: 100%; flex: 1; min-height: 110px; border: 0; resize: vertical;
-  font-family: var(--dk-mono); font-size: 12.5px; line-height: 1.65; color: var(--dk-ink);
+/* ---------------- working notes ----------------
+   A contenteditable rather than a textarea, so the notes can carry a little
+   formatting. The ruled background is kept, on a 21px rhythm that the base
+   line-height matches. */
+.dk-notes {
+  width: 100%; flex: 1; min-height: 110px;
+  font-family: var(--dk-mono); font-size: 12.5px; line-height: 21px; color: var(--dk-ink);
   background: repeating-linear-gradient(to bottom, transparent 0 20px, var(--dk-board-line) 20px 21px);
   padding: 0;
+  overflow-wrap: break-word;
 }
+.dk-notes:focus { outline: 2px solid var(--dk-blue); outline-offset: 2px; }
+.dk-notes:empty::before {
+  content: attr(data-placeholder);
+  color: var(--dk-ink-3);
+  pointer-events: none;
+}
+.dk-notes ul, .dk-notes ol { padding-left: 22px; }
+.dk-notes li { line-height: 21px; }
+/* text sizes: each is explicit, so the innermost one always wins and Normal
+   genuinely resets a run of larger text */
+.dk-notes .dk-t-sm { font-size: 10.5px; }
+.dk-notes .dk-t-md { font-size: 12.5px; }
+.dk-notes .dk-t-lg { font-size: 16px; }
+.dk-notes .dk-al-left { text-align: left; }
+.dk-notes .dk-al-center { text-align: center; }
+.dk-notes .dk-al-right { text-align: right; }
+
+/* formatting toolbar */
+.dk-notes-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+  padding-bottom: 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--dk-board-line);
+}
+.dk-fmt {
+  font-family: var(--dk-label); font-weight: 600; font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--dk-board-line); background: #fff; color: var(--dk-ink-2);
+  padding: 3px 8px; min-width: 28px; line-height: 1.5;
+}
+.dk-fmt:hover { border-color: var(--dk-ink-2); color: var(--dk-ink); }
+.dk-fmt--on { background: var(--dk-ink); border-color: var(--dk-ink); color: #fff; }
+.dk-fmt b, .dk-fmt i, .dk-fmt u { font-family: var(--dk-body); font-size: 12px; }
+.dk-fmt-sep { width: 1px; align-self: stretch; background: var(--dk-board-line); margin: 0 4px; }
 
 .dk-empty { font-family: var(--dk-mono); font-size: 11.5px; color: var(--dk-ink-3); line-height: 1.6; padding: 4px 0; }
 .dk-loading { font-family: var(--dk-mono); font-size: 12px; color: var(--dk-ink-3); padding: 30px 2px; }
@@ -1654,9 +1692,17 @@ button.primary {
 .dk-foot .dk-btn { background: var(--dk-steel-2); border-color: var(--dk-edge); color: var(--dk-ink-3); }
 .dk-foot .dk-btn:hover { color: var(--dk-board); border-color: var(--dk-ink-3); }
 
+/* phones: the formatting toolbar is the widest row on the board, so tighten
+   the buttons and drop the group dividers rather than let it stack four deep */
+@media (max-width: 560px) {
+  .dk-notes-bar { gap: 2px; }
+  .dk-fmt { padding: 3px 6px; font-size: 10.5px; letter-spacing: 0.04em; min-width: 24px; }
+  .dk-fmt-sep { display: none; }
+}
+
 @media (max-width: 900px) {
   .dk-board { grid-template-columns: 1fr; }
-  .dk-panel--scratch { margin-top: 0; }
+  .dk-panel--notes { margin-top: 0; }
   .dk-rig { gap: 10px; }
   .dk-rig__title { font-size: 24px; }
   .dk-tally { margin-left: 0; width: 100%; }

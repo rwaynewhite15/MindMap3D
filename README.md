@@ -28,8 +28,9 @@ and turns on **AI generation** simply by setting environment variables.
   the link accurate.
 - **Desks can be shared** — a desk is private until you say otherwise. Share it with **anyone
   holding its link** (a secret code you can revoke at any time), or with **anyone at all**, in
-  which case it is linked from your profile. Viewers get a read-only board, and your **working
-  notes are never shared** under any setting.
+  which case it is linked from your profile. Viewers get a read-only copy of the whole board.
+- **Working notes take formatting** — bold, italic, underline, three text sizes, bulleted and
+  numbered lists, and left/centre/right alignment, from a toolbar above the notes area.
 - **Project or reference is a dropdown** — once a project name is on the board, later items
   pick it from a list instead of retyping it, with a **＋ New** entry for a name that isn't
   there yet.
@@ -175,8 +176,11 @@ maps are for developing ideas, the desk is for tracking open work.
   turns the dropdown back into a text box for a name that isn't there yet.
 - **Reference** — short entries you refer to often (links, codes, contacts, targets, a map
   you keep reopening), edited in place and kept separate from the item list.
-- **Working notes** — a ruled area at the foot of the board for thinking something through.
-  Saved with everything else, but nothing in it is tracked or counted.
+- **Working notes** — a ruled area at the foot of the board for thinking something through,
+  with a formatting toolbar: **bold**, *italic*, underline, **Small / Normal / Large** text,
+  **bulleted and numbered lists**, and **left / centre / right alignment**. Nothing in it is
+  tracked or counted. Pasted text arrives as plain text, so formatting only ever comes from
+  the toolbar.
 - **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,
   then what you are waiting on and from whom, each with its age.
 
@@ -189,9 +193,15 @@ maps are for developing ideas, the desk is for tracking open work.
   link working, so a link you have handed out doesn't break by accident.
 - **Anyone** — readable by everyone and linked from your profile, no code needed.
 
-A viewer sees the items and reference entries, read-only, and can copy the summary. Your
-**working notes are never shared**, under any setting. Links to maps a viewer can't open are
-left out of what they're sent, rather than shown as something they can't reach.
+A viewer sees the whole board — items, reference entries and working notes — read-only, and
+can copy the summary. Links to maps a viewer can't open are left out of what they're sent,
+rather than shown as something they can't reach.
+
+Because a shared board's notes are rendered in someone else's browser, the markup is
+rebuilt on the server rather than filtered: every tag kept is re-emitted from a short
+allowlist carrying only a `class` drawn from a second allowlist, and everything else is
+dropped. Nothing a client sends is echoed into markup, so the worst a hostile payload can
+do is come back as visible text.
 
 Everything autosaves as you type, and the board is included in **⤓ Export my data**.
 Deleting your account deletes it along with everything else.
