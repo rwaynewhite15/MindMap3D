@@ -38,7 +38,7 @@ function normVisibility(v) {
 }
 
 /* ----------------------------------------------------------------
-   The Standing Desk — one work board per account, always private.
+   The Standing Desk — one work board per account.
    Where a mind map holds ideas, the desk holds open work: items split
    into those assigned to the account holder and those they are waiting
    on from someone else, each carrying the date it was last updated,
@@ -55,8 +55,30 @@ const MAX_DESK_SCRATCH = 8000;  // characters in the working-notes area
 const DESK_ASSIGNED_CAP = 5;
 const DESK_STALE_DAYS = 14;     // no activity for this long and an item is stalled
 
+// Who may read a desk. Separate from map visibility (which is per-map and has a
+// friends tier) because a desk is one board per account and is shared by link:
+//   private — the owner alone. The default.
+//   code    — anyone holding the board's share code.
+//   public  — anyone, and linked from the owner's profile.
+const DESK_VISIBILITIES = ['private', 'code', 'public'];
+function normDeskVisibility(v) {
+  return DESK_VISIBILITIES.includes(v) ? v : 'private';
+}
+
+// Share codes are read aloud and typed, so they leave out the characters that
+// get confused for one another (0/O, 1/I/L). 10 chars of this alphabet is ~48
+// bits — far past guessing, and the route rate-limits wrong codes anyway.
+const DESK_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const DESK_CODE_LENGTH = 10;
+function newDeskCode() {
+  const bytes = crypto.randomBytes(DESK_CODE_LENGTH);
+  let out = '';
+  for (const b of bytes) out += DESK_CODE_ALPHABET[b % DESK_CODE_ALPHABET.length];
+  return out;
+}
+
 function makeDesk() {
-  return { ref: [], items: [], scratch: '', closed: 0, updatedAt: 0 };
+  return { ref: [], items: [], scratch: '', closed: 0, visibility: 'private', code: '', updatedAt: 0 };
 }
 
 // Always returns a valid desk — used both to normalize what we read out of
@@ -109,8 +131,25 @@ function sanitizeDesk(input) {
     // not trimmed: leading blank lines and indentation are the user's own
     scratch: String(d.scratch == null ? '' : d.scratch).slice(0, MAX_DESK_SCRATCH),
     closed: Number.isFinite(closed) ? Math.max(0, Math.min(1e6, closed)) : 0,
+    visibility: normDeskVisibility(d.visibility),
+    // Shape-checked only. The share code is minted by the server and the write
+    // route keeps the stored one, so a client can never choose its own.
+    code: /^[A-Z2-9]{4,40}$/.test(String(d.code || '')) ? String(d.code) : '',
     updatedAt: Number.isFinite(Number(d.updatedAt)) ? Number(d.updatedAt) : 0,
   };
+}
+
+// A desk is readable by its owner, by anyone when it is public, and by a holder
+// of the right code when it is code-shared. The code is a secret, so it is
+// compared in constant time and only against an equal-length candidate.
+function canViewDesk(owner, viewer, code) {
+  if (viewer && viewer.id === owner.id) return true;
+  const desk = owner.desk || makeDesk();
+  if (desk.visibility === 'public') return true;
+  if (desk.visibility !== 'code' || !desk.code) return false;
+  const given = String(code || '');
+  if (given.length !== desk.code.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(desk.code));
 }
 
 /* ================================================================
@@ -589,6 +628,9 @@ function publicUser(u, viewer) {
     // does the signed-in viewer follow this user?
     followedByMe: !!viewer && (viewer.following || []).includes(u.id),
     relation: viewer ? relationTo(viewer, u) : 'none',
+    // a desk set to "anyone" is linked from the profile; a code-shared one is
+    // reachable only by its link, so it is not advertised here
+    deskPublic: !!u.desk && u.desk.visibility === 'public',
   };
 }
 
@@ -1559,6 +1601,52 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  // Read someone's Standing Desk. Open to signed-out visitors too: a public desk
+  // is public, and for a code-shared one the code in ?code= is the credential.
+  // Working notes are never included — that area is the owner's alone.
+  const deskViewMatch = pathname.match(/^\/api\/users\/([a-z0-9_]{3,20})\/desk$/);
+  if (req.method === 'GET' && deskViewMatch) {
+    const owner = await store.getUserByUsername(deskViewMatch[1]);
+    const code = String(new URL(req.url, 'http://x').searchParams.get('code') || '');
+    // Wrong codes are the only way to probe for a share link, so cap the rate.
+    if (tooMany('deskcode:' + clientIp(req), 60, 15 * 60 * 1000)) {
+      return sendJSON(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+    }
+    // A desk you may not read is indistinguishable from one that isn't there.
+    if (!owner || !canViewDesk(owner, user, code)) return sendJSON(res, 404, { error: 'No such desk.' });
+    const isOwner = !!user && user.id === owner.id;
+    const d = owner.desk;
+    // Resolve each link against the owner's own maps, and only pass on the ones
+    // this viewer is allowed to see. A map someone else shared with the owner
+    // isn't ours to name here, so its link is dropped.
+    const linkFor = mapRef => {
+      const m = mapRef && owner.maps.find(x => x.id === mapRef);
+      return m && canViewMapObj(m, owner, user) ? { id: m.id, name: m.name } : null;
+    };
+    return sendJSON(res, 200, {
+      owner: ownerRef(owner, user),
+      isOwner,
+      visibility: d.visibility,
+      desk: {
+        items: d.items.map(i => {
+          const link = linkFor(i.mapRef);
+          return {
+            id: i.id, title: i.title, tag: i.tag, next: i.next, who: i.who,
+            state: i.state, moved: i.moved,
+            mapRef: link ? link.id : '', mapName: link ? link.name : '',
+          };
+        }),
+        ref: d.ref.map(r => {
+          const link = linkFor(r.mapRef);
+          return { text: r.text, mapRef: link ? link.id : '', mapName: link ? link.name : '' };
+        }),
+        closed: d.closed,
+      },
+      staleDays: DESK_STALE_DAYS,
+      cap: DESK_ASSIGNED_CAP,
+    });
+  }
+
   // Read comments on a viewable map — allowed for anyone who can see the map,
   // signed-out guests included. Posting and deleting still require sign-in and
   // are handled in the authenticated comment routes below.
@@ -1706,6 +1794,9 @@ async function handleApi(req, res, pathname) {
         followers: unames(user.followers),
       },
       desk: {
+        sharing: user.desk.visibility === 'public' ? 'Visible to anyone'
+          : user.desk.visibility === 'code' ? 'Shared with anyone holding the code'
+            : 'Private to me',
         reference: user.desk.ref.map(r => ({
           text: r.text,
           linkedMap: linkedMapOut(r.mapRef),
@@ -1837,10 +1928,30 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 400, { error: 'Invalid desk.' });
     }
     const desk = sanitizeDesk(body.desk);
+    // The share code is minted here and never taken from the client, so it
+    // can't be set to something guessable. It survives a trip through Private
+    // so that turning sharing back on doesn't silently break a link that is
+    // already out there; "Generate a new code" is the way to revoke one.
+    desk.code = (user.desk && user.desk.code) || '';
+    if (desk.visibility === 'code' && !desk.code) desk.code = newDeskCode();
     desk.updatedAt = Date.now();
     user.desk = desk;
     await store.saveUser(user);
-    return sendJSON(res, 200, { ok: true, updatedAt: desk.updatedAt });
+    return sendJSON(res, 200, {
+      ok: true,
+      updatedAt: desk.updatedAt,
+      visibility: desk.visibility,
+      code: desk.code,
+    });
+  }
+
+  // Revoke the current share link by minting a new code. Anyone holding the old
+  // one loses access the moment this returns.
+  if (route === 'POST /api/desk/code') {
+    user.desk.code = newDeskCode();
+    user.desk.updatedAt = Date.now();
+    await store.saveUser(user);
+    return sendJSON(res, 200, { code: user.desk.code });
   }
 
   // --- maps ---
