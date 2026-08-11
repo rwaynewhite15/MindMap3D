@@ -1638,6 +1638,26 @@ button.primary {
 .dk-opener:hover { border-color: var(--dk-blue); color: var(--dk-blue); }
 .dk-opener[disabled] { opacity: 0.45; cursor: not-allowed; }
 
+/* ---------------- completed items ----------------
+   Finished work stays on the board until it is deleted, but as a settled record
+   rather than live work: compact rows under the working columns, newest first. */
+.dk-panel--done { grid-column: 1 / -1; margin-top: 12px; }
+.dk-done { list-style: none; display: flex; flex-direction: column; }
+.dk-done__row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 0 5px 9px;
+  border-bottom: 1px dotted var(--dk-board-line);
+  border-left: 3px solid var(--dk-green);
+}
+.dk-done__row:last-child { border-bottom: 0; }
+.dk-done__txt { flex: 1; min-width: 0; font-size: 13.5px; color: var(--dk-ink-2); text-decoration: line-through; }
+.dk-done__tag {
+  font-family: var(--dk-mono); font-size: 10.5px; text-transform: uppercase;
+  color: var(--dk-ink-3); text-decoration: none; margin-left: 4px;
+}
+.dk-done__when { font-family: var(--dk-mono); font-size: 10.5px; color: var(--dk-ink-3); white-space: nowrap; }
+.dk-done .dk-btn { flex: none; }
+
 /* ---------------- working notes ----------------
    A contenteditable rather than a textarea, so the notes can carry a little
    formatting. The ruled background is kept, on a 21px rhythm that the base
@@ -1702,7 +1722,7 @@ button.primary {
 
 @media (max-width: 900px) {
   .dk-board { grid-template-columns: 1fr; }
-  .dk-panel--notes { margin-top: 0; }
+  .dk-panel--notes, .dk-panel--done { margin-top: 0; }
   .dk-rig { gap: 10px; }
   .dk-rig__title { font-size: 24px; }
   .dk-tally { margin-left: 0; width: 100%; }
