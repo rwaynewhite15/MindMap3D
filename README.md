@@ -20,8 +20,8 @@ and turns on **AI generation** simply by setting environment variables.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
-  made three weeks ago reads as exactly that. Five assigned items at a time, plus reference
-  entries and a working-notes area. One board per person, private by default.
+  made three weeks ago reads as exactly that. Plus reference entries and a working-notes
+  area. One board per person, private by default.
 - **Desk items and reference entries can link to a mind map** — pick one of your maps (or a
   map shared with you) when you add an item, or attach one later with **Link a map**. The
   link opens that map in the editor, and shows its current name, so renaming the map keeps
@@ -164,8 +164,6 @@ ideas, the desk is for tracking open work.
   last-updated date**, since a reassignment is the point from which the next wait is
   measured. **Mark updated** resets that date without moving the item — for when you
   followed up and the position hasn't changed.
-- **A limit of five assigned items.** The board declines a sixth and explains why: complete
-  one, or move it to waiting. Nothing is ever deleted to make room.
 - **Age is tracked, not guessed.** Each item shows the days since it was last updated. At a
   week it turns amber; after **14 days** it is flagged as stalled, with a red edge and a
   band reading *follow up or remove*. The **Stalled** figure in the header counts them, so
@@ -176,7 +174,7 @@ ideas, the desk is for tracking open work.
   into a **Completed** list below them, newest first, where it stays until you **Delete** it.
   Nothing is counted or tallied — the finished items themselves are the record. **Reopen**
   puts one back where it came from with its clock restarted, so a mis-click costs nothing.
-  A completed item is never counted toward the limit of five and never flagged as stalled.
+  A completed item is never counted in the header figures and never flagged as stalled.
 - **A link to a mind map.** Items and reference entries can each point at one map — your own,
   or one shared with you to edit — chosen when you add them or attached afterwards with
   **Link a map**. Following the link opens that map in the editor. Only the map's id is

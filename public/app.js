@@ -4438,7 +4438,6 @@ const DESK_DAY = 86400000;
 let desk = null;            // { ref, items, notes, closed } — null until loaded
 let deskOwner = null;       // whose desk is on screen; null means your own
                             // (set → read-only: someone else's shared board)
-let deskAssignedCap = 5;    // items that may be assigned to you (the server sets it)
 let deskMaxItems = 40;      // open items the board holds, both states together
 let deskMaxDone = 100;      // completed items, which stay until they are deleted
 let deskMaxRef = 40;        // reference entries the board holds
@@ -4518,7 +4517,6 @@ async function loadDesk() {
     try {
       const data = await api('/api/desk');
       desk = data.desk;
-      deskAssignedCap = data.cap;
       deskMaxItems = data.maxItems;
       deskMaxDone = data.maxDone;
       deskMaxRef = data.maxRef;
@@ -4612,7 +4610,6 @@ async function loadSharedDesk(username, code) {
   desk = { ...data.desk, visibility: data.visibility, code: '' };
   deskNoteId = null;
   deskOwner = data.owner;
-  deskAssignedCap = data.cap;
   deskStaleDays = data.staleDays;
   renderDesk();
 }
@@ -4723,10 +4720,6 @@ function paintDeskFlash() {
 function deskAdd(state, f) {
   const title = f.title.trim();
   if (!title) return;
-  if (state === 'mine' && deskIn('mine').length >= deskAssignedCap) {
-    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one, or move it to waiting, first.`);
-    return;
-  }
   // The board itself has a ceiling. Say so rather than letting the save quietly
   // drop the oldest item to fit.
   if (desk.items.filter(i => !i.done).length >= deskMaxItems) {
@@ -4747,10 +4740,6 @@ function deskAdd(state, f) {
 function deskReassign(id) {
   const it = desk.items.find(x => x.id === id);
   if (!it) return;
-  if (it.state === 'waiting' && deskIn('mine').length >= deskAssignedCap) {
-    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one first.`);
-    return;
-  }
   it.state = it.state === 'mine' ? 'waiting' : 'mine';
   it.moved = Date.now();
   saveDesk();
@@ -4783,10 +4772,6 @@ function deskComplete(id) {
 function deskReopen(id) {
   const it = desk.items.find(x => x.id === id);
   if (!it || !it.done) return;
-  if (it.state === 'mine' && deskIn('mine').length >= deskAssignedCap) {
-    deskFlash(`You can have ${deskAssignedCap} items assigned to you at a time. Complete one first.`);
-    return;
-  }
   it.done = 0;
   it.moved = Date.now(); // it is live again, so its clock starts again
   saveDesk();
@@ -5248,7 +5233,7 @@ function renderDesk() {
         : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     </div>
     <div class="dk-tally">
-      <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}<small>/${deskAssignedCap}</small></span></div>
+      <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}</span></div>
       <div class="dk-tally__cell dk-tally__cell--waiting"><span class="dk-tally__k">Waiting</span><span class="dk-tally__v">${waiting.length}</span></div>
       <div class="dk-tally__cell dk-tally__cell--stalled" data-zero="${stalled ? 0 : 1}"><span class="dk-tally__k">Stalled</span><span class="dk-tally__v">${stalled}</span></div>
     </div>
@@ -5280,13 +5265,13 @@ function renderDesk() {
     </section>
 
     <section class="dk-panel">
-      <div class="dk-panel__head"><span class="dk-panel__name">${ro ? 'Assigned to them' : 'Assigned to me'}</span><span class="dk-panel__note">${ro ? 'their own work' : 'limit ' + deskAssignedCap}</span></div>
+      <div class="dk-panel__head"><span class="dk-panel__name">${ro ? 'Assigned to them' : 'Assigned to me'}</span><span class="dk-panel__note">${ro ? 'their own work' : 'your own work'}</span></div>
       <div class="dk-panel__body">
         ${mine.map(deskCardHtml).join('')}
         ${mine.length ? '' : `<p class="dk-empty">${ro ? 'Nothing is assigned to them right now.'
           : 'No items assigned to you.<br>Add anything you&rsquo;re responsible for.'}</p>`}
         ${ro ? '' : deskForm === 'mine' ? deskFormHtml('mine')
-          : `<button class="dk-opener" data-act="open" data-state="mine" ${mine.length >= deskAssignedCap ? 'disabled' : ''}>${mine.length >= deskAssignedCap ? 'Limit reached — complete an item first' : 'Add an item'}</button>`}
+          : '<button class="dk-opener" data-act="open" data-state="mine">Add an item</button>'}
       </div>
     </section>
 
