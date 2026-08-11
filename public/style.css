@@ -1580,13 +1580,41 @@ button.primary {
 .dk-ref__x { border: 0; background: none; color: var(--dk-ink-3); font-size: 14px; line-height: 1; padding: 0 2px; font-family: var(--dk-mono); }
 .dk-ref__x:hover { color: var(--dk-red); }
 
+/* ---------------- links to mind maps ---------------- */
+/* An item or reference entry can point at one of your maps. The link is styled
+   as a quiet secondary line, not a fifth action — following it leaves the board. */
+.dk-card__map { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.dk-maplink {
+  flex: 1; min-width: 0; text-align: left;
+  font-family: var(--dk-mono); font-size: 11.5px; letter-spacing: 0.01em;
+  border: 1px solid var(--dk-board-line); background: #FAFBF8; color: var(--dk-blue);
+  padding: 3px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dk-maplink:hover { border-color: var(--dk-blue); background: #fff; }
+.dk-maplink--gone { color: var(--dk-ink-3); font-style: italic; }
+.dk-maplink__x {
+  border: 0; background: none; color: var(--dk-ink-3);
+  font-size: 14px; line-height: 1; padding: 0 4px; font-family: var(--dk-mono); flex: none;
+}
+.dk-maplink__x:hover { color: var(--dk-red); }
+.dk-card__pick { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.dk-card__pick .dk-select { flex: 1; min-width: 0; }
+.dk-card__pick .dk-btn { flex: none; }
+/* reference rows put the link first, as a compact icon before the text */
+.dk-ref__map {
+  border: 0; background: none; padding: 0 2px; font-size: 12px; line-height: 1.4; flex: none;
+  filter: grayscale(0.35);
+}
+.dk-ref__map:hover { filter: none; }
+
 /* ---------------- add forms ---------------- */
 .dk-add { border: 1px dashed var(--dk-ink-3); padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; background: #FAFBF8; }
-.dk-add input {
+.dk-add input, .dk-select {
   font-family: var(--dk-body); font-size: 16px; padding: 5px 7px;
   border: 1px solid var(--dk-board-line); background: #fff; color: var(--dk-ink); width: 100%;
 }
-.dk-add input:focus, .dk-scratch:focus { outline: 2px solid var(--dk-blue); outline-offset: 1px; }
+.dk-add input:focus, .dk-select:focus, .dk-scratch:focus { outline: 2px solid var(--dk-blue); outline-offset: 1px; }
 .dk-add__row { display: flex; gap: 6px; }
 .dk-add__row .dk-btn { flex: 1; text-align: center; }
 .dk-add__row .dk-btn--go { background: var(--dk-ink); color: #fff; border-color: var(--dk-ink); }

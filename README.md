@@ -22,6 +22,10 @@ and turns on **AI generation** simply by setting environment variables.
   on** from someone else, and the number of days since each was last updated — so a request
   made three weeks ago reads as exactly that. Five assigned items at a time, plus reference
   entries and a working-notes area. One board per person, private to them.
+- **Desk items and reference entries can link to a mind map** — pick one of your maps (or a
+  map shared with you) when you add an item, or attach one later with **Link a map**. The
+  link opens that map in the editor, and shows its current name, so renaming the map keeps
+  the link accurate.
 - **The outline is now an editor, not just a view** — the ☰ Outline panel is a first-class
   way to build and study a map. Anyone with edit access can **rename items, edit notes and
   links, add sub-items, tick things off, and delete** straight from the outline; the **map
@@ -154,8 +158,13 @@ maps are for developing ideas, the desk is for tracking open work.
   an item that has quietly gone quiet stays visible.
 - **A next step on every item**, edited in place. Left empty it is shown in red — an item
   with no next step is a note, not a commitment.
-- **Reference** — short entries you refer to often (links, codes, contacts, targets), edited
-  in place and kept separate from the item list.
+- **A link to a mind map.** Items and reference entries can each point at one map — your own,
+  or one shared with you to edit — chosen when you add them or attached afterwards with
+  **Link a map**. Following the link opens that map in the editor. Only the map's id is
+  stored, so the desk always shows its current name; if the map is later deleted or
+  unshared, the link says so instead of failing silently.
+- **Reference** — short entries you refer to often (links, codes, contacts, targets, a map
+  you keep reopening), edited in place and kept separate from the item list.
 - **Working notes** — a ruled area at the foot of the board for thinking something through.
   Saved with everything else, but nothing in it is tracked or counted.
 - **Copy summary** puts the board on the clipboard as plain text: what is assigned to you,

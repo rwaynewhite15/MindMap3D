@@ -4430,6 +4430,7 @@ let deskMaxRef = 40;        // reference entries the board holds
 let deskStaleDays = 14;     // no activity for this long and an item is stalled
 let deskForm = null;        // which add form is open: 'mine' | 'waiting' | 'ref' | null
 let deskFocusForm = false;  // a form just opened and should take the caret
+let deskMapPickFor = null;  // id of the item whose map picker is open, if any
 let deskFlashText = '';     // transient line above the board
 let deskFlashTimer = null;
 let deskSaveTimer = null;
@@ -4442,6 +4443,42 @@ const deskAge = d => (d >= deskStaleDays ? 'stalled' : d >= 7 ? 'aging' : 'curre
 const deskDaysLabel = d => (d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days');
 const deskUid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const deskIn = state => (desk ? desk.items.filter(i => i.state === state) : []);
+
+/* ---------- links to mind maps ----------
+   An item or a reference entry may point at one of the maps on your own map
+   screen — your maps and the ones shared with you to edit. Only the map's id is
+   stored; the name is resolved at render time, so a rename shows through. */
+const deskLinkableMaps = () => [...mapsMine, ...mapsShared];
+const deskMapName = id => {
+  const m = deskLinkableMaps().find(x => x.id === id);
+  return m ? (m.name || 'Untitled map') : null;
+};
+
+function deskMapSelectHtml(attrs, selected, blankLabel) {
+  const option = m => `<option value="${escapeHtml(m.id)}"${m.id === selected ? ' selected' : ''}>` +
+    `${escapeHtml(m.name || 'Untitled map')}</option>`;
+  const group = (label, list) => (list.length
+    ? `<optgroup label="${label}">${list.map(option).join('')}</optgroup>` : '');
+  return `<select class="dk-select" ${attrs}>
+    <option value="">${blankLabel}</option>
+    ${group('My maps', mapsMine)}
+    ${group('Shared with me', mapsShared)}
+  </select>`;
+}
+
+// A linked map opens where you would actually work on it: in the editor when it
+// is one of yours, otherwise through the read-only viewer, which reports a map
+// that has been deleted or unshared.
+function deskOpenMap(mapId) {
+  if (!mapId) return;
+  flushDeskSave(); // leaving the desk — don't strand a pending edit
+  if (deskLinkableMaps().some(m => m.id === mapId)) {
+    location.hash = '#/map';
+    openMyMap(mapId).catch(err => alert(err.message));
+  } else {
+    openLinkedMap(mapId);
+  }
+}
 
 /* ---------- load / save ---------- */
 async function loadDesk() {
@@ -4546,7 +4583,7 @@ function deskAdd(state, f) {
   }
   desk.items.unshift({
     id: deskUid(), title, tag: f.tag.trim(), next: f.next.trim(), who: f.who.trim(),
-    state, moved: Date.now(),
+    mapRef: f.mapRef || '', state, moved: Date.now(),
   });
   deskForm = null;
   saveDesk();
@@ -4597,6 +4634,7 @@ function deskCardHtml(it) {
   const d = deskDays(it.moved);
   const owner = it.state === 'waiting' ? (it.who || 'Unassigned') : 'Me';
   const id = escapeHtml(it.id);
+  const mapName = it.mapRef ? deskMapName(it.mapRef) : null;
   return `
   <article class="dk-card" data-state="${it.state}" data-age="${deskAge(d)}">
     <div class="dk-card__top">
@@ -4604,6 +4642,12 @@ function deskCardHtml(it) {
       <span class="dk-card__clock" title="Days since this item was last updated">${deskDaysLabel(d)}</span>
     </div>
     <div class="dk-card__meta">${escapeHtml(owner)}${it.tag ? ' &middot; ' + escapeHtml(it.tag) : ''}</div>
+    ${it.mapRef ? `<div class="dk-card__map">
+      <button class="dk-maplink${mapName ? '' : ' dk-maplink--gone'}" data-act="openmap" data-map="${escapeHtml(it.mapRef)}"
+        title="${mapName ? 'Open this map' : 'Open the linked map — it may have been deleted or unshared'}"
+        >🗺 ${escapeHtml(mapName || 'Linked map')}</button>
+      <button class="dk-maplink__x" data-act="unlinkmap" data-id="${id}" title="Remove the linked map" aria-label="Remove the linked map">&times;</button>
+    </div>` : ''}
     <div class="dk-card__next ${it.next ? '' : 'dk-card__next--empty'}" contenteditable
          data-id="${id}" data-field="next">${escapeHtml(it.next || NEXT_PLACEHOLDER)}</div>
     <div class="dk-card__acts">
@@ -4611,9 +4655,14 @@ function deskCardHtml(it) {
         title="${it.state === 'mine' ? 'Move this item to Waiting on others' : 'Assign this item to me'}"
         >${it.state === 'mine' ? 'Move to waiting' : 'Assign to me'}</button>
       <button class="dk-btn" data-act="touch" data-id="${id}" title="Reset the last-updated date to today">Mark updated</button>
+      ${it.mapRef ? '' : `<button class="dk-btn" data-act="linkmap" data-id="${id}" title="Link one of your mind maps to this item">Link a map</button>`}
       <button class="dk-btn dk-btn--done" data-act="complete" data-id="${id}" title="Remove this item and add it to your completed count">Complete</button>
       <button class="dk-btn dk-btn--drop" data-act="delete" data-id="${id}" title="Remove this item without counting it as completed">Delete</button>
     </div>
+    ${deskMapPickFor === it.id ? `<div class="dk-card__pick">
+      ${deskMapSelectHtml(`data-act="pickmap" data-id="${id}"`, '', 'Choose a map…')}
+      <button class="dk-btn" data-act="cancelmap">Cancel</button>
+    </div>` : ''}
     ${d >= deskStaleDays ? `<div class="dk-stalled"><span class="dk-stalled__txt">No activity for ${d} days</span><span class="dk-stalled__bar"></span><span class="dk-stalled__txt">Follow up or remove</span></div>` : ''}
   </article>`;
 }
@@ -4626,6 +4675,7 @@ function deskFormHtml(state) {
     <input data-f="tag" maxlength="80" placeholder="Project or reference (optional)">
     <input data-f="next" maxlength="300" placeholder="Next step (optional)">
     <input data-f="who" maxlength="80" placeholder="${mine ? 'Note (optional)' : 'Who it&rsquo;s with'}">
+    ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
     <div class="dk-add__row">
       <button class="dk-btn dk-btn--go" data-act="save" data-state="${state}">Add item</button>
       <button class="dk-btn" data-act="cancel">Cancel</button>
@@ -4666,14 +4716,19 @@ function renderDesk() {
     <section class="dk-panel">
       <div class="dk-panel__head"><span class="dk-panel__name">Reference</span><span class="dk-panel__note">kept until removed</span></div>
       <div class="dk-panel__body">
-        <ul class="dk-ref">${desk.ref.map((r, n) => `
+        <ul class="dk-ref">${desk.ref.map((r, n) => {
+          const name = r.mapRef ? deskMapName(r.mapRef) : null;
+          return `
           <li class="dk-ref__row">
-            <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r)}</span>
+            ${r.mapRef ? `<button class="dk-ref__map" data-act="openmap" data-map="${escapeHtml(r.mapRef)}"
+              title="Open ${escapeHtml(name || 'the linked map')}" aria-label="Open the linked map">🗺</button>` : ''}
+            <span class="dk-ref__txt" contenteditable data-ref="${n}">${escapeHtml(r.text)}</span>
             <button class="dk-ref__x" data-act="unref" data-n="${n}" aria-label="Remove reference">&times;</button>
-          </li>`).join('')}</ul>
-        ${desk.ref.length ? '' : '<p class="dk-empty">Details you refer to often.<br>Links, codes, contacts, targets.</p>'}
+          </li>`; }).join('')}</ul>
+        ${desk.ref.length ? '' : '<p class="dk-empty">Details you refer to often.<br>Links, codes, contacts, targets, a map you keep reopening.</p>'}
         ${deskForm === 'ref' ? `<div class="dk-add">
             <input data-f="line" maxlength="200" placeholder="e.g. Release cutoff — Thursday 16:00">
+            ${deskMapSelectHtml('data-f="mapRef"', '', 'No linked map')}
             <div class="dk-add__row"><button class="dk-btn dk-btn--go" data-act="saveref">Add</button><button class="dk-btn" data-act="cancel">Cancel</button></div>
           </div>` : '<button class="dk-opener" data-act="openref">Add a reference</button>'}
       </div>
@@ -4738,17 +4793,30 @@ deskRoot.addEventListener('click', e => {
   else if (act === 'open') { deskForm = b.dataset.state; deskFocusForm = true; renderDesk(); }
   else if (act === 'openref') { deskForm = 'ref'; deskFocusForm = true; renderDesk(); }
   else if (act === 'cancel') { deskForm = null; renderDesk(); }
-  else if (act === 'save') {
+  else if (act === 'openmap') deskOpenMap(b.dataset.map);
+  else if (act === 'linkmap') { deskMapPickFor = b.dataset.id; renderDesk(); }
+  else if (act === 'cancelmap') { deskMapPickFor = null; renderDesk(); }
+  else if (act === 'unlinkmap') {
+    const it = desk.items.find(x => x.id === b.dataset.id);
+    if (it) { it.mapRef = ''; saveDesk(); renderDesk(); }
+  } else if (act === 'save') {
     const form = b.closest('.dk-add');
     const val = k => form.querySelector(`[data-f="${k}"]`).value;
-    deskAdd(b.dataset.state, { title: val('title'), tag: val('tag'), next: val('next'), who: val('who') });
+    deskAdd(b.dataset.state, {
+      title: val('title'), tag: val('tag'), next: val('next'),
+      who: val('who'), mapRef: val('mapRef'),
+    });
   } else if (act === 'saveref') {
-    const v = b.closest('.dk-add').querySelector('[data-f="line"]').value.trim();
+    const form = b.closest('.dk-add');
+    const mapRef = form.querySelector('[data-f="mapRef"]').value;
+    // A reference that is only a map link still needs a label; the map's own
+    // name is the obvious one.
+    const v = form.querySelector('[data-f="line"]').value.trim() || (mapRef ? deskMapName(mapRef) || '' : '');
     if (v && desk.ref.length >= deskMaxRef) {
       deskFlash(`Reference holds ${deskMaxRef} entries. Remove one to add another.`);
       return;
     }
-    if (v) { desk.ref.push(v); saveDesk(); }
+    if (v) { desk.ref.push({ text: v, mapRef }); saveDesk(); }
     deskForm = null;
     renderDesk();
   } else if (act === 'unref') {
@@ -4773,11 +4841,22 @@ deskRoot.addEventListener('blur', e => {
     renderDesk();
   } else if (t.dataset.ref !== undefined) {
     const n = +t.dataset.ref, v = t.textContent.trim();
-    if (v) desk.ref[n] = v; else desk.ref.splice(n, 1); // emptied a line = removed it
+    if (v) desk.ref[n].text = v; else desk.ref.splice(n, 1); // emptied a line = removed it
     saveDesk();
     renderDesk();
   }
 }, true);
+
+// the map picker on a card applies as soon as a map is chosen
+deskRoot.addEventListener('change', e => {
+  const sel = e.target.closest('select[data-act="pickmap"]');
+  if (!sel || !desk) return;
+  const it = desk.items.find(x => x.id === sel.dataset.id);
+  if (it) it.mapRef = sel.value;
+  deskMapPickFor = null;
+  saveDesk();
+  renderDesk();
+});
 
 // clear the next-step prompt the moment someone types into it
 deskRoot.addEventListener('focus', e => {
@@ -4799,8 +4878,9 @@ deskRoot.addEventListener('keydown', e => {
   } else if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'title') {
     e.preventDefault(); // one line per title; commit it instead of adding a newline
     e.target.blur();
-  } else if (e.key === 'Escape' && deskForm) {
+  } else if (e.key === 'Escape' && (deskForm || deskMapPickFor)) {
     deskForm = null;
+    deskMapPickFor = null;
     renderDesk();
   }
 });

@@ -80,16 +80,31 @@ function sanitizeDesk(input) {
       next: text(raw.next, 300),
       who: text(raw.who, 80),
       state: state === 'waiting' ? 'waiting' : 'mine',
+      // Optional link to one of the account's mind maps. Only the shape is
+      // checked here (as with map bubbles); whether the map still exists and is
+      // reachable is resolved when the link is followed.
+      mapRef: cleanMapRef(raw.mapRef),
       // Last-updated date, clamped to now: a future timestamp would leave an
       // item permanently fresh, and the age of an item is the point of it.
       moved: Number.isFinite(moved) && moved > 0 ? Math.min(moved, Date.now()) : Date.now(),
     });
     if (items.length >= MAX_DESK_ITEMS) break;
   }
+  // Reference entries carry an optional map link too, so each is an object.
+  // Entries written before that were plain strings; both shapes normalize here.
+  const ref = [];
+  for (const raw of Array.isArray(d.ref) ? d.ref : []) {
+    const entry = typeof raw === 'string' ? { text: raw }
+      : (raw && typeof raw === 'object' ? raw : null);
+    if (!entry) continue;
+    const line = text(entry.text, 200);
+    if (!line) continue;
+    ref.push({ text: line, mapRef: cleanMapRef(entry.mapRef) });
+    if (ref.length >= MAX_DESK_REF) break;
+  }
   const closed = Math.floor(Number(d.closed));
   return {
-    ref: (Array.isArray(d.ref) ? d.ref : [])
-      .map(line => text(line, 200)).filter(Boolean).slice(0, MAX_DESK_REF),
+    ref,
     items,
     // not trimmed: leading blank lines and indentation are the user's own
     scratch: String(d.scratch == null ? '' : d.scratch).slice(0, MAX_DESK_SCRATCH),
@@ -1665,6 +1680,14 @@ async function handleApi(req, res, pathname) {
     const refUsers = await store.getUsersByIds(refIds);
     const uname = id => { const u = refUsers.find(x => x.id === id); return u ? u.username : null; };
     const unames = ids => (ids || []).map(uname).filter(Boolean);
+    // A desk link points at a map id. The name is filled in when it is one of
+    // this account's own maps; a map shared by someone else exports as the id
+    // alone, since its name isn't ours to read here.
+    const linkedMapOut = id => {
+      if (!id) return null;
+      const m = user.maps.find(x => x.id === id);
+      return { id, name: m ? m.name : null };
+    };
     const data = {
       exportedAt: new Date().toISOString(),
       account: {
@@ -1683,13 +1706,17 @@ async function handleApi(req, res, pathname) {
         followers: unames(user.followers),
       },
       desk: {
-        reference: user.desk.ref,
+        reference: user.desk.ref.map(r => ({
+          text: r.text,
+          linkedMap: linkedMapOut(r.mapRef),
+        })),
         items: user.desk.items.map(i => ({
           title: i.title,
           tag: i.tag,
           nextStep: i.next,
           assignedTo: i.who,
           status: i.state === 'mine' ? 'Assigned to me' : 'Waiting on others',
+          linkedMap: linkedMapOut(i.mapRef),
           lastUpdatedAt: new Date(i.moved).toISOString(),
         })),
         workingNotes: user.desk.scratch,
