@@ -305,6 +305,7 @@ function pgStore() {
     map: r.map,
     maps: r.maps,
     desk: r.desk,
+    pluginData: r.plugin_data,
   });
 
   return {
@@ -336,6 +337,9 @@ function pgStore() {
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_subs JSONB NOT NULL DEFAULT '[]'`);
       // the Standing Desk — one private work board per account
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS desk JSONB NOT NULL DEFAULT '{}'`);
+      // per-account storage for installed plugins, keyed by plugin id; empty
+      // unless an add-on is installed and the account has used it
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plugin_data JSONB NOT NULL DEFAULT '{}'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -387,29 +391,30 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers, notifications, push_subs, desk)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb)`,
+                            following, followers, notifications, push_subs, desk, plugin_data)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
-         JSON.stringify(u.desk || makeDesk())]);
+         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {})]);
     },
     async saveUser(u) {
       await pool.query(
         `UPDATE users SET display_name=$2, show_display_name=$3, visibility=$4, bio=$5,
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
                           following=$10::jsonb, followers=$11::jsonb,
-                          notifications=$12::jsonb, push_subs=$13::jsonb, desk=$14::jsonb
+                          notifications=$12::jsonb, push_subs=$13::jsonb, desk=$14::jsonb,
+                          plugin_data=$15::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
-         JSON.stringify(u.desk || makeDesk())]);
+         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {})]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -624,6 +629,9 @@ function normalizeUser(u) {
   if (!Array.isArray(u.notifications)) u.notifications = []; // bell feed (chat/comment alerts)
   if (!Array.isArray(u.pushSubs)) u.pushSubs = []; // Web Push subscriptions
   u.desk = sanitizeDesk(u.desk); // the Standing Desk; absent on accounts made before it existed
+  // Per-plugin storage. Each installed add-on owns one key and validates its
+  // own shape; the core only guarantees there is an object here to write into.
+  if (!u.pluginData || typeof u.pluginData !== 'object' || Array.isArray(u.pluginData)) u.pluginData = {};
   if (!Array.isArray(u.maps)) u.maps = [];
   if (!u.maps.length) {
     const m = makeMap('My Map', u.visibility, u.displayName || u.username);
@@ -1528,6 +1536,147 @@ function tooMany(key, limit, windowMs) {
 }
 
 /* ================================================================
+   Plugins — optional add-ons, downloaded and installed separately
+
+   A plugin is one folder in plugins/ with a plugin.json manifest in it.
+   The folder is the whole installation: drop it in (tools/install-plugin.js
+   does that for you), restart, and it is there. Nothing ships enabled — with
+   an empty plugins/ directory everything below is inert and the app is
+   exactly what it was without it.
+
+   A plugin may contribute two things:
+     public/    static files served at /plugins/<id>/… — its client code, which
+                the app shell loads on boot and which registers a screen
+     server.js  a module exporting (ctx) => ({ handle(req, res, sub, user) }),
+                mounted under /api/plugins/<id>/… behind the same sign-in gate
+                and CSRF check as every other write route
+   and every account gets a private JSON bag per plugin, kept on the user
+   record beside the desk, so a plugin never brings its own storage backend
+   and its data is deleted and exported along with the account.
+
+   A plugin's server.js runs in this process, with everything this process can
+   reach. Installing one is trusting its author, the same way installing an npm
+   package is; that is on the person who copies the folder in.
+================================================================ */
+const PLUGINS_DIR = path.join(__dirname, 'plugins');
+// The plugin contract this build implements. A plugin declares the version it
+// was written against in its manifest; one that needs a newer host than this is
+// refused at startup instead of half-working at runtime.
+const PLUGIN_HOST_VERSION = 1;
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+const PLUGIN_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/; // a single file name, no separators
+const MAX_PLUGIN_DATA = 512 * 1024; // serialized bytes one plugin may keep per account
+const plugins = new Map(); // id → loaded plugin
+
+// What a plugin's server side is handed. Deliberately small: the request
+// helpers it would otherwise reimplement, and per-account storage.
+function pluginContext(p) {
+  return {
+    id: p.id,
+    dir: p.dir,
+    version: p.version,
+    newId,
+    sendJSON,
+    readBody,
+    // One JSON value per plugin per account, saved on the user record. Plugins
+    // get persistence without knowing whether this server is running on
+    // Postgres or the local JSON file.
+    data: {
+      get: user => (user.pluginData && user.pluginData[p.id]) || null,
+      save: async (user, value) => {
+        const json = JSON.stringify(value === undefined ? null : value);
+        if (json.length > MAX_PLUGIN_DATA) {
+          const err = new Error('plugin data too large');
+          err.code = 'PLUGIN_DATA_TOO_LARGE';
+          throw err;
+        }
+        if (!user.pluginData || typeof user.pluginData !== 'object') user.pluginData = {};
+        user.pluginData[p.id] = JSON.parse(json);
+        await store.saveUser(user);
+      },
+    },
+  };
+}
+
+function loadPlugin(folder) {
+  const dir = path.join(PLUGINS_DIR, folder);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
+  const id = String(manifest.id || '');
+  if (!PLUGIN_ID_RE.test(id)) throw new Error('plugin.json needs an id of lowercase letters, numbers and dashes');
+  // The id is the URL prefix for both its assets and its API, so keeping it
+  // equal to the folder name means one name identifies a plugin everywhere.
+  if (id !== folder) throw new Error(`its id ("${id}") does not match its folder name ("${folder}")`);
+  if (plugins.has(id)) throw new Error('a plugin with that id is already loaded');
+  const needs = Number(manifest.hostVersion || 1);
+  if (!Number.isFinite(needs)) throw new Error('its "hostVersion" is not a number');
+  if (needs > PLUGIN_HOST_VERSION) {
+    throw new Error(`it needs plugin host version ${needs}; this server is version ${PLUGIN_HOST_VERSION}. Update MindMapShare.`);
+  }
+
+  const publicDir = path.join(dir, 'public');
+  const asset = (value, ext) => {
+    const name = String(value || '');
+    if (!name) return '';
+    if (!PLUGIN_FILE_RE.test(name) || !name.endsWith(ext)) throw new Error(`"${name}" is not a plain ${ext} file name`);
+    if (!fs.existsSync(path.join(publicDir, name))) throw new Error(`public/${name} is missing`);
+    return name;
+  };
+  const p = {
+    id,
+    name: String(manifest.name || id).slice(0, 60),
+    version: String(manifest.version || '0.0.0').slice(0, 20),
+    description: String(manifest.description || '').slice(0, 300),
+    // What the shell puts in the top navigation for it
+    navLabel: String((manifest.nav && manifest.nav.label) || manifest.name || id).slice(0, 24),
+    client: asset(manifest.client, '.js'),
+    styles: asset(manifest.styles, '.css'),
+    dir,
+    publicDir,
+    handle: null,
+  };
+  if (manifest.server) {
+    const file = String(manifest.server);
+    if (!PLUGIN_FILE_RE.test(file) || !file.endsWith('.js')) throw new Error(`"${file}" is not a plain .js file name`);
+    const factory = require(path.join(dir, file));
+    if (typeof factory !== 'function') throw new Error(`${file} must export a function`);
+    const api = factory(pluginContext(p));
+    if (!api || typeof api.handle !== 'function') throw new Error(`${file} must return { handle(req, res, sub, user) }`);
+    p.handle = api.handle;
+  }
+  plugins.set(id, p);
+  return p;
+}
+
+// Called once at startup. A plugin that fails to load is set aside and reported
+// at startup — a broken add-on must never stop the app it was added to from
+// starting, and it must never fail silently either.
+const pluginErrors = []; // [{ folder, message }] for anything that wouldn't load
+function loadPlugins() {
+  let entries = [];
+  try { entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true }); }
+  catch { return; } // no plugins/ directory at all: nothing is installed
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!e.isDirectory()) continue;
+    if (!fs.existsSync(path.join(PLUGINS_DIR, e.name, 'plugin.json'))) continue;
+    try { loadPlugin(e.name); }
+    catch (err) { pluginErrors.push({ folder: e.name, message: err.message }); }
+  }
+}
+
+// What the client shell is told about an installed plugin.
+function pluginMeta(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    version: p.version,
+    description: p.description,
+    navLabel: p.navLabel,
+    client: p.client ? `/plugins/${p.id}/${p.client}` : '',
+    styles: p.styles ? `/plugins/${p.id}/${p.styles}` : '',
+  };
+}
+
+/* ================================================================
    Request plumbing
 ================================================================ */
 // Defense-in-depth headers applied to every response. The CSP is deliberately
@@ -1631,6 +1780,7 @@ async function handleApi(req, res, pathname) {
       notifications: [], pushSubs: [],
       maps: [makeMap('My Map', body.visibility, displayName || username)],
       desk: makeDesk(),
+      pluginData: {},
     };
     try {
       await store.createUser(u);
@@ -1785,6 +1935,13 @@ async function handleApi(req, res, pathname) {
   }
 
 
+  // --- plugins: which add-ons this server has installed ---
+  // Public and read-only: the shell asks on boot so it knows what to load, and
+  // an install with nothing added simply gets an empty list.
+  if (route === 'GET /api/plugins') {
+    return sendJSON(res, 200, { plugins: [...plugins.values()].map(pluginMeta) });
+  }
+
   // --- admin console (separate auth: ADMIN_PASSWORD env var, not a user account) ---
   if (pathname === '/api/admin/login' && req.method === 'POST') {
     const ip = clientIp(req);
@@ -1938,6 +2095,10 @@ async function handleApi(req, res, pathname) {
           html: n.html,
         })),
       },
+      // Whatever installed add-ons have saved on this account, as they saved
+      // it. Included raw so an export stays complete even for a plugin this
+      // server has since had removed.
+      addOns: user.pluginData || {},
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
         editors: unames(m.editors),
@@ -1968,6 +2129,30 @@ async function handleApi(req, res, pathname) {
     await store.deleteUser(user.id);
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // --- an installed plugin's own API: /api/plugins/<id>/… is its to answer ---
+  // The sign-in gate above has already run, so a plugin only ever sees a
+  // signed-in user and never has to do auth itself.
+  const pluginApi = pathname.match(/^\/api\/plugins\/([a-z0-9-]{2,32})(\/.*)?$/);
+  if (pluginApi) {
+    const p = plugins.get(pluginApi[1]);
+    if (!p || !p.handle) return sendJSON(res, 404, { error: 'No such plugin.' });
+    let handled;
+    try {
+      handled = await p.handle(req, res, pluginApi[2] || '/', user);
+    } catch (err) {
+      if (err && (err.message === 'too large' || err.message === 'bad json')) throw err; // the caller answers these
+      if (res.headersSent) return; // it answered, then failed; nothing left to say
+      if (err && err.code === 'PLUGIN_DATA_TOO_LARGE') {
+        return sendJSON(res, 413, { error: 'That is more than this add-on can store on your account.' });
+      }
+      // one add-on throwing is its own failure, reported as such
+      console.error(new Date().toISOString(), 'plugin', p.id, err);
+      return sendJSON(res, 500, { error: `The ${p.name} add-on failed to handle that.` });
+    }
+    if (handled || res.headersSent) return;
+    return sendJSON(res, 404, { error: 'Not found.' });
   }
 
   // --- notifications (bell feed) ---
@@ -2494,7 +2679,26 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// An installed plugin's client files, which live in the plugin's own folder
+// rather than in public/. Only the file types a front end needs are served, so
+// a plugin's server.js and manifest are never downloadable.
+function servePluginAsset(req, res, id, rel) {
+  const p = plugins.get(id);
+  if (!p || !rel) { res.writeHead(404); res.end('Not found'); return; }
+  const filePath = path.normalize(path.join(p.publicDir, rel));
+  if (!filePath.startsWith(p.publicDir + path.sep)) { res.writeHead(403); res.end(); return; }
+  const type = MIME[path.extname(filePath).toLowerCase()];
+  if (!type) { res.writeHead(404); res.end('Not found'); return; }
+  fs.readFile(filePath, (err, buf) => {
+    if (err) { res.writeHead(404); res.end('Not found'); return; }
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+    res.end(buf);
+  });
+}
+
 function serveStatic(req, res, pathname) {
+  const pluginAsset = pathname.match(/^\/plugins\/([a-z0-9-]{2,32})(?:\/(.*))?$/);
+  if (pluginAsset) return servePluginAsset(req, res, pluginAsset[1], pluginAsset[2] || '');
   let rel = pathname === '/' ? '/index.html' : pathname;
   if (rel === '/admin') rel = '/admin.html'; // friendly URL for the admin console
   const filePath = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -2554,8 +2758,11 @@ server.on('error', err => {
 
 
 store.init().then(() => {
+  loadPlugins(); // whatever is in plugins/, if anything
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`MindMapShare is running (storage: ${store.kind}):`);
+    for (const p of plugins.values()) console.log(`  add-on: ${p.name} ${p.version}`);
+    for (const e of pluginErrors) console.log(`  add-on "${e.folder}" was skipped — ${e.message}`);
     console.log(`  This computer:  http://localhost:${PORT}`);
     if (!DATABASE_URL) {
       console.log('  NOTE: no DATABASE_URL set — using local file storage. Fine for');

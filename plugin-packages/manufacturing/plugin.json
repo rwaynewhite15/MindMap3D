@@ -1,0 +1,11 @@
+{
+  "id": "manufacturing",
+  "name": "Manufacturing",
+  "version": "1.0.0",
+  "description": "A shop-floor cycle-time stopwatch, with the tool records behind each time: part, machine, op, station, insert, indexes per insert, inserts per op and expected tool life.",
+  "hostVersion": 1,
+  "nav": { "label": "Shop" },
+  "client": "client.js",
+  "styles": "client.css",
+  "server": "server.js"
+}

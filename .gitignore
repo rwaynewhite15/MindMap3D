@@ -8,6 +8,15 @@ data/
 node_modules/
 .env
 
+# installed plugins — downloaded and put here per install, like node_modules.
+# The packages this repo ships live in plugin-packages/; plugins/ is only ever
+# the copy that tools/install-plugin.js made.
+plugins/*
+!plugins/README.md
+
+# plugin packages built by tools/package-plugin.js, for uploading somewhere
+dist/
+
 # screenshots a browser test dropped in the working directory. The ones the
 # README uses live in public/screenshots/ and are committed.
 /*.png

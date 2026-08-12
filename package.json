@@ -5,7 +5,10 @@
   "description": "Social 3D mind-mapping app — sphere bubbles, weighted connections, container groups, friends & profiles",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "plugin": "node tools/install-plugin.js --list",
+    "plugin:install": "node tools/install-plugin.js",
+    "plugin:package": "node tools/package-plugin.js"
   },
   "engines": {
     "node": ">=20"
