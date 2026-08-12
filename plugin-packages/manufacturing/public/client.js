@@ -123,6 +123,26 @@
   const opLabel = t => [t.part, t.machine, t.op].filter(Boolean).join(' · ') || 'Unassigned';
   const toolLabel = t => t.desc || t.station || t.insert || 'Tool';
 
+  // Running order within an op. A tool with no sequence yet sorts after the ones
+  // that have one, oldest first, so an unplaced tool lands at the end of the list
+  // rather than jumping to the front of the job.
+  function bySeq(a, b) {
+    const as = a.seq || Infinity, bs = b.seq || Infinity;
+    if (as !== bs) return as - bs;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  }
+
+  // Every tool on the same part/machine/op, in the order they run.
+  const opTools = t => (t && shop ? shop.tools.filter(x => opLabel(x) === opLabel(t)).sort(bySeq) : []);
+
+  // Close up the numbering of an op after a move or a deletion, so the sequence
+  // is always 1..n with no gaps and no ties.
+  function renumberOp(label) {
+    shop.tools.filter(x => opLabel(x) === label).sort(bySeq).forEach((t, i) => {
+      if (t.seq !== i + 1) { t.seq = i + 1; touch(t); }
+    });
+  }
+
   function statsFor(t) {
     const runs = (t && t.runs) || [];
     if (!runs.length) return null;
@@ -285,7 +305,8 @@
     saveNow();
     renderStats();
     renderRuns();
-    renderTools(); // the tool's average and its op's total both just moved
+    renderChart(); // this tool's share of the op just moved
+    renderTools(); // as did its average, on its card
   }
 
   function startTick() {
@@ -306,6 +327,7 @@
     renderStats();
     renderRuns();
     renderForm();
+    renderChart();
     renderTools();
   }
 
@@ -332,10 +354,15 @@
     const head = el('div', 'mf-watch-head');
     const who = el('div', 'mf-watch-who');
     const title = el('div', 'mf-watch-title');
+    if (t.seq) title.appendChild(el('span', 'mf-seq', String(t.seq)));
     if (t.station) title.appendChild(el('span', 'mf-chip', t.station));
     title.appendChild(el('span', 'mf-watch-name', toolLabel(t)));
     who.appendChild(title);
-    who.appendChild(el('div', 'mf-watch-op', opLabel(t)));
+    const where = el('div', 'mf-watch-op', opLabel(t));
+    // where in the op's running order this tool sits
+    const order = opTools(t);
+    if (t.seq && order.length > 1) where.textContent += ' · tool ' + t.seq + ' of ' + order.length;
+    who.appendChild(where);
     head.appendChild(who);
     head.appendChild(button('mf-btn mf-btn-sm', 'Edit tool', () => openForm(t.id)));
     box.appendChild(head);
@@ -444,6 +471,137 @@
     }
   }
 
+  /* ---------------- the op cycle chart ---------------- */
+  // The tools of an op are an ordered set — tool 1 cuts before tool 2 — so the
+  // segments take a one-hue ramp stepped light→dark along the running order,
+  // not eight unrelated colors. Reading left to right you see the order in the
+  // color itself. The steps are interpolated in OKLab between the app's palest
+  // and deepest cyan and checked against the dark chart surface (#141926):
+  // monotone lightness, every adjacent gap ≥ 0.06 L, one hue, and the darkest
+  // step still clearing the surface at 2.55:1.
+  // `ink` is the label color that clears contrast inside that fill.
+  const RAMP = [
+    { fill: '#EBFBFD', ink: '#10141D' },
+    { fill: '#CDE4E8', ink: '#10141D' },
+    { fill: '#B0CED3', ink: '#10141D' },
+    { fill: '#93B7BE', ink: '#10141D' },
+    { fill: '#76A2AA', ink: '#10141D' },
+    { fill: '#598C96', ink: '#10141D' },
+    { fill: '#3B7782', ink: '#EDEFF4' },
+    { fill: '#17636F', ink: '#EDEFF4' },
+  ];
+  // Spread n tools across the ramp so the first is palest and the last deepest.
+  // Past eight tools neighbours start sharing a step; they stay apart because
+  // every segment is separated by a gap and numbered, and the table below the
+  // bar carries all of it — a ninth invented hue would not survive CVD anyway.
+  const rampStep = (i, n) => (n < 2 ? RAMP[4] : RAMP[Math.round((i * (RAMP.length - 1)) / (n - 1))]);
+
+  function renderChart() {
+    const box = els.chart;
+    box.innerHTML = '';
+    const active = activeTool();
+    if (!active) { box.hidden = true; return; }
+
+    const tools = opTools(active);
+    const rows = tools.map((t, i) => {
+      const s = statsFor(t);
+      return { t, i, avg: s ? s.avg : 0, count: s ? s.count : 0, step: rampStep(i, tools.length) };
+    });
+    const timed = rows.filter(r => r.avg > 0);
+    const total = timed.reduce((sum, r) => sum + r.avg, 0);
+    box.hidden = false;
+
+    const head = el('div', 'mf-chart-head');
+    const heading = el('div');
+    heading.appendChild(el('div', 'mf-section-title', 'Op cycle'));
+    heading.appendChild(el('div', 'mf-chart-op', opLabel(active)));
+    head.appendChild(heading);
+    const figure = el('div', 'mf-chart-figure');
+    figure.appendChild(el('div', 'mf-chart-total', total ? fmtSec(total) : '—'));
+    figure.appendChild(el('div', 'mf-chart-sub', timed.length
+      ? 'measured across ' + timed.length + (timed.length === 1 ? ' tool' : ' tools')
+      : 'nothing timed yet'));
+    head.appendChild(figure);
+    box.appendChild(head);
+
+    if (!timed.length) {
+      box.appendChild(el('div', 'mf-note', 'Time a cycle against a tool on this op and its share of the total appears here.'));
+      return;
+    }
+
+    // One timed tool is not a part-to-whole story — the figure above already is
+    // the whole of it, and a single-segment bar would say nothing more.
+    if (timed.length > 1) {
+      const bar = el('div', 'mf-bar');
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label',
+        'Total op cycle ' + fmtSec(total) + ', divided between ' + timed.length + ' tools. The same numbers are in the table below.');
+      timed.forEach((r, n) => {
+        const share = r.avg / total;
+        const seg = el('div', 'mf-seg');
+        seg.style.flexGrow = String(share);
+        seg.style.background = r.step.fill;
+        seg.style.color = r.step.ink;
+        seg.dataset.tool = r.t.id;
+        seg.tabIndex = 0;
+        if (n === timed.length - 1) seg.classList.add('mf-seg-end');
+        seg.title = (r.t.seq ? r.t.seq + '. ' : '') + toolLabel(r.t) +
+          ' — ' + fmtSec(r.avg) + ', ' + Math.round(share * 100) + '% of the cycle';
+        // A number only goes inside a segment wide enough to hold it; the rest
+        // are read off the table, which lists every one of them.
+        if (share >= 0.07 && r.t.seq) seg.appendChild(el('span', 'mf-seg-n', String(r.t.seq)));
+        bar.appendChild(seg);
+      });
+      box.appendChild(bar);
+    }
+
+    // The table is the legend and the accessible twin of the bar in one: every
+    // segment's identity, its measured average, and its share, as text.
+    const table = el('div', 'mf-legend');
+    for (const r of rows) {
+      const row = el('div', 'mf-legend-row' + (r.avg ? '' : ' mf-legend-off'));
+      row.dataset.tool = r.t.id;
+      const swatch = el('span', 'mf-swatch');
+      if (r.avg) swatch.style.background = r.step.fill;
+      row.appendChild(swatch);
+      row.appendChild(el('span', 'mf-legend-n', r.t.seq ? String(r.t.seq) : '–'));
+      const name = el('span', 'mf-legend-name');
+      if (r.t.station) name.appendChild(el('span', 'mf-chip mf-chip-sm', r.t.station));
+      name.appendChild(document.createTextNode(toolLabel(r.t)));
+      row.appendChild(name);
+      row.appendChild(el('span', 'mf-legend-v', r.avg ? fmtSec(r.avg) : '—'));
+      row.appendChild(el('span', 'mf-legend-p', r.avg ? Math.round((r.avg / total) * 100) + '%' : 'not timed'));
+      row.addEventListener('click', () => selectTool(r.t.id));
+      table.appendChild(row);
+    }
+    box.appendChild(table);
+
+    const untimed = rows.length - timed.length;
+    if (untimed) {
+      box.appendChild(el('div', 'mf-note', untimed + ' of ' + rows.length +
+        ' tools on this op ' + (untimed === 1 ? 'has' : 'have') +
+        ' no cycles timed yet, so the total is what has been measured so far, not the finished op.'));
+    }
+
+    // Hovering or focusing either half lights up the other, so a two-pixel
+    // segment is still reachable — through its row.
+    const link = (id, on) => {
+      for (const n of box.querySelectorAll('[data-tool="' + id + '"]')) n.classList.toggle('mf-on', on);
+    };
+    for (const type of ['mouseover', 'focusin']) {
+      box.addEventListener(type, e => {
+        const n = e.target.closest('[data-tool]');
+        if (n) link(n.dataset.tool, true);
+      });
+    }
+    for (const type of ['mouseout', 'focusout']) {
+      box.addEventListener(type, e => {
+        const n = e.target.closest('[data-tool]');
+        if (n) link(n.dataset.tool, false);
+      });
+    }
+  }
+
   function renderRuns() {
     const box = els.runs;
     box.innerHTML = '';
@@ -496,6 +654,7 @@
     { key: 'part', label: 'Part', placeholder: 'Part number', wide: true },
     { key: 'machine', label: 'Machine', placeholder: 'Machine name or number' },
     { key: 'op', label: 'Op', placeholder: 'Op 20' },
+    { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the op — 1 cuts first' },
     { key: 'station', label: 'Station', placeholder: 'T0303' },
     { key: 'desc', label: 'Tool', placeholder: '80° CNMG rougher', wide: true },
     { key: 'insert', label: 'Insert', placeholder: 'CNMG432-MP', wide: true },
@@ -509,14 +668,21 @@
     if (!shop) return; // still loading; there is nothing to add a tool to yet
     const t = id ? shop.tools.find(x => x.id === id) : null;
     form = t ? { ...t, runs: undefined } : {
-      id: '', part: '', machine: '', op: '', station: '', desc: '', insert: '',
+      id: '', part: '', machine: '', op: '', station: '', seq: '', desc: '', insert: '',
       indexes: '', insertsPerOp: '', lifeMin: '', insertCost: '', notes: '',
     };
     // Carry the last tool's op over to a new one: tools are added a few at a
     // time for the same job, and retyping the part number each time is noise.
+    // The sequence follows on from that op's last tool, since tools are usually
+    // entered in the order they cut.
     if (!t) {
       const from = activeTool() || shop.tools[shop.tools.length - 1];
-      if (from) { form.part = from.part; form.machine = from.machine; form.op = from.op; }
+      if (from) {
+        form.part = from.part; form.machine = from.machine; form.op = from.op;
+        form.seq = String(opTools(from).reduce((max, x) => Math.max(max, x.seq || 0), 0) + 1);
+      } else {
+        form.seq = '1';
+      }
     }
     formError = '';
     renderForm();
@@ -542,6 +708,7 @@
       id: draft.id || 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
       part: clean(draft.part), machine: clean(draft.machine), op: clean(draft.op),
       station: clean(draft.station), desc: clean(draft.desc), insert: clean(draft.insert),
+      seq: Math.floor(numeric(draft.seq)),
       indexes: Math.floor(numeric(draft.indexes)),
       insertsPerOp: Math.floor(numeric(draft.insertsPerOp)),
       lifeMin: numeric(draft.lifeMin),
@@ -555,8 +722,13 @@
     }
     const existing = shop.tools.find(t => t.id === tool.id);
     if (existing) {
+      const movedOp = opLabel(existing);
       Object.assign(existing, tool);
       touch(existing);
+      // Editing can move a tool to another op or renumber it; close up the gap
+      // it left behind as well as the order it joined.
+      renumberOp(movedOp);
+      if (opLabel(existing) !== movedOp) renumberOp(opLabel(existing));
     } else {
       if (shop.tools.length >= limits.maxTools) {
         formError = 'That is as many tools as one account keeps (' + limits.maxTools + ').';
@@ -567,6 +739,7 @@
       tool.createdAt = Date.now();
       tool.updatedAt = tool.createdAt;
       shop.tools.push(tool);
+      renumberOp(opLabel(tool));
       setActive(tool.id); // a tool added mid-shift is the one being timed next
     }
     form = null;
@@ -584,7 +757,9 @@
       : 'Delete ' + toolLabel(t) + '?';
     if (!confirm(warn)) return;
     const wasActive = shop.activeId === id;
+    const from = opLabel(t);
     shop.tools = shop.tools.filter(x => x.id !== id);
+    renumberOp(from); // the op runs one tool shorter now; close the gap
     if (wasActive) setActive(shop.tools.length ? shop.tools[0].id : '');
     form = null;
     save();
@@ -685,14 +860,16 @@
       return;
     }
 
-    // Grouped by the job they belong to — part, machine and op together — with
-    // the op's whole measured cycle across its tools on the heading.
+    // Grouped by the job they belong to — part, machine and op together — each
+    // group in the order its tools cut, with the op's whole measured cycle
+    // across them on the heading.
     const groups = new Map();
     for (const t of shown) {
       const key = opLabel(t);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(t);
     }
+    for (const tools of groups.values()) tools.sort(bySeq);
     for (const [label, tools] of groups) {
       const gh = el('div', 'mf-group');
       gh.appendChild(el('div', 'mf-group-k', label));
@@ -707,16 +884,31 @@
       }
       box.appendChild(gh);
 
-      for (const t of tools) {
+      // Reordering is only offered on the unfiltered list: moving a tool past a
+      // neighbour that a filter is hiding would not do what it looks like.
+      const canMove = !filter;
+      tools.forEach((t, pos) => {
         const card = el('div', 'mf-card' + (t.id === shop.activeId ? ' mf-card-on' : ''));
         card.tabIndex = 0;
         card.setAttribute('role', 'button');
 
         const top = el('div', 'mf-card-top');
+        top.appendChild(el('span', 'mf-seq', t.seq ? String(t.seq) : '–'));
         if (t.station) top.appendChild(el('span', 'mf-chip', t.station));
         top.appendChild(el('span', 'mf-card-name', toolLabel(t)));
         const s = statsFor(t);
         if (s) top.appendChild(el('span', 'mf-card-avg', fmtSec(s.avg)));
+        if (canMove && tools.length > 1) {
+          const moves = el('span', 'mf-moves');
+          const move = (label, to, enabled, title) => {
+            const b = button('mf-move', label, e => { e.stopPropagation(); moveTool(t.id, to); }, title);
+            b.disabled = !enabled;
+            moves.appendChild(b);
+          };
+          move('↑', pos - 1, pos > 0, 'Run this tool earlier in the op');
+          move('↓', pos + 1, pos < tools.length - 1, 'Run this tool later in the op');
+          top.appendChild(moves);
+        }
         card.appendChild(top);
 
         const meta = [];
@@ -744,8 +936,23 @@
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
         });
         box.appendChild(card);
-      }
+      });
     }
+  }
+
+  // Move a tool one place earlier or later in its op, and renumber the op so the
+  // sequence stays 1..n.
+  function moveTool(id, to) {
+    const t = shop.tools.find(x => x.id === id);
+    if (!t) return;
+    const order = opTools(t);
+    const from = order.indexOf(t);
+    if (to < 0 || to >= order.length || to === from) return;
+    order.splice(to, 0, ...order.splice(from, 1));
+    order.forEach((x, i) => { x.seq = i + 1; touch(x); });
+    save();
+    renderChart();
+    renderTools();
   }
 
   /* ---------------- export ---------------- */
@@ -758,14 +965,15 @@
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
     const rows = [[
-      'part', 'machine', 'op', 'station', 'tool', 'insert',
+      'part', 'machine', 'op', 'seq', 'station', 'tool', 'insert',
       'indexes_per_insert', 'inserts_per_op', 'tool_life_min_per_edge', 'insert_cost',
       'cycle_seconds', 'recorded_at', 'cycles_timed', 'average_seconds', 'parts_per_edge',
     ]];
-    for (const t of shop.tools) {
+    // in running order, op by op, so the file opens the way the job runs
+    for (const t of [...shop.tools].sort((a, b) => opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b))) {
       const s = statsFor(t);
       const life = s ? lifeFor(t, s.avg) : null;
-      const base = [t.part, t.machine, t.op, t.station, t.desc, t.insert,
+      const base = [t.part, t.machine, t.op, t.seq || '', t.station, t.desc, t.insert,
         t.indexes || '', t.insertsPerOp || '', t.lifeMin || '', t.insertCost || ''];
       const tail = [s ? s.count : 0, s ? round(s.avg, 2) : '', life ? life.partsPerEdge : ''];
       if (!t.runs.length) { rows.push(base.concat(['', '']).concat(tail)); continue; }
@@ -826,11 +1034,14 @@
     els.runs = el('div', 'mf-runs');
     els.form = el('div', 'mf-form');
     els.form.hidden = true;
+    els.chart = el('div', 'mf-chart');
+    els.chart.hidden = true;
     els.tools = el('div', 'mf-tools');
     page.appendChild(els.watch);
     page.appendChild(els.stats);
     page.appendChild(els.runs);
     page.appendChild(els.form);
+    page.appendChild(els.chart);
     page.appendChild(els.tools);
     host.appendChild(page);
 

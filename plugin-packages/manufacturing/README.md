@@ -11,6 +11,7 @@ questions that are actually asked at the machine:
 - how many parts one cutting edge lasts, at the cycle time you just measured
 - how often to index, and how many parts a whole insert covers
 - how many inserts a hundred parts consumes, and what they cost per part
+- and, across the op's tools in the order they cut, **where the cycle actually goes**
 
 ## Installing
 
@@ -37,6 +38,7 @@ Tool records stay on each account and come back if it is reinstalled.
 | Part | The part number the op belongs to |
 | Machine | Which machine it runs on |
 | Op | The operation — Op 20, or whatever the traveller calls it |
+| Seq | Where the tool falls in the op's running order — 1 cuts first |
 | Station | Turret position or pocket: `T0303` |
 | Tool | What it is: "80° CNMG rougher" |
 | Insert | The insert designation: `CNMG432-MP` |
@@ -68,12 +70,39 @@ inserts / 100     = inserts per op × 100 ÷ parts per insert
 cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
 ```
 
-Tools are grouped by part, machine and op, and each group shows the total
-measured cycle across its timed tools — the op's real cycle time, built from the
-tools that make it up.
+**Put the tools in running order.** Each tool carries a **Seq** — 1 cuts first.
+A new tool takes the next number in its op automatically, so entering tools in
+the order they run needs no thought; the ↑ / ↓ buttons on a tool card move it a
+place either way afterwards, and the op renumbers itself so the sequence is
+always 1..n with no gaps. The tool list, the chart and the CSV all follow that
+order, and the watch says which tool of how many you are timing.
+
+**See where the cycle goes.** The **Op cycle** panel is the op's whole measured
+cycle — the sum of every tool's average — with a stacked bar underneath dividing
+it between the tools in the order they cut. Each segment is one tool, sized by
+its share; the table below the bar names them, gives each average and its
+percentage, and doubles as the legend. Hovering (or tabbing to) either the bar
+or a row lights up the other, so a two-percent segment is still reachable.
+
+The segment fills come from a single cyan ramp stepped light→dark along the
+running order, so the order is legible in the color itself rather than needing
+eight unrelated hues. The ramp is checked against the dark chart surface for
+monotone lightness, a visible gap between adjacent steps, one hue, and a darkest
+step that still clears the surface.
+
+A tool with nothing timed against it yet cannot contribute to the total, so it is
+listed as **not timed** and a line under the chart says how many of the op's
+tools are in that state — the total is what has been measured, not a finished op.
+An op with only one timed tool gets the figure without a bar; one segment is not
+a part-to-whole story.
+
+Tools are grouped by part, machine and op, and each group heading also shows the
+total measured cycle across its timed tools, so every op on the board reads at a
+glance and not just the one being timed.
 
 **⤓ CSV** downloads every recorded cycle, one row each, carrying the tool it
-belongs to, for pivoting in a spreadsheet.
+belongs to and its place in the op, ordered the way the job runs, for pivoting in
+a spreadsheet.
 
 ## What it stores, and where
 

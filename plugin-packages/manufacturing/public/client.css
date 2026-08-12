@@ -217,7 +217,90 @@
 .mf-field-hint { font-size: 11px; color: var(--dim); opacity: 0.8; }
 .mf-form-btns { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 
+/* ---------------- the op cycle chart ----------------
+   A horizontal stacked bar: the op's measured cycle, divided between its tools
+   in the order they cut. The fills come from one cyan ramp stepped light→dark
+   along that order (see RAMP in client.js), so the running order is legible in
+   the color itself; segments are separated by a 2px gap in the surface color
+   rather than by borders, and the table underneath is both the legend and the
+   text twin of the bar. */
+.mf-chart {
+  margin-top: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.mf-chart-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.mf-chart-op { font-family: var(--mf-mono); font-size: 11.5px; color: var(--dim); margin-top: 3px; }
+.mf-chart-figure { margin-left: auto; text-align: right; }
+.mf-chart-total { font-family: var(--mf-mono); font-size: 30px; font-weight: 700; line-height: 1.05; }
+.mf-chart-sub { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+
+.mf-bar { display: flex; gap: 2px; height: 24px; margin-bottom: 4px; }
+.mf-seg {
+  min-width: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-basis: 0;
+  border-radius: 0; /* square along the run; only the data end is rounded */
+}
+.mf-seg-end { border-radius: 0 4px 4px 0; }
+.mf-seg-n { font-family: var(--mf-mono); font-size: 11px; font-weight: 700; }
+.mf-seg.mf-on { filter: brightness(1.12); }
+.mf-seg:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+.mf-legend { margin-top: 12px; }
+.mf-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mf-legend-row.mf-on { background: var(--line); }
+.mf-legend-off { opacity: 0.55; }
+.mf-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--line); flex: none; }
+.mf-legend-n { font-family: var(--mf-mono); font-size: 11px; color: var(--dim); width: 14px; flex: none; }
+.mf-legend-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.mf-legend-v { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; }
+.mf-legend-p { font-size: 11.5px; color: var(--dim); width: 62px; text-align: right; flex: none; }
+
 /* ---------------- the tool list ---------------- */
+.mf-seq {
+  font-family: var(--mf-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+  background: var(--line);
+  border-radius: 50%;
+  width: 19px;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.mf-card-on .mf-seq, .mf-watch-title .mf-seq { color: var(--accent); }
+.mf-moves { display: flex; gap: 2px; flex: none; }
+.mf-move {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+.mf-move:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.mf-move:disabled { opacity: 0.3; cursor: default; }
+.mf-chip-sm { font-size: 10.5px; padding: 1px 5px; }
+
 .mf-group { display: flex; align-items: baseline; gap: 10px; margin: 16px 0 6px; }
 .mf-group-k {
   font-family: var(--mf-mono);
@@ -241,9 +324,10 @@
 .mf-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mf-card-on { border-left-color: var(--accent); border-color: rgba(79, 209, 224, 0.4); }
 .mf-card-top { display: flex; align-items: center; gap: 8px; }
-.mf-card-name { font-weight: 600; font-size: 14px; }
+/* the name takes the slack, so the average and the move buttons sit at the
+   right edge whether or not the tool has been timed yet */
+.mf-card-name { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; }
 .mf-card-avg {
-  margin-left: auto;
   font-family: var(--mf-mono);
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;

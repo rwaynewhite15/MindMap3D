@@ -24,10 +24,15 @@ and turns on **AI generation** simply by setting environment variables.
   before. See [Plugins](#plugins).
 - **The Manufacturing plugin — a cycle-time stopwatch for the shop floor.** The first
   add-on. Time a cycle and it is recorded against one **tool**: part, machine, op,
-  station, insert, indexes per insert, inserts per op, and expected tool life. Enough
-  cycles and it answers what gets asked at the machine — how many parts an edge lasts at
-  the measured cycle time, how often to index, how many inserts a hundred parts costs.
-  Install it with `node tools/install-plugin.js manufacturing`.
+  running order, station, insert, indexes per insert, inserts per op, and expected tool
+  life. Enough cycles and it answers what gets asked at the machine — how many parts an
+  edge lasts at the measured cycle time, how often to index, how many inserts a hundred
+  parts costs. Install it with `node tools/install-plugin.js manufacturing`.
+- **The op's cycle, charted across its tools.** Tools carry a **sequence** — 1 cuts
+  first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
+  the op's total, with a stacked bar dividing it between the tools in the order they
+  run. The segments step along one cyan ramp light→dark so the running order reads in
+  the color, and the table beneath is both the legend and the numbers.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
@@ -485,9 +490,10 @@ last one, so a run of parts gives a run of cycle times without stopping the watc
 measured elsewhere is typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>,
 <kbd>L</kbd> and <kbd>R</kbd> start/stop, mark a cycle and reset.
 
-Each tool carries **part**, **machine**, **op**, **station**, tool description, **insert**,
-**indexes per insert**, **inserts per op**, expected **tool life** (cutting minutes per
-edge) and optionally insert cost. From the measured average, the screen derives:
+Each tool carries **part**, **machine**, **op**, **seq** (where it falls in the running
+order), **station**, tool description, **insert**, **indexes per insert**, **inserts per
+op**, expected **tool life** (cutting minutes per edge) and optionally insert cost. From
+the measured average, the screen derives:
 
 ```
 parts per edge    = tool life minutes × 60 ÷ average cycle seconds
@@ -496,9 +502,20 @@ inserts / 100     = inserts per op × 100 ÷ parts per insert
 cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
 ```
 
-Tools group by part, machine and op, and each group totals the measured cycle across its
-timed tools — the op's real cycle time, built from the tools that make it up. **⤓ CSV**
-downloads every recorded cycle, one row each, for a spreadsheet.
+Tools group by part, machine and op and run in **sequence order** — a new tool takes the
+next number in its op, ↑ / ↓ move it, and the op renumbers itself so the sequence is
+always 1..n. The **Op cycle** panel sums the tools' averages into the op's real cycle
+time and draws a stacked bar dividing it between them in the order they cut, each segment
+sized by its share. The table beneath the bar is the legend and the numbers at once, and
+hovering or tabbing to either half lights up the other. Segment fills step along one cyan
+ramp light→dark with the running order — validated for monotone lightness, adjacent step
+separation, single hue, and a darkest step that still clears the dark chart surface — so
+the order reads in the color rather than in eight unrelated hues. Tools with nothing timed
+yet are listed as **not timed**, with a line saying how many, because the total is what
+has been measured rather than a finished op.
+
+**⤓ CSV** downloads every recorded cycle, one row each, carrying its tool and place in the
+op, ordered the way the job runs.
 
 The watch keeps time from the clock rather than counting up, so a phone that sleeps
 mid-cycle, a backgrounded tab and a page reload all come back reading correctly. Full

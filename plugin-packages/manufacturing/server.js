@@ -23,6 +23,7 @@ const MAX_RUNS = 300;         // recorded cycles kept per tool, newest first
 const MAX_RUN_SEC = 86400;    // a single cycle longer than a day is a stuck timer
 const MAX_INDEXES = 64;       // cutting edges on one insert
 const MAX_INSERTS = 200;      // inserts mounted in one tool
+const MAX_SEQ = 999;          // position in the op's running order
 const MAX_LIFE_MIN = 100000;  // expected life per edge, in minutes of cut time
 const MAX_COST = 100000;      // currency units for one insert
 
@@ -68,6 +69,9 @@ module.exports = function (ctx) {
       machine: text(raw.machine, 60),
       op: text(raw.op, 40),
       station: text(raw.station, 20),   // turret position / pocket, e.g. T0303
+      // Where this tool falls in the op's running order — 1 is first to cut.
+      // 0 means it has not been placed yet, and sorts after the ones that have.
+      seq: num(raw.seq, MAX_SEQ, true),
       desc: text(raw.desc, 80),         // what the tool is: "80° CNMG rougher"
       insert: text(raw.insert, 60),     // insert designation, e.g. CNMG432-MP
       indexes: num(raw.indexes, MAX_INDEXES, true),
