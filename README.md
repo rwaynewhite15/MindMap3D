@@ -17,6 +17,17 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
+  `plugins/` folder at startup and adds whatever is there: a screen of its own in the top
+  navigation, its own API namespace, and private per-account storage. Nothing ships
+  enabled, and an install with an empty `plugins/` folder is exactly the app it was
+  before. See [Plugins](#plugins).
+- **The Manufacturing plugin — a cycle-time stopwatch for the shop floor.** The first
+  add-on. Time a cycle and it is recorded against one **tool**: part, machine, op,
+  station, insert, indexes per insert, inserts per op, and expected tool life. Enough
+  cycles and it answers what gets asked at the machine — how many parts an edge lasts at
+  the measured cycle time, how often to index, how many inserts a hundred parts costs.
+  Install it with `node tools/install-plugin.js manufacturing`.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
@@ -423,7 +434,8 @@ lives in the database.
 ### Schema migrations are automatic and safe
 
 On boot the Postgres backend adds any missing columns with `ADD COLUMN IF NOT EXISTS`
-(including the `following`/`followers` follow graph and the `desk` board) and runs a
+(including the `following`/`followers` follow graph, the `desk` board, and the
+`plugin_data` bag installed plugins write to) and runs a
 **one-time, idempotent**
 migration that wraps each legacy single-map account into the multi-map shape. It only
 *reads* the old `map` column to build the first entry of the new `maps` array — it never
@@ -431,12 +443,141 @@ drops or overwrites existing bubbles, and re-running it is a no-op. Notes, links
 likes, and chat/activity history all ride along inside the map JSON, so no schema change
 is required for them.
 
+## Plugins
+
+Some things belong to one trade rather than to everybody. A plugin is how those get
+added: a folder you put in `plugins/`, read once at startup, that contributes **a screen
+in the top navigation**, **its own API namespace**, and **private per-account storage** —
+and nothing else. It cannot reach the map editor, the desk, or another plugin's data.
+
+Nothing ships enabled. With an empty `plugins/` folder — the default — the app is exactly
+what it is without the plugin system, and `/api/plugins` answers with an empty list.
+
+### Installing one
+
+```bash
+node tools/install-plugin.js manufacturing            # a package that ships with this repo
+node tools/install-plugin.js ~/Downloads/plugin.zip   # one that was downloaded
+node tools/install-plugin.js ~/Downloads/plugin/      # one already unzipped
+node tools/install-plugin.js --list                   # what is installed
+node tools/install-plugin.js --remove manufacturing   # take one back off
+```
+
+Then **restart the server** — plugins are read at startup. Installing is only ever "put
+the folder in `plugins/`"; the installer adds the checks worth doing first: that the
+package really is a plugin, that its manifest names files it actually ships, and that a
+downloaded archive writes nothing outside the folder it claims.
+
+`plugins/*` is gitignored, the way `node_modules` is: an installed plugin came from a
+download and is reinstalled rather than committed. On a hosted deployment, add
+`node tools/install-plugin.js <name>` to the build command, or commit the folder
+deliberately with `git add -f plugins/<id>`.
+
+**A plugin's `server.js` runs inside the server process, with everything that process can
+reach**, and its client code runs on the page alongside the app. Install ones you trust,
+from where you meant to get them.
+
+### Manufacturing — the first plugin
+
+A cycle-time stopwatch, and the tool records the times belong to. **Start** when the tool
+goes in, **Cycle done** at the end of each part — each press records the split since the
+last one, so a run of parts gives a run of cycle times without stopping the watch. A time
+measured elsewhere is typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>,
+<kbd>L</kbd> and <kbd>R</kbd> start/stop, mark a cycle and reset.
+
+Each tool carries **part**, **machine**, **op**, **station**, tool description, **insert**,
+**indexes per insert**, **inserts per op**, expected **tool life** (cutting minutes per
+edge) and optionally insert cost. From the measured average, the screen derives:
+
+```
+parts per edge    = tool life minutes × 60 ÷ average cycle seconds
+parts per insert  = parts per edge × indexes per insert
+inserts / 100     = inserts per op × 100 ÷ parts per insert
+cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
+```
+
+Tools group by part, machine and op, and each group totals the measured cycle across its
+timed tools — the op's real cycle time, built from the tools that make it up. **⤓ CSV**
+downloads every recorded cycle, one row each, for a spreadsheet.
+
+The watch keeps time from the clock rather than counting up, so a phone that sleeps
+mid-cycle, a backgrounded tab and a page reload all come back reading correctly. Full
+details in [`plugin-packages/manufacturing/README.md`](plugin-packages/manufacturing/README.md).
+
+### Writing one
+
+A plugin is a folder with a `plugin.json`:
+
+```json
+{
+  "id": "manufacturing",
+  "name": "Manufacturing",
+  "version": "1.0.0",
+  "description": "What it is, in a sentence.",
+  "hostVersion": 1,
+  "nav": { "label": "Shop" },
+  "client": "client.js",
+  "styles": "client.css",
+  "server": "server.js"
+}
+```
+
+| Field | What it does |
+|---|---|
+| `id` | Lowercase letters, numbers and dashes; must match the folder name. It is the URL prefix for both the plugin's assets and its API. |
+| `nav.label` | What the shell puts in the top navigation. The screen lives at `#/p/<id>`. |
+| `client` / `styles` | Files inside the plugin's `public/`, served at `/plugins/<id>/…` and loaded by the shell on boot. |
+| `server` | Optional. A module mounted under `/api/plugins/<id>/…`. |
+| `hostVersion` | The plugin contract it was written against. A plugin needing a newer host than the server implements is refused at startup rather than half-working. |
+
+The client script registers a screen as it loads:
+
+```js
+window.MindMapPlugins.register({
+  id: 'manufacturing',
+  mount(section, ctx) { /* build the screen once, into the section given */ },
+  open(sub, ctx) { /* entered or re-entered; sub is the path after #/p/<id>/ */ },
+  leave() { /* navigating away — flush a pending save */ },
+});
+```
+
+`ctx` is the whole of what a plugin gets from the shell: `ctx.api(path, method, body)` for
+its own routes, `ctx.me()` for who is signed in, `ctx.go(sub)` to move around inside its
+own screen.
+
+The server module is a factory, called once at startup:
+
+```js
+module.exports = ctx => ({
+  async handle(req, res, sub, user) {
+    if (req.method === 'GET' && sub === '/') {
+      ctx.sendJSON(res, 200, { thing: ctx.data.get(user) });
+      return true;             // handled
+    }
+    return false;              // not ours — the host answers 404
+  },
+});
+```
+
+Sign-in is already enforced before `handle` runs, so `user` is always a signed-in account,
+and the CSRF check every other write route gets applies here too. `ctx.data.get(user)` and
+`ctx.data.save(user, value)` are one JSON value per plugin per account, kept on the user
+record — persistence without a storage backend of the plugin's own, on Postgres and on the
+local JSON file alike. It rides along with **Export my data** and is deleted with the
+account, and it survives the plugin being removed and reinstalled.
+
+Package one for distribution with `node tools/package-plugin.js <name>`, which writes
+`dist/mindmapshare-plugin-<id>-<version>.zip` — that file is the whole download.
+
 ## Files
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, the plugin host, static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
+| `plugins/` | Where installed plugins go. Empty by default; contents are not committed |
+| `plugin-packages/` | Plugin source that ships with this repo, ready to install or package |
+| `tools/` | `install-plugin.js`, `package-plugin.js`, and the small zip reader/writer they share |
 | `data/data.json` | Local-mode user data (created on first run; not used with `DATABASE_URL`) |
 | `.env.example` | Template for running locally against Postgres |
 | `start.bat` | Windows launcher: starts the server and opens the app |

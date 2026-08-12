@@ -1506,16 +1506,24 @@ let chatItems = [];      // chat + activity entries for the open map
 let chatOpen = false;
 let chatUnread = 0;
 
+// Add-ons this server has installed, keyed by plugin id. Empty on an install
+// with no plugins, which is the default — see the plugin host section below.
+const pluginViews = new Map(); // id → { meta, section, link, def, ctx, mounted }
+let activePluginId = null;     // the add-on screen currently on show, if any
+const pluginViewName = id => 'plugin:' + id;
+
 const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
 
 function show(name) {
   if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
+  leaveActivePlugin(name);              // and give an add-on the same chance to flush
   if (name !== 'profile') hideNoteViewer(); // the note reader belongs to the profile map
   // the outline serves both the editor and the profile viewer; close it only when
   // leaving both (the rebuild for the new map happens after visibility flips below)
   if (name !== 'map' && name !== 'profile' && outlineOpen) toggleOutline(false);
   $('#btnAI').hidden = !(me && me.aiEnabled); // AI button only when the server enables it
   for (const s of sections) $('#view-' + s).hidden = s !== name;
+  for (const [id, p] of pluginViews) p.section.hidden = name !== pluginViewName(id);
   // now that the active section is set, rebuild the outline against its map
   if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
   // hide the top bar (and its hamburger) only on the full-screen auth card
@@ -1556,6 +1564,11 @@ function route() {
     return;
   }
 
+  // an installed add-on's screen: #/p/<id>, with anything after it the add-on's
+  // own to read (#/p/manufacturing/t/<toolId>, say)
+  const pluginRoute = h.match(/^p\/([a-z0-9-]{2,32})(?:\/(.*))?$/);
+  if (pluginRoute) { openPlugin(pluginRoute[1], pluginRoute[2] || ''); return; }
+
   if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
   if (h === 'home') { show('home'); loadFeed(); return; }
   if (h === 'desk') { show('desk'); loadDesk(); return; }
@@ -1565,6 +1578,164 @@ function route() {
   show('map');
 }
 window.addEventListener('hashchange', route);
+
+/* ================================================================
+   Plugin host — screens contributed by separately installed add-ons
+
+   The server answers /api/plugins with whatever is installed in its plugins/
+   directory; on a plain install that list is empty and none of this does
+   anything. For each add-on the shell makes a nav link and an empty section,
+   loads the add-on's stylesheet and script, and waits for the script to call
+   window.MindMapPlugins.register(). Everything after that — what the screen
+   looks like, what it stores — belongs to the add-on.
+
+   An add-on gets a screen and its own API namespace, and nothing else: it
+   cannot reach the map editor, the desk, or another add-on's data.
+================================================================ */
+const PLUGIN_HOST_VERSION = 1; // the contract below; bumped only on a breaking change
+
+// What an add-on is handed. Small on purpose: its own API, who is signed in,
+// and a way to move around inside its own screen.
+function pluginCtx(id) {
+  return {
+    id,
+    hostVersion: PLUGIN_HOST_VERSION,
+    // The add-on's own routes, relative to its namespace:
+    // ctx.api('/tools') → /api/plugins/<id>/tools
+    api: (path, method, body) => api('/api/plugins/' + id + (path || ''), method, body),
+    // A copy of the signed-in user, or null. A copy so an add-on cannot edit it.
+    me: () => (me ? { ...me } : null),
+    // Navigate within the add-on: ctx.go('t/abc') → #/p/<id>/t/abc
+    go: sub => { location.hash = '#/p/' + id + (sub ? '/' + sub : ''); },
+  };
+}
+
+window.MindMapPlugins = {
+  hostVersion: PLUGIN_HOST_VERSION,
+  // Called by an add-on's client script as it loads. The screen it describes is
+  // built the first time someone opens it, not here.
+  register(def) {
+    const id = def && def.id;
+    const entry = pluginViews.get(id);
+    if (!entry) {
+      console.error('An add-on registered under an id this server has not installed:', id);
+      return false;
+    }
+    if (typeof def.mount !== 'function') {
+      console.error('Add-on "' + id + '" registered without a mount(host, ctx) function.');
+      return false;
+    }
+    entry.def = def;
+    return true;
+  },
+};
+
+// Load one add-on's client files and give it a place to live. Resolves once its
+// script has run (and so has had its chance to register).
+function installPluginClient(meta) {
+  const main = document.querySelector('main');
+  const section = document.createElement('section');
+  section.id = 'view-plugin-' + meta.id;
+  section.hidden = true;
+  main.appendChild(section);
+
+  // Nav link, next to the other personal screens rather than after Settings.
+  const link = document.createElement('a');
+  link.href = '#/p/' + meta.id;
+  link.dataset.nav = pluginViewName(meta.id);
+  link.dataset.auth = '';        // add-on screens are for signed-in accounts
+  link.hidden = !me;
+  link.textContent = meta.navLabel || meta.name || meta.id;
+  link.title = meta.description || '';
+  const nav = $('#mainNav');
+  nav.insertBefore(link, nav.querySelector('a[data-nav="browse"]'));
+
+  pluginViews.set(meta.id, { meta, section, link, def: null, ctx: pluginCtx(meta.id), mounted: false });
+
+  if (meta.styles) {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = meta.styles;
+    document.head.appendChild(css);
+  }
+  if (!meta.client) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = meta.client;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('its client script could not be loaded'));
+    document.head.appendChild(s);
+  });
+}
+
+// Take an add-on back off the shell when it fails to load or to register, so a
+// broken add-on leaves a nav link that goes nowhere rather than a dead screen.
+function removePluginClient(id) {
+  const entry = pluginViews.get(id);
+  if (!entry) return;
+  entry.link.remove();
+  entry.section.remove();
+  pluginViews.delete(id);
+}
+
+async function loadInstalledPlugins() {
+  let list = [];
+  try { list = (await api('/api/plugins')).plugins || []; }
+  catch { return; } // nothing installed, or a server too old to be asked
+  for (const meta of list) {
+    try {
+      await installPluginClient(meta);
+      if (!pluginViews.get(meta.id).def) throw new Error('it loaded but never registered a screen');
+    } catch (err) {
+      console.error('The "' + (meta.name || meta.id) + '" add-on was not loaded — ' + err.message);
+      removePluginClient(meta.id);
+    }
+  }
+}
+
+function openPlugin(id, sub) {
+  const entry = pluginViews.get(id);
+  // A link to an add-on this server doesn't have (an old bookmark, a shared
+  // link from an install that does) lands on the home feed rather than nowhere.
+  if (!entry || !entry.def) { location.hash = '#/home'; return; }
+  show(pluginViewName(id));
+  activePluginId = id;
+  if (!entry.mounted) {
+    entry.mounted = true;
+    try {
+      entry.def.mount(entry.section, entry.ctx);
+    } catch (err) {
+      console.error('Add-on "' + id + '" failed to open:', err);
+      entry.section.textContent = 'The ' + entry.meta.name + ' add-on could not open. ' + err.message;
+      return;
+    }
+  }
+  if (entry.def.open) {
+    try { entry.def.open(sub, entry.ctx); }
+    catch (err) { console.error('Add-on "' + id + '" failed to open ' + sub + ':', err); }
+  }
+}
+
+// Leaving an add-on's screen for anything else: its cue to flush a pending
+// save, the way the desk does on its way out.
+function leaveActivePlugin(nextName) {
+  if (!activePluginId || nextName === pluginViewName(activePluginId)) return;
+  const entry = pluginViews.get(activePluginId);
+  activePluginId = null;
+  if (entry && entry.def && entry.def.leave) {
+    try { entry.def.leave(); } catch (err) { console.error(err); }
+  }
+}
+
+// The page itself going away: every add-on that has been opened gets the same
+// last call, whether or not its screen is the one on show.
+window.addEventListener('pagehide', () => {
+  for (const entry of pluginViews.values()) {
+    if (entry.mounted && entry.def && entry.def.leave) {
+      try { entry.def.leave(); } catch { /* nothing left to do about it */ }
+    }
+  }
+});
 
 /* ================================================================
    Mobile hamburger menu (top nav)
@@ -5811,5 +5982,6 @@ $('#formRegister').addEventListener('submit', async e => {
     refreshBadge();
     startNotifications();
   } catch { me = null; }
+  await loadInstalledPlugins(); // add-ons, if this server has any installed
   route();
 })();
