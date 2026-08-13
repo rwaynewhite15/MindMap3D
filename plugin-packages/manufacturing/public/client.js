@@ -82,6 +82,41 @@
 
   const elapsed = () => watch.accum + (watch.running ? Date.now() - watch.since : 0);
 
+  /* ---------------- what is folded away ----------------
+     Which lists are collapsed is a view preference, not a shop record: it is
+     about this screen on this device, so it lives beside the watch in local
+     storage rather than being saved to the account and pushed onto every other
+     device signed into it. It is held in memory too, because the lists are rebuilt from
+     scratch on every save and a fold kept only in the DOM would spring open.
+  ---------------------------------------------------------------- */
+  let folded = new Set();
+
+  const foldKey = () => {
+    const who = ctx && ctx.me() ? ctx.me().username : '';
+    return 'mf.folded.' + who;
+  };
+  function saveFolded() {
+    try { localStorage.setItem(foldKey(), JSON.stringify([...folded])); } catch { /* private mode */ }
+  }
+  function restoreFolded() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(foldKey()) || '[]');
+      if (Array.isArray(raw)) folded = new Set(raw.filter(k => typeof k === 'string').slice(0, 400));
+    } catch { /* nothing saved, or unreadable: everything open */ }
+  }
+
+  // A filter outranks a fold. Searching for something and being shown a closed
+  // heading that contains it would be the screen hiding the answer it was just
+  // asked for, so while a filter is on, everything is open.
+  const isFolded = key => !filter && folded.has(key);
+
+  function toggleFold(key, redraw) {
+    if (folded.has(key)) folded.delete(key);
+    else folded.add(key);
+    saveFolded();
+    redraw();
+  }
+
   /* ---------------- small helpers ---------------- */
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -123,6 +158,19 @@
     }
     s.addEventListener('change', () => onChange(s.value));
     return s;
+  }
+
+  // A heading that opens and closes what is under it. The mark and the title
+  // are one button so the whole heading is the hit target, which leaves the
+  // buttons beside it — + Tool here, Clone, Edit — doing their own jobs.
+  function foldToggle(key, title, titleClass, redraw) {
+    const open = !isFolded(key);
+    const b = button('mf-fold', '', () => toggleFold(key, redraw),
+      (open ? 'Hide ' : 'Show ') + title);
+    b.setAttribute('aria-expanded', String(open));
+    b.appendChild(el('span', 'mf-fold-mark', open ? '▾' : '▸'));
+    b.appendChild(el('span', 'mf-fold-title ' + (titleClass || ''), title));
+    return b;
   }
 
   // mm:ss.t — the shape a stopwatch reads in, at the tenth a hand can react to
@@ -442,6 +490,7 @@
     renderRuns();
     renderForm();
     renderChart();
+    renderSearch();
     renderParts();
     renderMachines();
     renderTools();
@@ -985,16 +1034,20 @@
       created = { id: newId('m'), name, notes, createdAt: Date.now(), updatedAt: Date.now() };
       shop.machines.push(created);
     }
-    const copy = created && draft.cloneOf ? copyTools(draft.cloneOf, created.id) : null;
+    const from = created && draft.cloneOf ? machineById(draft.cloneOf) : null;
+    const copy = from ? copyTools(draft.cloneOf, created.id, !!draft.withOps) : null;
     done();
     if (copy) {
-      const from = machineById(draft.cloneOf);
-      flash(copy.copied
-        ? name + ' is tooled like ' + (from ? from.name : 'the original') + ' — ' + copy.copied +
-          (copy.copied === 1 ? ' tool' : ' tools') + ' copied' +
-          (copy.skipped ? ', ' + copy.skipped + ' left out for want of room' : '') +
-          '. Put each one on an operation to give it a cutting time.'
-        : name + ' was added, but the machine it was copied from has no tools on it.');
+      const tail = copy.skipped ? ', ' + copy.skipped + ' left out for want of room' : '';
+      flash(!copy.copied
+        ? name + ' was added, but the machine it was copied from has no tools on it.'
+        : draft.withOps
+          ? name + ' is set up like ' + from.name + ' — ' + copy.copied +
+            (copy.copied === 1 ? ' setup' : ' setups') + ' copied' + tail +
+            '. Nothing has been timed on it yet.'
+          : name + ' is tooled like ' + from.name + ' — ' + copy.copied +
+            (copy.copied === 1 ? ' tool' : ' tools') + ' copied' + tail +
+            '. Put each one on an operation to give it a cutting time.');
     }
     // A machine with nothing on it does nothing, so go straight on to setting a
     // tool up on it — with the machine already filled in. A clone that already
@@ -1008,42 +1061,53 @@
      A second machine of the same kind is tooled the same way, and typing that
      list in again is the work the record exists to avoid. Cloning copies the
      tools, in the stations they sit in — one entry per tool per station,
-     however many operations it happens to cut there.
+     however many operations it happens to cut there — and leaves what each is
+     cutting to whoever sets the machine up. Which ops a machine runs is a
+     decision, not a property of the machine, and the cutting time, the edges
+     indexed and the parts between indexes are facts about the op being cut.
 
-     It copies nothing else, because nothing else is a fact about the machine.
-     Which operations it runs is the new machine's own business, and the
-     cutting time, the edges indexed and the parts between indexes are all
-     facts about the op being cut, so they are left for whoever sets it up.
-     Neither are the recorded cycles copied: a cycle time is a measurement
-     taken on one machine, and carrying it onto another would be inventing
-     data about a machine nobody has stood in front of.
+     A second machine standing in for the first runs the same work, though, so
+     the clone can be told to bring the operations too: each setup then arrives
+     whole, on the same op, with the cutting time and tool life worked out for
+     it. That is a claim about the new machine — that it cuts the same op in
+     the same time — so it is asked for rather than assumed.
+
+     The recorded cycles are never copied either way. A cycle time is a
+     measurement taken on one machine, and carrying it onto another would be
+     inventing data about a machine nobody has stood in front of.
   ---------------------------------------------------------------- */
-  function copyTools(fromId, toId) {
+  function copyTools(fromId, toId, withOps) {
     const now = Date.now();
     let copied = 0, skipped = 0, seq = 0;
     const seen = new Set();
     for (const a of jobsOnMachine(fromId).sort(bySeq)) {
-      const key = a.toolId + ' ' + a.station.toLowerCase();
-      if (seen.has(key)) continue; // the same tool in the same pocket, on another op
-      seen.add(key);
+      // Without the operations, a tool cutting three ops from one pocket is one
+      // tool in one pocket and comes across once. With them, each op it is set
+      // up for is its own setup, and each one comes.
+      if (!withOps) {
+        const key = a.toolId + ' ' + a.station.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
       if (shop.assignments.length >= limits.maxAssignments) { skipped++; continue; }
       shop.assignments.push({
         id: newId('a'),
         toolId: a.toolId,
         machineId: toId,
-        operationId: '',
+        operationId: withOps ? a.operationId : '',
         station: a.station,
-        seq: ++seq,
-        cutSec: 0,
-        indexEdges: 0,
-        partsPerIndex: 0,
-        notes: '',
+        seq: withOps ? a.seq : ++seq,
+        cutSec: withOps ? a.cutSec : 0,
+        indexEdges: withOps ? a.indexEdges : 0,
+        partsPerIndex: withOps ? a.partsPerIndex : 0,
+        notes: withOps ? a.notes : '',
         runs: [],
         createdAt: now,
         updatedAt: now,
       });
       copied++;
     }
+    for (const key of new Set(jobsOnMachine(toId).map(opKey))) renumberOp(key);
     return { copied, skipped };
   }
 
@@ -1330,13 +1394,32 @@
       cloneOf ? 'Clone ' + cloneOf.name : FORM_TITLES[kind][draft.id ? 1 : 0]));
     if (cloneOf) {
       const tools = distinctTools(cloneOf.id);
-      box.appendChild(el('div', 'mf-note', tools
-        ? 'Saving this makes a second machine with the ' + tools +
-          (tools === 1 ? ' tool' : ' tools') + ' on ' + cloneOf.name +
-          ' copied onto it, in the same stations — the tools and nothing else. Which operations they ' +
-          'cut, and the cutting times and tool life that go with them, belong to the op, and the ' +
-          'cycles timed on ' + cloneOf.name + ' were measured on that machine.'
-        : 'There are no tools on ' + cloneOf.name + ' yet, so this is a new machine and nothing more.'));
+      const setups = jobsOnMachine(cloneOf.id).length;
+      box.appendChild(el('div', 'mf-note', !tools
+        ? 'There are no tools on ' + cloneOf.name + ' yet, so this is a new machine and nothing more.'
+        : draft.withOps
+          ? 'Saving this makes a second machine set up like ' + cloneOf.name + ': all ' + setups +
+            (setups === 1 ? ' setup' : ' setups') + ' copied — the same tools, in the same stations, ' +
+            'on the same operations, with the cutting times, indexable edges and tool life worked out ' +
+            'for them. The cycles timed on ' + cloneOf.name + ' stay with it: they were measured on ' +
+            'that machine.'
+          : 'Saving this makes a second machine with the ' + tools +
+            (tools === 1 ? ' tool' : ' tools') + ' on ' + cloneOf.name +
+            ' copied onto it, in the same stations — the tools and nothing else. Which operations they ' +
+            'cut, and the cutting times and tool life that go with them, belong to the op, and the ' +
+            'cycles timed on ' + cloneOf.name + ' were measured on that machine.'));
+      if (tools) {
+        const opt = el('label', 'mf-check');
+        const box2 = el('input');
+        box2.type = 'checkbox';
+        box2.checked = !!draft.withOps;
+        box2.addEventListener('change', () => { draft.withOps = box2.checked; renderForm(); });
+        opt.appendChild(box2);
+        opt.appendChild(el('span', null,
+          'Bring the operations too — each tool on the op it cuts on ' + cloneOf.name +
+          ', with that op\'s cutting time and tool life'));
+        box.appendChild(opt);
+      }
     }
     const grid = el('div', 'mf-grid');
 
@@ -1469,7 +1552,20 @@
       tool && tool.partNumber, tool && tool.desc).includes(filter);
   }
 
-  function searchBox() {
+  // The filter narrows all three lists, so it sits above them rather than
+  // inside one of them — where folding that list away would take it with it.
+  // It is built once and then left alone: typing in it redraws the lists under
+  // it, and rebuilding the box you are typing in would lose the caret.
+  function renderSearch() {
+    const box = els.search;
+    const worth = shop && (shop.parts.length > 3 || shop.machines.length > 3 ||
+      shop.tools.length > 3 || shop.assignments.length > 3);
+    box.hidden = !worth;
+    if (!worth) { box.innerHTML = ''; return; }
+    if (box.firstChild) {
+      if (box.firstChild.value !== filter) box.firstChild.value = filter;
+      return;
+    }
     const search = el('input', 'mf-input mf-search');
     search.type = 'search';
     search.placeholder = 'Filter by part, op, machine, tool…';
@@ -1480,28 +1576,27 @@
       renderMachines();
       renderTools();
     });
-    return search;
+    box.appendChild(search);
+  }
+
+  // Every list heading is a section head with a count and a fold on it, so the
+  // three of them read and behave alike.
+  function sectionHead(key, title, count, redraw, action) {
+    const head = el('div', 'mf-section-head');
+    head.appendChild(foldToggle(key, title, 'mf-section-title', redraw));
+    head.appendChild(el('span', 'mf-fold-count', String(count)));
+    if (action) head.appendChild(action);
+    return head;
   }
 
   function renderParts() {
     const box = els.parts;
-    // the lists are rebuilt as the filter is typed, so note where the caret was
-    const focused = document.activeElement;
-    const hadSearch = !!(focused && focused.classList && focused.classList.contains('mf-search'));
-    const caret = hadSearch ? focused.selectionStart : 0;
     box.innerHTML = '';
     if (!shop) return;
 
-    const head = el('div', 'mf-section-head');
-    head.appendChild(el('div', 'mf-section-title', 'Parts and operations'));
-    head.appendChild(button('mf-btn mf-btn-sm', '+ Part', () => openForm('part')));
-    box.appendChild(head);
-
-    if (shop.assignments.length > 3 || shop.tools.length > 3 || shop.machines.length > 3 || shop.parts.length > 3) {
-      const search = searchBox();
-      box.appendChild(search);
-      if (hadSearch) { search.focus(); search.setSelectionRange(caret, caret); }
-    }
+    box.appendChild(sectionHead('sec:parts', 'Parts and operations', shop.parts.length, renderParts,
+      button('mf-btn mf-btn-sm', '+ Part', () => openForm('part'))));
+    if (isFolded('sec:parts')) return;
 
     if (!shop.parts.length) {
       box.appendChild(el('div', 'mf-note',
@@ -1517,16 +1612,23 @@
       if (filter && !shown.length && !matchesPart(p)) continue;
       shownAny = true;
 
+      const fold = 'part:' + p.id;
       const block = el('div', 'mf-machine');
       const ph = el('div', 'mf-machine-head');
-      ph.appendChild(el('div', 'mf-machine-k', partName(p)));
-      if (p.number && p.desc) ph.appendChild(el('div', 'mf-machine-v', p.desc));
+      ph.appendChild(foldToggle(fold, partName(p), 'mf-machine-k', renderParts));
+      // folded, the heading is all there is, so it carries the count as well
+      ph.appendChild(el('div', 'mf-machine-v', [
+        p.number && p.desc ? p.desc : '',
+        ops.length ? ops.length + (ops.length === 1 ? ' op' : ' ops') : 'no ops yet',
+      ].filter(Boolean).join(' · ')));
       const pb = el('div', 'mf-machine-btns');
       pb.appendChild(button('mf-btn mf-btn-sm', '+ Operation', () => openForm('operation', '', { partId: p.id }),
         'Another step in making this part'));
       pb.appendChild(button('mf-link', 'Edit', () => openForm('part', p.id)));
       ph.appendChild(pb);
       block.appendChild(ph);
+
+      if (isFolded(fold)) { box.appendChild(block); continue; }
 
       if (!shown.length) {
         block.appendChild(el('div', 'mf-note', ops.length
@@ -1577,10 +1679,9 @@
     box.innerHTML = '';
     if (!shop) return;
 
-    const head = el('div', 'mf-section-head');
-    head.appendChild(el('div', 'mf-section-title', 'Machines'));
-    head.appendChild(button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
-    box.appendChild(head);
+    box.appendChild(sectionHead('sec:machines', 'Machines', shop.machines.length, renderMachines,
+      button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
+    if (isFolded('sec:machines')) return;
 
     if (!shop.machines.length) {
       box.appendChild(el('div', 'mf-note', 'No machines yet. A machine is what a tool gets set up on.'));
@@ -1597,9 +1698,10 @@
       if (filter && !jobs.length && !matchesMachine(m)) continue;
       shownAny = true;
 
+      const fold = 'machine:' + m.id;
       const block = el('div', 'mf-machine');
       const mh = el('div', 'mf-machine-head');
-      mh.appendChild(el('div', 'mf-machine-k', m.name));
+      mh.appendChild(foldToggle(fold, m.name, 'mf-machine-k', renderMachines));
       let total = 0, timed = 0;
       for (const a of all) {
         const s = statsFor(a);
@@ -1620,6 +1722,8 @@
       mb.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id)));
       mh.appendChild(mb);
       block.appendChild(mh);
+
+      if (isFolded(fold)) { box.appendChild(block); continue; }
 
       if (!jobs.length) {
         block.appendChild(el('div', 'mf-note', all.length
@@ -1729,10 +1833,9 @@
     box.innerHTML = '';
     if (!shop) return;
 
-    const head = el('div', 'mf-section-head');
-    head.appendChild(el('div', 'mf-section-title', 'Tools'));
-    head.appendChild(button('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool')));
-    box.appendChild(head);
+    box.appendChild(sectionHead('sec:tools', 'Tools', shop.tools.length, renderTools,
+      button('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool'))));
+    if (isFolded('sec:tools')) return;
 
     if (!shop.tools.length) {
       box.appendChild(el('div', 'mf-note',
@@ -2451,6 +2554,8 @@
     els.form.hidden = true;
     els.chart = el('div', 'mf-chart');
     els.chart.hidden = true;
+    els.search = el('div', 'mf-searchbox');
+    els.search.hidden = true;
     els.parts = el('div', 'mf-parts');
     els.machines = el('div', 'mf-machines');
     els.tools = el('div', 'mf-tools');
@@ -2459,6 +2564,7 @@
     page.appendChild(els.runs);
     page.appendChild(els.form);
     page.appendChild(els.chart);
+    page.appendChild(els.search);
     page.appendChild(els.parts);
     page.appendChild(els.machines);
     page.appendChild(els.tools);
@@ -2466,6 +2572,7 @@
 
     document.addEventListener('keydown', onKey);
     restoreWatch();
+    restoreFolded();
     render(); // the loading state; open() runs straight after this and fetches
   }
 

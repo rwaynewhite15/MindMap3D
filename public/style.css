@@ -220,7 +220,12 @@ input, textarea { font-family: inherit; }
 .notif-pushstate { display: block; font-size: 11px; color: var(--dim); text-align: center; }
 
 main { flex: 1; position: relative; min-height: 0; }
-main > section { position: absolute; inset: 0; display: flex; flex-direction: column; }
+/* min-width: 0 so a screen is the width of the phone rather than the width of
+   the widest thing on it: a flex item's automatic minimum size is its content,
+   which lets one long word or one rigid row push a whole view wider than the
+   viewport and set the page scrolling sideways. */
+main > section { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; }
+main > section > * { min-width: 0; }
 main > section[hidden] { display: none; }
 
 /* ---------------- auth ---------------- */

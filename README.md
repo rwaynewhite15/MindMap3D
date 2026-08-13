@@ -51,10 +51,16 @@ and turns on **AI generation** simply by setting environment variables.
   reads in the color, and the table beneath is both the legend and the numbers.
 - **Clone a machine** when a second one of the same kind arrives. **Clone** suggests the
   next number after its name — `MC-101` → `MC-102`, `Lathe 3` → `Lathe 4` — and copies the
-  **tools** across, in the stations they sit in. Only the tooling: which operations the new
-  machine runs is its own business, and the cutting time and tool life are facts about the
-  op being cut, so a tool that cuts three ops on the original comes across once and waits
-  for one. The recorded cycles stay with the original, where they were measured.
+  **tools** across, in the stations they sit in. Only the tooling by default: which
+  operations the new machine runs is its own business, so a tool that cuts three ops on the
+  original comes across once and waits for one. Tick **bring the operations too** and each
+  setup arrives whole instead, on the same op with its cutting time and tool life. The
+  recorded cycles stay with the original either way, where they were measured.
+- **Fold away what you are not looking at.** Every list heading in Shopwatch opens and
+  closes what is under it — the three lists, and each part and each machine inside them.
+  A closed heading still carries its counts and its **+** button, and what is folded is
+  remembered on that device rather than saved to the account. Searching opens everything,
+  so a filter can never be answered by a closed heading.
 - **The top bar carries no title.** It is the account's toolbar and its notification bell,
   aligned to the right; the screen underneath says what it is.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
@@ -574,10 +580,17 @@ setups that were for it — the cutting times belong to the op.
 
 **Clone** on a machine stands a second one of the same kind up beside it: the next number
 after its name is suggested, and saving copies the tools across in the stations they sit
-in. Only the tools — a tool cutting three ops on the original arrives once, on no
-operation, because which ops the new machine runs is its own business and the cutting time
-and tool life belong to the op being cut. The recorded cycles stay with the original, where
-they were measured.
+in. Only the tools by default — a tool cutting three ops on the original arrives once, on
+no operation, because which ops the new machine runs is its own business and the cutting
+time and tool life belong to the op being cut. **Bring the operations too**, on the clone
+form, copies each setup whole instead: same op, same cutting time, same tool life, with the
+op then listing both machines. The recorded cycles stay with the original either way.
+
+Every heading folds. The three lists close, and so does each part and each machine inside
+them, with the counts and the **+** buttons staying on the closed heading — which is what
+makes a floor of a dozen machines readable on a phone. Folds live on the device, not in the
+shop record, and a filter opens everything so a search is never answered by a closed
+heading.
 
 Setups run in **sequence order** within a machine and an operation — a newly set-up tool
 takes the next number, ↑ / ↓ move it, and the op renumbers itself so the sequence is

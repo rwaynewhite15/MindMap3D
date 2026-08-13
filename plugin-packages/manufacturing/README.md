@@ -159,6 +159,17 @@ lists the crib, each tool with the machines it runs on as chips — click one to
 point the watch at that tool, on that machine, on that op. One filter box narrows
 all three.
 
+**Fold away what you are not looking at.** Every heading opens and closes what is
+under it — each of the three lists, and each part and each machine inside them.
+A closed heading still carries what it holds (a machine's tool count and measured
+cycle, a part's ops) and keeps its **+** button, so a shop with forty tools and a
+dozen machines can be read one block at a time, which is the difference between
+usable and not on a phone at the machine. What is folded is remembered on that
+device — it is a view preference, not part of the shop record, so it is not saved
+to the account and never reaches anyone else. **A filter outranks a fold**:
+searching opens everything, because a screen that hid the answer it was just
+asked for would be worse than useless.
+
 Deleting a machine takes its setups and leaves the tools in the crib; deleting a
 tool takes it out of every setup it was in; deleting an operation takes the
 setups that were for it, because the cutting times belong to the op. All of them
@@ -171,18 +182,25 @@ else gets a number put on the end — and saving copies **the tools** across, in
 stations they sit in. The suggested number is only a suggestion; type over it
 before saving if the machine is called something else.
 
-It copies the tooling and nothing else, because nothing else is a fact about the
-machine. A tool that cuts three operations on the original comes across once, as
-one tool in one station; **which operations the new machine runs is its own
-business**, and the cutting time, the indexable edges and the parts between
-indexes are all facts about the op being cut, so they are left for whoever sets it
-up. The **recorded cycles** stay with the original too: a cycle time is a
+By default it copies the tooling and nothing else, because nothing else is a fact
+about the machine. A tool that cuts three operations on the original comes across
+once, as one tool in one station; **which operations the new machine runs is its
+own business**, and the cutting time, the indexable edges and the parts between
+indexes are all facts about the op being cut. The clone therefore lists its tools
+under **No operation set** until each is put on one — which is a setup like any
+other, and the point at which it gets a cutting time.
+
+**Bring the operations too** — the tick box on the clone form — when the second
+machine is standing in for the first and running the same work. Each setup then
+arrives whole: the same tool, in the same station, on the same operation, with
+the cutting time, indexable edges and tool life worked out for it, and the op
+ends up listing both machines. That is a claim about the new machine — that it
+cuts the same op in the same time — so it is asked for rather than assumed, and
+the form says which of the two it is about to do before you save.
+
+The **recorded cycles** stay with the original either way: a cycle time is a
 measurement taken on one machine, and carrying it onto another would be inventing
 data about a machine nobody has stood in front of.
-
-The clone therefore lists its tools under **No operation set** until each is put
-on one — which is a setup like any other, and the point at which it gets a
-cutting time.
 
 ## Spreadsheets, in and out
 
