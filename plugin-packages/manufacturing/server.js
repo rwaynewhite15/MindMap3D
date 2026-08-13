@@ -267,7 +267,7 @@ module.exports = function (ctx) {
 
       // The insert designation was the nearest thing version 1 had to the
       // tool's own part number, and the description was already the description.
-      const toolKey = (old.insert + ' ' + old.desc).toLowerCase();
+      const toolKey = (old.insert + '\u0000' + old.desc).toLowerCase();
       let tool = toolByKey.get(toolKey);
       if (!tool) {
         if (shop.tools.length >= MAX_TOOLS) continue;
@@ -360,7 +360,7 @@ module.exports = function (ctx) {
         }
         if (part) {
           const name = opName || 'Op';
-          const opKey = part.id + ' ' + name.toLowerCase();
+          const opKey = part.id + '\u0000' + name.toLowerCase();
           let operation = opByKey.get(opKey);
           if (!operation && shop.operations.length < MAX_OPERATIONS) {
             operation = stamp(raw, { id: newId(), partId: part.id, name, seq: 0, notes: '' });

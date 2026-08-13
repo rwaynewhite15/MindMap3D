@@ -164,6 +164,21 @@ tool takes it out of every setup it was in; deleting an operation takes the
 setups that were for it, because the cutting times belong to the op. All of them
 say exactly what will go before they do it.
 
+**Clone a machine** when a second one of the same kind arrives. **Clone** on a
+machine opens a new machine already carrying its number's successor — `MC-101`
+suggests `MC-102`, `Lathe 3` suggests `Lathe 4`, and a name ending in anything
+else gets a number put on the end — and saving copies every setup across: the
+same tools, on the same operations, in the same stations and running order, with
+the same cutting times, indexable edges and tool life. The suggested number is
+only a suggestion; type over it before saving if the machine is called something
+else.
+
+Two things it does not do. It does not copy the **recorded cycles**: a cycle time
+is a measurement taken on one machine, and carrying it onto another would be
+inventing data about a machine nobody has stood in front of. And it does not
+duplicate the **operations** — an operation belongs to a part, not to a machine,
+so the clone runs the same ops, which then simply list both machines.
+
 ## Spreadsheets, in and out
 
 **⤓ Export** downloads every recorded cycle, one row each, carrying the part, the

@@ -225,7 +225,7 @@
   // grouping the running order, the chart and every total below are per — and
   // it is why the cutting time lives on the assignment, since the same tool in
   // the same machine on another op is another setup with another time.
-  const opKey = a => a.machineId + ' ' + (a.operationId || '');
+  const opKey = a => a.machineId + '\u0000' + (a.operationId || '');
   const opJobs = a => (a && shop ? shop.assignments.filter(x => opKey(x) === opKey(a)).sort(bySeq) : []);
 
   // Running order within an operation. An assignment with no sequence yet
@@ -874,7 +874,7 @@
     if (found) {
       draft = { ...found, runs: undefined };
     } else if (kind === 'machine') {
-      draft = { id: '', name: '', notes: '' };
+      draft = { id: '', name: '', notes: '', ...(preset || {}) };
     } else if (kind === 'tool') {
       draft = { id: '', partNumber: '', desc: '', cuttingEdges: '', cost: '', notes: '' };
     } else if (kind === 'part') {
@@ -918,7 +918,7 @@
 
   // The next free place in the running order of the setup a draft names.
   function nextSeq(draft) {
-    const key = draft.machineId + ' ' + (draft.operationId || '');
+    const key = draft.machineId + '\u0000' + (draft.operationId || '');
     return shop.assignments
       .filter(x => opKey(x) === key && x.id !== draft.id)
       .reduce((max, x) => Math.max(max, x.seq || 0), 0) + 1;
@@ -981,12 +981,85 @@
       created = { id: newId('m'), name, notes, createdAt: Date.now(), updatedAt: Date.now() };
       shop.machines.push(created);
     }
+    const copy = created && draft.cloneOf ? copySetups(draft.cloneOf, created.id) : null;
     done();
+    if (copy) {
+      const from = machineById(draft.cloneOf);
+      flash(copy.copied
+        ? name + ' is set up like ' + (from ? from.name : 'the original') + ' — ' + copy.copied +
+          (copy.copied === 1 ? ' tool' : ' tools') + ' copied' +
+          (copy.skipped ? ', ' + copy.skipped + ' left out for want of room' : '') +
+          '. Nothing has been timed on it yet.'
+        : name + ' was added, but the machine it was copied from has no tools set up on it.');
+    }
     // A machine with nothing on it does nothing, so go straight on to setting a
-    // tool up on it — with the machine already filled in.
-    if (created && shop.tools.length && shop.operations.length) {
+    // tool up on it — with the machine already filled in. A clone that already
+    // came with tools needs no such prompt.
+    if (created && !(copy && copy.copied) && shop.tools.length && shop.operations.length) {
       openForm('assignment', '', { machineId: created.id });
     }
+  }
+
+  /* ---------------- cloning a machine ----------------
+     A second machine of the same kind runs the same tools on the same
+     operations, and typing that in again is the work the record exists to
+     avoid. Cloning copies every setup — the tool, the operation it is for, the
+     station, the running order, the cutting time, the edges and the tool life.
+
+     It does not copy the recorded cycles. A cycle time is a measurement taken
+     on one machine; carrying it onto another would be inventing data about a
+     machine nobody has stood in front of. The clone starts untimed, and its
+     numbers are what is expected of it until the watch says otherwise.
+  ---------------------------------------------------------------- */
+  function copySetups(fromId, toId) {
+    const now = Date.now();
+    let copied = 0, skipped = 0;
+    for (const a of jobsOnMachine(fromId)) {
+      if (shop.assignments.length >= limits.maxAssignments) { skipped++; continue; }
+      shop.assignments.push({
+        ...a,
+        id: newId('a'),
+        machineId: toId,
+        runs: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+      copied++;
+    }
+    for (const key of new Set(jobsOnMachine(toId).map(opKey))) renumberOp(key);
+    return { copied, skipped };
+  }
+
+  // The number a cloned machine starts on. A name ending in a number takes the
+  // next free one after it — MC-101 becomes MC-102, Lathe 3 becomes Lathe 4 —
+  // and one that ends in anything else has a number put on the end. It is only
+  // a suggestion: the form opens on it so it can be typed over.
+  function nextMachineName(name) {
+    const taken = new Set(shop.machines.map(m => m.name.toLowerCase()));
+    const free = candidate => candidate.length <= 60 && !taken.has(candidate.toLowerCase());
+    const digits = String(name).match(/^(.*?)(\d+)(\D*)$/);
+    if (digits) {
+      const [, head, num, tail] = digits;
+      for (let n = Number(num) + 1; n <= Number(num) + 999; n++) {
+        const next = head + String(n).padStart(num.length, '0') + tail;
+        if (free(next)) return next;
+      }
+    }
+    for (let n = 2; n <= 999; n++) {
+      const next = name + ' ' + n;
+      if (free(next)) return next;
+    }
+    return '';
+  }
+
+  function cloneMachine(id) {
+    const m = machineById(id);
+    if (!m) return;
+    if (shop.machines.length >= limits.maxMachines) {
+      flash('That is as many machines as one account keeps (' + limits.maxMachines + ').');
+      return;
+    }
+    openForm('machine', '', { name: nextMachineName(m.name), notes: m.notes, cloneOf: m.id });
   }
 
   function saveTool(draft) {
@@ -1235,7 +1308,18 @@
     if (!form) return;
     const { kind, draft } = form;
 
-    box.appendChild(el('div', 'mf-section-title', FORM_TITLES[kind][draft.id ? 1 : 0]));
+    const cloneOf = draft.cloneOf ? machineById(draft.cloneOf) : null;
+    box.appendChild(el('div', 'mf-section-title',
+      cloneOf ? 'Clone ' + cloneOf.name : FORM_TITLES[kind][draft.id ? 1 : 0]));
+    if (cloneOf) {
+      const jobs = jobsOnMachine(cloneOf.id);
+      box.appendChild(el('div', 'mf-note', jobs.length
+        ? 'Saving this makes a second machine with the ' + jobs.length +
+          (jobs.length === 1 ? ' tool' : ' tools') + ' set up on ' + cloneOf.name +
+          ' copied onto it — the same operations, stations, cutting times and tool life. The cycles ' +
+          'timed on ' + cloneOf.name + ' stay with it: they were measured on that machine.'
+        : 'There are no tools set up on ' + cloneOf.name + ' yet, so this is a new machine and nothing more.'));
+    }
     const grid = el('div', 'mf-grid');
 
     // A setup is a link before it is anything else, so the three things it
@@ -1509,6 +1593,11 @@
       const mb = el('div', 'mf-machine-btns');
       mb.appendChild(button('mf-btn mf-btn-sm', '+ Tool here', () => openForm('assignment', '', { machineId: m.id }),
         'Set a tool from the crib up on this machine'));
+      mb.appendChild(button('mf-link', 'Clone', () => cloneMachine(m.id),
+        all.length
+          ? 'A second machine of the same kind, with these ' + all.length +
+            (all.length === 1 ? ' tool' : ' tools') + ' set up on it the same way'
+          : 'A second machine of the same kind'));
       mb.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id)));
       mh.appendChild(mb);
       block.appendChild(mh);
@@ -1751,9 +1840,9 @@
 
   const lower = v => String(v || '').trim().toLowerCase();
   const toolKeyOf = (partNumber, desc) => ((partNumber || '') + ' ' + (desc || '')).trim().toLowerCase();
-  const opKeyOf = (partKey, name) => partKey + ' ' + lower(name);
+  const opKeyOf = (partKey, name) => partKey + '\u0000' + lower(name);
   const jobKeyOf = (machineKey, toolKey, operationKey, station) =>
-    [machineKey, toolKey, operationKey, lower(station)].join(' ');
+    [machineKey, toolKey, operationKey, lower(station)].join('\u0000');
 
   // A CSV reader that handles what a spreadsheet actually writes: quoted fields,
   // "" for a quote inside one, commas and newlines inside quotes, and CRLF.

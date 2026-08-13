@@ -49,6 +49,12 @@ and turns on **AI generation** simply by setting environment variables.
   the op's total on that machine, with a stacked bar dividing it between the tools in the
   order they run. The segments step along one cyan ramp light→dark so the running order
   reads in the color, and the table beneath is both the legend and the numbers.
+- **Clone a machine** when a second one of the same kind arrives. **Clone** suggests the
+  next number after its name — `MC-101` → `MC-102`, `Lathe 3` → `Lathe 4` — and copies
+  every setup across: the same tools, on the same operations, in the same stations and
+  order, with the same cutting times and tool life. Not the recorded cycles, which were
+  measured on the original, and not the operations, which belong to their part and simply
+  end up running on both machines.
 - **The top bar carries no title.** It is the account's toolbar and its notification bell,
   aligned to the right; the screen underneath says what it is.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
@@ -565,6 +571,12 @@ operation they are set up for and in the order they cut; **Tools** lists the cri
 tool with the machines it runs on as chips. Deleting a machine leaves its tools in the
 crib, deleting a tool takes it out of every setup, and deleting an operation takes the
 setups that were for it — the cutting times belong to the op.
+
+**Clone** on a machine stands a second one of the same kind up beside it: the next number
+after its name is suggested, and saving copies every setup — same tools, same operations,
+same stations and order, same cutting times and tool life. The recorded cycles stay with
+the original, because they were measured there, and the operations are not duplicated —
+they belong to their part, and end up listing both machines.
 
 Setups run in **sequence order** within a machine and an operation — a newly set-up tool
 takes the next number, ↑ / ↓ move it, and the op renumbers itself so the sequence is
