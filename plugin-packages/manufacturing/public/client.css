@@ -172,6 +172,42 @@
 }
 .mf-section-head .mf-section-title { margin: 0; }
 .mf-section-head > .mf-btn, .mf-addtime { margin-left: auto; }
+
+/* ---------------- folds ----------------
+   Every list heading opens and closes what is under it. The mark and the title
+   are one button so the whole heading is the hit target; the buttons beside it
+   keep their own. */
+.mf-fold {
+  background: none;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  text-align: left;
+  min-width: 0;
+  color: inherit;      /* a machine name takes the page's ink, not the button's */
+  font: inherit;
+}
+.mf-fold-mark {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--dim);
+  width: 9px;
+  flex: none;
+}
+.mf-fold:hover .mf-fold-title { color: var(--accent); }
+.mf-fold:hover .mf-fold-mark { color: var(--accent); }
+.mf-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.mf-fold-count {
+  font-family: var(--mf-mono);
+  font-size: 11px;
+  color: var(--dim);
+  background: var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.mf-searchbox { margin-top: 18px; }
 .mf-addtime { display: flex; gap: 6px; }
 
 .mf-input {
@@ -217,6 +253,18 @@
 .mf-field-k { font-size: 12px; color: var(--dim); }
 .mf-field-hint { font-size: 11px; color: var(--dim); opacity: 0.8; }
 .mf-form-btns { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.mf-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--dim);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.mf-check input { margin: 2px 0 0; accent-color: var(--accent); flex: none; }
+.mf-check:hover { color: var(--ink); }
 
 /* ---------------- the op cycle chart ----------------
    A horizontal stacked bar: the op's measured cycle, divided between its tools
