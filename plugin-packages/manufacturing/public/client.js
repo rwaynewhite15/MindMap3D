@@ -1,24 +1,28 @@
 'use strict';
 
 /* ================================================================
-   Manufacturing add-on — the Shop screen
+   Shopwatch — the shop-floor screen
 
-   Three things, and the relation between two of them:
+   Five things, and the relations between them:
 
-     a tool      its own part number, what it is, how many cutting edges it has
-     a machine   what it is called on the floor
-     an assignment   one tool on one machine — the many-to-many between them.
-                 A tool runs on as many machines as it is assigned to, and a
-                 machine holds as many tools. What is only true of that
-                 pairing lives here: the cutting time, how many of the tool's
-                 edges are indexed through on that machine, and how many parts
-                 run between one index and the next.
+     a tool        its own part number, what it is, how many cutting edges
+     a machine     what it is called on the floor
+     a part        a part number being made
+     an operation  one step in making that part — Op 10, Op 20. An operation
+                   belongs to one part, because that is what an op is: a step
+                   in making that part, not a name that means the same thing
+                   everywhere.
+     an assignment one tool, on one machine, doing one operation. This is the
+                   many-to-many between tools and machines, and it carries what
+                   is only true of that combination: the cutting time, how many
+                   of the tool's edges are indexed through there, and how many
+                   parts run between one index and the next.
 
    The stopwatch times an assignment, because a cycle time is only ever true of
-   one tool on one machine. Time enough cycles and the record answers the
-   questions that actually matter on the floor — how the measured cycle sits
-   against the cutting time, how long an edge lasts in minutes of cut, how many
-   tools a hundred parts consumes, what they cost per part.
+   one tool on one machine doing one op. The same tool in the same machine
+   cutting a different operation is a different setup with its own cutting
+   time — the time a tool spends in cut is a fact about the operation, not
+   about the tool.
 
    Everything here lives inside the section the shell hands to mount(). The
    only way out of it is ctx: ctx.api for this add-on's own routes, ctx.me for
@@ -30,13 +34,16 @@
   /* ---------------- state ---------------- */
   let ctx = null;
   let host = null;          // the <section> the shell gave us
-  let shop = null;          // { machines, tools, assignments, activeId, updatedAt }
-  let limits = { maxMachines: 60, maxTools: 200, maxAssignments: 200, maxRuns: 300 };
+  let shop = null;          // { machines, tools, parts, operations, assignments, activeId }
+  let limits = {
+    maxMachines: 60, maxTools: 200, maxParts: 120,
+    maxOperations: 300, maxAssignments: 200, maxRuns: 300,
+  };
   let dirty = false;
   let saveTimer = null;
   let flashTimer = null;
   let filter = '';
-  let form = null;          // { kind: 'machine' | 'tool' | 'assignment', draft }
+  let form = null;          // { kind: 'machine' | 'tool' | 'part' | 'operation' | 'assignment', draft }
   let formError = '';
   let pendingPick = '';     // a record named by the URL, waiting on the shop to load
   let pendingImport = null; // a read CSV and what importing it would do, awaiting a yes
@@ -91,14 +98,28 @@
     return b;
   }
 
+  // Options may carry a group; consecutive options sharing one go inside an
+  // <optgroup>, which is how a list of operations stays readable — the ops of
+  // one part under that part's number.
   function dropdown(cls, options, value, onChange, label) {
     const s = el('select', cls);
     if (label) s.setAttribute('aria-label', label);
+    let group = null;
     for (const o of options) {
       const opt = el('option', null, o.label);
       opt.value = o.value;
       if (o.value === value) opt.selected = true;
-      s.appendChild(opt);
+      if (o.group) {
+        if (!group || group.label !== o.group) {
+          group = el('optgroup');
+          group.label = o.group;
+          s.appendChild(group);
+        }
+        group.appendChild(opt);
+      } else {
+        group = null;
+        s.appendChild(opt);
+      }
     }
     s.addEventListener('change', () => onChange(s.value));
     return s;
@@ -143,12 +164,14 @@
   const newId = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
   /* ---------------- the record ----------------
-     Three lists that only mean anything together: an assignment names a tool
-     and a machine, and every reader below goes through these to get from one
-     to the other.
+     Five lists that only mean anything together. An assignment names a tool, a
+     machine and an operation; an operation names the part it is a step of.
+     Every reader below goes through these to get from one to another.
   ---------------------------------------------------------------- */
   const toolById = id => (shop ? shop.tools.find(t => t.id === id) || null : null);
   const machineById = id => (shop ? shop.machines.find(m => m.id === id) || null : null);
+  const partById = id => (shop ? shop.parts.find(p => p.id === id) || null : null);
+  const operationById = id => (shop ? shop.operations.find(o => o.id === id) || null : null);
   const jobById = id => (shop ? shop.assignments.find(a => a.id === id) || null : null);
   const activeJob = () => (shop ? jobById(shop.activeId) : null);
 
@@ -157,38 +180,64 @@
     const m = machineById(id);
     return m ? m.name : 'No machine';
   };
+  const partName = p => (p ? p.number || p.desc || 'Part' : 'Part');
+
   const jobTool = a => (a ? toolById(a.toolId) : null);
   const jobName = a => toolName(jobTool(a));
+  const jobOperation = a => (a ? operationById(a.operationId) : null);
+  const jobPart = a => {
+    const op = jobOperation(a);
+    return op ? partById(op.partId) : null;
+  };
 
-  // Every assignment of one tool, and every assignment on one machine — the
-  // two directions of the relation, each read from the same list.
+  // Every assignment of one tool, every assignment on one machine, and every
+  // assignment doing one operation — the relations read from each end.
   const jobsOfTool = id => (shop ? shop.assignments.filter(a => a.toolId === id) : []);
   const jobsOnMachine = id => (shop ? shop.assignments.filter(a => a.machineId === id) : []);
+  const jobsOfOperation = id => (shop ? shop.assignments.filter(a => a.operationId === id) : []);
   const machinesOfTool = id => {
     const seen = new Set();
     return jobsOfTool(id).map(a => a.machineId).filter(m => (seen.has(m) ? false : seen.add(m)));
   };
+  const machinesOfOperation = id => {
+    const seen = new Set();
+    return jobsOfOperation(id).map(a => a.machineId).filter(m => (seen.has(m) ? false : seen.add(m)));
+  };
 
-  // The job an assignment belongs to: one machine, one part, one op. That is
-  // the grouping the running order, the chart and every total below are per.
-  const opKey = a => [a.machineId, (a.part || '').toLowerCase(), (a.op || '').toLowerCase()].join('\u0000');
-  const opLabel = a => [machineName(a.machineId), a.part, a.op].filter(Boolean).join(' · ');
-  const jobLabel = a => [a.part, a.op].filter(Boolean).join(' · ') || 'No part or op yet';
+  // The operations of one part, in the order they are run.
+  const opsOfPart = id => (shop ? shop.operations.filter(o => o.partId === id).sort(byStep) : []);
+  function byStep(a, b) {
+    const as = a.seq || Infinity, bs = b.seq || Infinity;
+    if (as !== bs) return as - bs;
+    return (a.name || '').localeCompare(b.name || '');
+  }
 
-  // Running order within an op. An assignment with no sequence yet sorts after
-  // the ones that have one, oldest first, so an unplaced tool lands at the end
-  // of the list rather than jumping to the front of the job.
+  // What a setup is for, as one line, and the whole address including the
+  // machine it runs on.
+  const operationLabel = op => {
+    if (!op) return 'No operation set';
+    return [partName(partById(op.partId)), op.name].filter(Boolean).join(' · ');
+  };
+  const jobLabel = a => operationLabel(jobOperation(a));
+  const opLabel = a => [machineName(a.machineId), jobLabel(a)].join(' · ');
+
+  // The tools that run together: one machine, one operation. That is the
+  // grouping the running order, the chart and every total below are per — and
+  // it is why the cutting time lives on the assignment, since the same tool in
+  // the same machine on another op is another setup with another time.
+  const opKey = a => a.machineId + ' ' + (a.operationId || '');
+  const opJobs = a => (a && shop ? shop.assignments.filter(x => opKey(x) === opKey(a)).sort(bySeq) : []);
+
+  // Running order within an operation. An assignment with no sequence yet
+  // sorts after the ones that have one, oldest first, so an unplaced tool
+  // lands at the end of the list rather than jumping to the front of the job.
   function bySeq(a, b) {
     const as = a.seq || Infinity, bs = b.seq || Infinity;
     if (as !== bs) return as - bs;
     return (a.createdAt || 0) - (b.createdAt || 0);
   }
 
-  // Every tool cutting the same part, on the same machine, in the same op, in
-  // the order they run.
-  const opJobs = a => (a && shop ? shop.assignments.filter(x => opKey(x) === opKey(a)).sort(bySeq) : []);
-
-  // Close up the numbering of an op after a move or a deletion, so the
+  // Close up the numbering of a setup after a move or a deletion, so the
   // sequence is always 1..n with no gaps and no ties.
   function renumberOp(key) {
     shop.assignments.filter(x => opKey(x) === key).sort(bySeq).forEach((a, i) => {
@@ -215,13 +264,14 @@
     };
   }
 
-  // What one tool on one machine is expected to do, from the two numbers that
-  // belong to that pairing: the parts it runs between edge indexes, and how
-  // many of the tool's edges get indexed through there. An assignment that
-  // leaves the edges blank falls back to the tool's own count — the whole tool
-  // gets used up unless somebody says otherwise. Returns null until there is a
-  // tool life to work from; `cut` is the cutting time if it is filled in and
-  // the measured average otherwise, so the minutes are honest about which.
+  // What one tool on one machine is expected to do on one operation, from the
+  // two numbers that belong to that setup: the parts it runs between edge
+  // indexes, and how many of the tool's edges get indexed through there. A
+  // setup that leaves the edges blank falls back to the tool's own count — the
+  // whole tool gets used up unless somebody says otherwise. Returns null until
+  // there is a tool life to work from; `cut` is the cutting time if it is
+  // filled in and the measured average otherwise, so the minutes are honest
+  // about which.
   function lifeFor(a, avgSec) {
     const parts = a.partsPerIndex || 0;
     if (!parts) return null;
@@ -248,14 +298,14 @@
       shop = data.shop;
       limits = data.limits || limits;
     } catch (err) {
-      shop = shop || { machines: [], tools: [], assignments: [], activeId: '', updatedAt: 0 };
+      shop = shop || { machines: [], tools: [], parts: [], operations: [], assignments: [], activeId: '' };
       flash('Your shop record could not be loaded (' + err.message + ').');
     }
     // a link that named a record arrived before the record did
     if (pendingPick) {
       const id = pendingPick;
       pendingPick = '';
-      // the id may name an assignment, or a tool whose first assignment it is
+      // the id may name a setup, or a tool whose first setup it is
       const first = jobById(id) || jobsOfTool(id)[0];
       if (first) { selectJob(first.id); return; }
     }
@@ -363,8 +413,9 @@
     saveNow();
     renderStats();
     renderRuns();
-    renderChart();    // this tool's share of the op just moved
-    renderMachines(); // as did its average, on its card
+    renderChart();    // this tool's share of the operation just moved
+    renderParts();    // as did the operation's measured cycle
+    renderMachines(); // and its average, on its card
   }
 
   function startTick() {
@@ -387,6 +438,7 @@
     renderRuns();
     renderForm();
     renderChart();
+    renderParts();
     renderMachines();
     renderTools();
   }
@@ -399,29 +451,28 @@
 
     if (!a) {
       const empty = el('div', 'mf-empty');
-      const started = shop.tools.length || shop.machines.length;
+      const started = shop.tools.length || shop.machines.length || shop.parts.length;
       empty.appendChild(el('div', 'mf-empty-title', shop.assignments.length
         ? 'Pick a tool to time'
-        : (started ? 'Put a tool on a machine' : 'Start with a machine and a tool')));
+        : (started ? 'Set a tool up on a machine' : 'Start with a part, a machine and a tool')));
       empty.appendChild(el('div', 'mf-empty-text', shop.assignments.length
-        ? 'Every cycle time is recorded against one tool on one machine, so choose the one at the spindle before you start the watch.'
-        : 'A tool is a part number, a description and its cutting edges. Assigning it to a machine is what carries the cutting time, the edges indexed there and the parts between indexes — and what the stopwatch records against.'));
-      if (!shop.assignments.length) {
-        const row = el('div', 'mf-form-btns');
-        if (!shop.machines.length) row.appendChild(button('mf-btn mf-btn-go', '+ Add a machine', () => openForm('machine')));
-        if (!shop.tools.length) row.appendChild(button('mf-btn' + (shop.machines.length ? ' mf-btn-go' : ''), '+ Add a tool', () => openForm('tool')));
-        if (shop.machines.length && shop.tools.length) {
-          row.appendChild(button('mf-btn mf-btn-go', '+ Assign a tool', () => openForm('assignment')));
-        }
-        empty.appendChild(row);
+        ? 'Every cycle time is recorded against one tool, on one machine, doing one operation — so choose the one at the spindle before you start the watch.'
+        : 'A part has operations; a tool has a part number and cutting edges. Setting a tool up on a machine for one of those operations is what carries the cutting time, the edges indexed there and the parts between indexes — and what the stopwatch records against.'));
+      const row = el('div', 'mf-form-btns');
+      if (!shop.parts.length) row.appendChild(button('mf-btn mf-btn-go', '+ Add a part', () => openForm('part')));
+      if (!shop.machines.length) row.appendChild(button('mf-btn', '+ Add a machine', () => openForm('machine')));
+      if (!shop.tools.length) row.appendChild(button('mf-btn', '+ Add a tool', () => openForm('tool')));
+      if (shop.operations.length && shop.machines.length && shop.tools.length && !shop.assignments.length) {
+        row.appendChild(button('mf-btn mf-btn-go', '+ Set up a tool', () => openForm('assignment')));
       }
+      if (row.childNodes.length) empty.appendChild(row);
       box.appendChild(empty);
       return;
     }
 
     box.classList.toggle('mf-running', watch.running);
 
-    // which tool at which machine the watch is pointed at, and how to change it
+    // which tool, at which machine, on which operation
     const head = el('div', 'mf-watch-head');
     const who = el('div', 'mf-watch-who');
     const title = el('div', 'mf-watch-title');
@@ -432,13 +483,13 @@
     if (tool && tool.partNumber && tool.desc) title.appendChild(el('span', 'mf-watch-pn', tool.partNumber));
     who.appendChild(title);
     const where = el('div', 'mf-watch-op', opLabel(a));
-    // where in the op's running order this tool sits
+    // where in the operation's running order this tool sits
     const order = opJobs(a);
     if (a.seq && order.length > 1) where.textContent += ' · tool ' + a.seq + ' of ' + order.length;
     who.appendChild(where);
     head.appendChild(who);
     head.appendChild(button('mf-btn mf-btn-sm', 'Edit setup', () => openForm('assignment', a.id),
-      'The cutting time, edges and tool life of this tool on this machine'));
+      'The operation, cutting time, edges and tool life of this tool on this machine'));
     box.appendChild(head);
 
     els.time = el('div', 'mf-time', fmtClock(elapsed()));
@@ -483,6 +534,14 @@
     if (!a) return;
     const s = statsFor(a);
 
+    if (!a.operationId) {
+      const note = el('div', 'mf-note');
+      note.appendChild(document.createTextNode(
+        'This tool is on the machine but not on an operation. The cutting time and the tool life belong to the op it is cutting, so name it. '));
+      note.appendChild(button('mf-link', 'Edit setup', () => openForm('assignment', a.id)));
+      box.appendChild(note);
+    }
+
     if (s) {
       const timing = el('div', 'mf-tiles');
       timing.appendChild(tile('cycles timed', String(s.count)));
@@ -491,7 +550,7 @@
       timing.appendChild(tile('spread', fmtSec(s.spread), 'Slowest cycle minus fastest — how repeatable the op is'));
       if (a.cutSec) {
         timing.appendChild(tile('cutting time', fmtSec(a.cutSec),
-          'What this tool is set to spend in cut on this machine'));
+          'What this tool is set to spend in cut on this machine, on ' + jobLabel(a)));
       }
       box.appendChild(timing);
       if (a.cutSec && s.avg) {
@@ -521,7 +580,7 @@
 
     const derived = el('div', 'mf-tiles mf-tiles-life');
     derived.appendChild(tile('parts / index', String(life.parts),
-      'Parts run between one edge index and the next, on this machine'));
+      'Parts run between one edge index and the next, on this machine and this op'));
     if (life.partsPerTool) {
       derived.appendChild(tile('parts / tool', String(life.partsPerTool),
         life.edges + ' indexable edge' + (life.edges === 1 ? '' : 's') + ' × ' + life.parts + ' parts per index' +
@@ -551,13 +610,13 @@
   }
 
   /* ---------------- the op cycle chart ---------------- */
-  // The tools of an op are an ordered set — tool 1 cuts before tool 2 — so the
-  // segments take a one-hue ramp stepped light→dark along the running order,
-  // not eight unrelated colors. Reading left to right you see the order in the
-  // color itself. The steps are interpolated in OKLab between the app's palest
-  // and deepest cyan and checked against the dark chart surface (#141926):
-  // monotone lightness, every adjacent gap ≥ 0.06 L, one hue, and the darkest
-  // step still clearing the surface at 2.55:1.
+  // The tools of an operation are an ordered set — tool 1 cuts before tool 2 —
+  // so the segments take a one-hue ramp stepped light→dark along the running
+  // order, not eight unrelated colors. Reading left to right you see the order
+  // in the color itself. The steps are interpolated in OKLab between the app's
+  // palest and deepest cyan and checked against the dark chart surface
+  // (#141926): monotone lightness, every adjacent gap ≥ 0.06 L, one hue, and
+  // the darkest step still clearing the surface at 2.55:1.
   // `ink` is the label color that clears contrast inside that fill.
   const RAMP = [
     { fill: '#EBFBFD', ink: '#10141D' },
@@ -706,7 +765,7 @@
     box.appendChild(head);
 
     if (!a.runs.length) {
-      box.appendChild(el('div', 'mf-note', 'Nothing timed against this tool on this machine yet.'));
+      box.appendChild(el('div', 'mf-note', 'Nothing timed against this setup yet.'));
       return;
     }
 
@@ -723,6 +782,7 @@
         renderStats();
         renderRuns();
         renderChart();
+        renderParts();
         renderMachines();
       }, 'Delete this cycle'));
       list.appendChild(row);
@@ -731,11 +791,10 @@
   }
 
   /* ---------------- the forms ----------------
-     One form panel, three things it can be editing: a machine, a tool in the
-     crib, or the assignment that puts one on the other. They are kept apart
-     because the fields belong to different places — a tool's cutting edges are
-     true wherever it runs, while the parts it lasts between indexes are only
-     true of the machine it is on.
+     One form panel, five things it can be editing. They are kept apart because
+     the fields belong to different places: a tool's cutting edges are true
+     wherever it runs, an operation belongs to one part, and the cutting time
+     is true only of one tool, on one machine, on one op.
   ---------------------------------------------------------------- */
   const MACHINE_FIELDS = [
     { key: 'name', label: 'Machine', placeholder: 'Haas ST-20', wide: true, hint: 'What it is called on the floor' },
@@ -748,32 +807,69 @@
     { key: 'cost', label: 'Cost', placeholder: '9.40', num: true, hint: 'Optional — what one costs, for cost per part' },
   ];
 
+  const PART_FIELDS = [
+    { key: 'number', label: 'Part number', placeholder: '12345-A', wide: true, hint: 'The part being made, not the tool' },
+    { key: 'desc', label: 'Description', placeholder: 'pump housing', wide: true },
+  ];
+
+  const OPERATION_FIELDS = [
+    { key: 'name', label: 'Operation', placeholder: 'Op 20', wide: true, hint: 'What the traveller calls this step' },
+    { key: 'seq', label: 'Step', placeholder: '1', num: true, hint: 'Where it falls in making the part' },
+  ];
+
   const JOB_FIELDS = [
-    { key: 'part', label: 'Part', placeholder: 'Part number of the job', wide: true },
-    { key: 'op', label: 'Op', placeholder: 'Op 20' },
-    { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the op — 1 cuts first' },
     { key: 'station', label: 'Station', placeholder: 'T0303' },
-    { key: 'cutSec', label: 'Cutting time', placeholder: '42.6', num: true, hint: 'Seconds in cut on one part, on this machine' },
+    { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the op — 1 cuts first' },
+    { key: 'cutSec', label: 'Cutting time', placeholder: '42.6', num: true, hint: 'Seconds in cut on one part, on this machine and this op' },
     { key: 'indexEdges', label: 'Indexable edges', placeholder: '4', num: true, hint: 'How many of the tool\'s edges get indexed through here' },
     { key: 'partsPerIndex', label: 'Parts per index', placeholder: '250', num: true, hint: 'Parts run between one edge index and the next' },
   ];
 
-  const FORM_FIELDS = { machine: MACHINE_FIELDS, tool: TOOL_FIELDS, assignment: JOB_FIELDS };
+  const FORM_FIELDS = {
+    machine: MACHINE_FIELDS, tool: TOOL_FIELDS, part: PART_FIELDS,
+    operation: OPERATION_FIELDS, assignment: JOB_FIELDS,
+  };
   const FORM_TITLES = {
     machine: ['New machine', 'Edit machine'],
     tool: ['New tool', 'Edit tool'],
-    assignment: ['Assign a tool to a machine', 'Edit this tool on this machine'],
+    part: ['New part', 'Edit part'],
+    operation: ['New operation', 'Edit operation'],
+    assignment: ['Set a tool up on a machine', 'Edit this setup'],
+  };
+  const FINDER = {
+    machine: machineById, tool: toolById, part: partById,
+    operation: operationById, assignment: jobById,
   };
 
+  // The operations of every part, grouped by the part they belong to — which
+  // is the only way a list of "Op 20"s can be read.
+  function operationOptions() {
+    const opts = [];
+    for (const p of [...shop.parts].sort((x, y) => partName(x).localeCompare(partName(y)))) {
+      for (const o of opsOfPart(p.id)) opts.push({ value: o.id, label: o.name, group: partName(p) });
+    }
+    return opts;
+  }
+
   // preset carries what the caller already knows: which machine a tool is
-  // being added to, or which tool is being put on a machine.
+  // being set up on, which tool is being set up, which operation it is for.
   function openForm(kind, id, preset) {
     if (!shop) return; // still loading; there is nothing to add to yet
     if (kind === 'assignment' && !id) {
-      if (!shop.tools.length) { flash('Add a tool first — an assignment puts one on a machine.'); openForm('tool'); return; }
-      if (!shop.machines.length) { flash('Add a machine first — an assignment puts a tool on one.'); openForm('machine'); return; }
+      if (!shop.tools.length) { flash('Add a tool first — a setup puts one on a machine.'); openForm('tool'); return; }
+      if (!shop.machines.length) { flash('Add a machine first — a setup puts a tool on one.'); openForm('machine'); return; }
+      if (!shop.operations.length) {
+        flash('Add the part and its operation first — the cutting time belongs to an op.');
+        openForm(shop.parts.length ? 'operation' : 'part');
+        return;
+      }
     }
-    const found = id ? { machine: machineById, tool: toolById, assignment: jobById }[kind](id) : null;
+    if (kind === 'operation' && !id && !shop.parts.length) {
+      flash('Add the part first — an operation is a step in making one.');
+      openForm('part');
+      return;
+    }
+    const found = id ? FINDER[kind](id) : null;
     let draft;
     if (found) {
       draft = { ...found, runs: undefined };
@@ -781,24 +877,33 @@
       draft = { id: '', name: '', notes: '' };
     } else if (kind === 'tool') {
       draft = { id: '', partNumber: '', desc: '', cuttingEdges: '', cost: '', notes: '' };
+    } else if (kind === 'part') {
+      draft = { id: '', number: '', desc: '', notes: '' };
+    } else if (kind === 'operation') {
+      draft = { id: '', partId: '', name: '', seq: '', notes: '', ...(preset || {}) };
+      if (!draft.partId) {
+        const from = jobPart(activeJob());
+        draft.partId = (from && from.id) || (shop.parts.length === 1 ? shop.parts[0].id : '');
+      }
+      draft.seq = String(opsOfPart(draft.partId).reduce((max, o) => Math.max(max, o.seq || 0), 0) + 1);
     } else {
       draft = {
-        id: '', toolId: '', machineId: '', part: '', op: '', seq: '', station: '',
+        id: '', toolId: '', machineId: '', operationId: '', station: '', seq: '',
         cutSec: '', indexEdges: '', partsPerIndex: '', notes: '', ...(preset || {}),
       };
-      // Carry the job over from the machine's last tool: tools are assigned a
-      // few at a time for the same part, and retyping it is noise. The sequence
-      // follows on from that op's last tool, since tools are usually entered in
-      // the order they cut.
+      // Carry over from what is already on screen: the machine's last setup, or
+      // the one being timed. Tools are set up a few at a time for the same op,
+      // and choosing it again each time is noise.
       const from = (draft.machineId ? jobsOnMachine(draft.machineId) : []).slice(-1)[0] ||
-        (activeJob() && !draft.machineId ? activeJob() : null);
+        (draft.operationId ? jobsOfOperation(draft.operationId).slice(-1)[0] : null) ||
+        activeJob();
       if (from) {
         draft.machineId = draft.machineId || from.machineId;
-        draft.part = from.part;
-        draft.op = from.op;
+        draft.operationId = draft.operationId || from.operationId;
       }
       if (!draft.machineId && shop.machines.length === 1) draft.machineId = shop.machines[0].id;
       if (!draft.toolId && shop.tools.length === 1) draft.toolId = shop.tools[0].id;
+      if (!draft.operationId && shop.operations.length === 1) draft.operationId = shop.operations[0].id;
       draft.seq = String(nextSeq(draft));
       const tool = toolById(draft.toolId);
       if (tool && tool.cuttingEdges) draft.indexEdges = String(tool.cuttingEdges);
@@ -811,9 +916,9 @@
     els.form.scrollIntoView({ block: 'nearest' });
   }
 
-  // The next free place in the running order of the op a draft names.
+  // The next free place in the running order of the setup a draft names.
   function nextSeq(draft) {
-    const key = [draft.machineId, (draft.part || '').toLowerCase(), (draft.op || '').toLowerCase()].join('\u0000');
+    const key = draft.machineId + ' ' + (draft.operationId || '');
     return shop.assignments
       .filter(x => opKey(x) === key && x.id !== draft.id)
       .reduce((max, x) => Math.max(max, x.seq || 0), 0) + 1;
@@ -838,12 +943,23 @@
     const { kind, draft } = form;
     if (kind === 'machine') return saveMachine(draft);
     if (kind === 'tool') return saveTool(draft);
+    if (kind === 'part') return savePart(draft);
+    if (kind === 'operation') return saveOperation(draft);
     return saveAssignment(draft);
   }
 
   function fail(message) {
     formError = message;
     renderForm();
+  }
+
+  // Every save below ends the same way: the form closes, the record is queued
+  // for saving, and the screen is redrawn.
+  function done() {
+    form = null;
+    formError = '';
+    save();
+    render();
   }
 
   function saveMachine(draft) {
@@ -865,13 +981,12 @@
       created = { id: newId('m'), name, notes, createdAt: Date.now(), updatedAt: Date.now() };
       shop.machines.push(created);
     }
-    form = null;
-    formError = '';
-    save();
-    render();
-    // A machine with nothing on it does nothing, so go straight on to putting a
-    // tool on it — with the machine already filled in.
-    if (created && shop.tools.length) openForm('assignment', '', { machineId: created.id });
+    done();
+    // A machine with nothing on it does nothing, so go straight on to setting a
+    // tool up on it — with the machine already filled in.
+    if (created && shop.tools.length && shop.operations.length) {
+      openForm('assignment', '', { machineId: created.id });
+    }
   }
 
   function saveTool(draft) {
@@ -897,26 +1012,90 @@
       created = { id: newId('t'), ...tool, createdAt: Date.now(), updatedAt: Date.now() };
       shop.tools.push(created);
     }
-    form = null;
-    formError = '';
-    save();
-    render();
-    // A tool in the crib is not yet on any machine, and the numbers that matter
-    // are the ones it gets there.
+    done();
+    // A tool in the crib is not yet cutting anything, and the numbers that
+    // matter are the ones it gets on a machine.
     if (created) {
-      if (shop.machines.length) openForm('assignment', '', { toolId: created.id });
-      else flash('Added to the crib. Add a machine, then assign this tool to it.');
+      if (shop.machines.length && shop.operations.length) openForm('assignment', '', { toolId: created.id });
+      else flash('Added to the crib. Set it up on a machine to give it a cutting time and a tool life.');
     }
+  }
+
+  function savePart(draft) {
+    const number = cleanText(draft.number);
+    const desc = cleanText(draft.desc);
+    if (!number && !desc) return fail('Give the part a number or a description — something to know it by.');
+    const clash = shop.parts.find(p => p.id !== draft.id && p.number && p.number.toLowerCase() === number.toLowerCase());
+    if (number && clash) return fail('There is already a part numbered ' + clash.number + '.');
+    const part = { number, desc, notes: cleanText(draft.notes).slice(0, 400) };
+    const existing = partById(draft.id);
+    let created = null;
+    if (existing) {
+      Object.assign(existing, part);
+      touch(existing);
+    } else {
+      if (shop.parts.length >= limits.maxParts) {
+        return fail('That is as many parts as one account keeps (' + limits.maxParts + ').');
+      }
+      created = { id: newId('p'), ...part, createdAt: Date.now(), updatedAt: Date.now() };
+      shop.parts.push(created);
+    }
+    done();
+    // A part is made by its operations; without one there is nothing to set a
+    // tool up for.
+    if (created) openForm('operation', '', { partId: created.id });
+  }
+
+  function saveOperation(draft) {
+    const part = partById(draft.partId);
+    if (!part) return fail('Choose the part this operation is a step of.');
+    const name = cleanText(draft.name);
+    if (!name) return fail('An operation needs a name — Op 20, or whatever the traveller calls it.');
+    const clash = shop.operations.find(o =>
+      o.id !== draft.id && o.partId === part.id && o.name.toLowerCase() === name.toLowerCase());
+    if (clash) return fail(partName(part) + ' already has an operation called ' + clash.name + '.');
+    const operation = {
+      partId: part.id,
+      name,
+      seq: Math.floor(cleanNum(draft.seq)),
+      notes: cleanText(draft.notes).slice(0, 400),
+    };
+    const existing = operationById(draft.id);
+    let created = null;
+    if (existing) {
+      Object.assign(existing, operation);
+      touch(existing);
+    } else {
+      if (shop.operations.length >= limits.maxOperations) {
+        return fail('That is as many operations as one account keeps (' + limits.maxOperations + ').');
+      }
+      created = { id: newId('o'), ...operation, createdAt: Date.now(), updatedAt: Date.now() };
+      shop.operations.push(created);
+    }
+    renumberPart(part.id);
+    done();
+    if (created && shop.tools.length && shop.machines.length) {
+      openForm('assignment', '', { operationId: created.id });
+    }
+  }
+
+  // The steps of a part, numbered 1..n in the order they run.
+  function renumberPart(partId) {
+    opsOfPart(partId).forEach((o, i) => {
+      if (o.seq !== i + 1) { o.seq = i + 1; touch(o); }
+    });
   }
 
   function saveAssignment(draft) {
     if (!toolById(draft.toolId)) return fail('Choose the tool this is.');
     if (!machineById(draft.machineId)) return fail('Choose the machine it runs on.');
+    if (!operationById(draft.operationId)) {
+      return fail('Choose the operation it is cutting — the cutting time and the tool life belong to one.');
+    }
     const assignment = {
       toolId: draft.toolId,
       machineId: draft.machineId,
-      part: cleanText(draft.part),
-      op: cleanText(draft.op),
+      operationId: draft.operationId,
       station: cleanText(draft.station),
       seq: Math.floor(cleanNum(draft.seq)),
       cutSec: round(cleanTime(draft.cutSec), 3),
@@ -929,13 +1108,14 @@
       const wasOp = opKey(existing);
       Object.assign(existing, assignment);
       touch(existing);
-      // Editing can move a tool to another machine, part or op, or renumber it;
-      // close up the gap it left behind as well as the order it joined.
+      // Editing can move a tool to another machine or another operation, or
+      // renumber it; close up the gap it left behind as well as the order it
+      // joined.
       renumberOp(wasOp);
       if (opKey(existing) !== wasOp) renumberOp(opKey(existing));
     } else {
       if (shop.assignments.length >= limits.maxAssignments) {
-        return fail('That is as many tool assignments as one account keeps (' + limits.maxAssignments + ').');
+        return fail('That is as many setups as one account keeps (' + limits.maxAssignments + ').');
       }
       const created = {
         id: newId('a'), ...assignment, runs: [], createdAt: Date.now(), updatedAt: Date.now(),
@@ -944,23 +1124,26 @@
       renumberOp(opKey(created));
       setActive(created.id); // a tool set up mid-shift is the one being timed next
     }
-    form = null;
-    formError = '';
-    save();
-    render();
+    done();
+  }
+
+  // What a deletion would take with it, said in full before it happens: what
+  // the setups are called from where the reader is standing, and how many timed
+  // cycles go with them.
+  function tally(jobs, one, many) {
+    const runs = jobs.reduce((sum, a) => sum + a.runs.length, 0);
+    return jobs.length + ' ' + (jobs.length === 1 ? one : many) +
+      (runs ? ' and the ' + runs + (runs === 1 ? ' cycle' : ' cycles') + ' timed there' : '');
   }
 
   function deleteMachine(id) {
     const m = machineById(id);
     if (!m) return;
     const jobs = jobsOnMachine(id);
-    const runs = jobs.reduce((sum, a) => sum + a.runs.length, 0);
-    const what = jobs.length
-      ? 'Delete ' + m.name + ', the ' + jobs.length + (jobs.length === 1 ? ' tool' : ' tools') +
-        ' assigned to it' + (runs ? ' and the ' + runs + (runs === 1 ? ' cycle' : ' cycles') + ' timed there' : '') +
+    if (!confirm(jobs.length
+      ? 'Delete ' + m.name + ', the ' + tally(jobs, 'tool set up on it', 'tools set up on it') +
         '? The tools stay in the crib.'
-      : 'Delete ' + m.name + '?';
-    if (!confirm(what)) return;
+      : 'Delete ' + m.name + '?')) return;
     shop.assignments = shop.assignments.filter(a => a.machineId !== id);
     shop.machines = shop.machines.filter(x => x.id !== id);
     afterDelete();
@@ -970,15 +1153,43 @@
     const t = toolById(id);
     if (!t) return;
     const jobs = jobsOfTool(id);
-    const runs = jobs.reduce((sum, a) => sum + a.runs.length, 0);
-    const what = jobs.length
-      ? 'Delete ' + toolName(t) + ', and take it off the ' + jobs.length +
-        (jobs.length === 1 ? ' machine' : ' machines') + ' it is assigned to' +
-        (runs ? ', with the ' + runs + (runs === 1 ? ' cycle' : ' cycles') + ' timed against it' : '') + '?'
-      : 'Delete ' + toolName(t) + '?';
-    if (!confirm(what)) return;
+    if (!confirm(jobs.length
+      ? 'Delete ' + toolName(t) + ', the ' + tally(jobs, 'setup it is in', 'setups it is in') + '?'
+      : 'Delete ' + toolName(t) + '?')) return;
     shop.assignments = shop.assignments.filter(a => a.toolId !== id);
     shop.tools = shop.tools.filter(x => x.id !== id);
+    afterDelete();
+  }
+
+  function deletePart(id) {
+    const p = partById(id);
+    if (!p) return;
+    const ops = opsOfPart(id);
+    const jobs = shop.assignments.filter(a => ops.some(o => o.id === a.operationId));
+    if (!confirm(ops.length
+      ? 'Delete ' + partName(p) + ', its ' + ops.length + (ops.length === 1 ? ' operation' : ' operations') +
+        (jobs.length ? ', the ' + tally(jobs, 'tool set up for it', 'tools set up for them') : '') +
+        '? The tools stay in the crib.'
+      : 'Delete ' + partName(p) + '?')) return;
+    const gone = new Set(ops.map(o => o.id));
+    shop.assignments = shop.assignments.filter(a => !gone.has(a.operationId));
+    shop.operations = shop.operations.filter(o => o.partId !== id);
+    shop.parts = shop.parts.filter(x => x.id !== id);
+    afterDelete();
+  }
+
+  function deleteOperation(id) {
+    const o = operationById(id);
+    if (!o) return;
+    const jobs = jobsOfOperation(id);
+    if (!confirm(jobs.length
+      ? 'Delete ' + operationLabel(o) + ', the ' + tally(jobs, 'tool set up for it', 'tools set up for it') +
+        '? The cutting times belong to this op, so they go with it; the tools stay in the crib.'
+      : 'Delete ' + operationLabel(o) + '?')) return;
+    const partId = o.partId;
+    shop.assignments = shop.assignments.filter(a => a.operationId !== id);
+    shop.operations = shop.operations.filter(x => x.id !== id);
+    renumberPart(partId);
     afterDelete();
   }
 
@@ -986,25 +1197,35 @@
     const a = jobById(id);
     if (!a) return;
     const runs = a.runs.length;
-    const what = 'Take ' + jobName(a) + ' off ' + machineName(a.machineId) +
+    if (!confirm('Take ' + jobName(a) + ' off ' + machineName(a.machineId) +
       (runs ? ', with the ' + runs + (runs === 1 ? ' cycle' : ' cycles') + ' timed there' : '') +
-      '? The tool stays in the crib.';
-    if (!confirm(what)) return;
-    const wasOp = opKey(a);
+      '? The tool stays in the crib.')) return;
     shop.assignments = shop.assignments.filter(x => x.id !== id);
-    renumberOp(wasOp); // the op runs one tool shorter now; close the gap
     afterDelete();
   }
 
   // Every deletion above can leave the watch pointed at something that is gone,
-  // and the ops it touched a tool short.
+  // and the setups it touched a tool short.
   function afterDelete() {
     for (const key of new Set(shop.assignments.map(opKey))) renumberOp(key);
     if (!jobById(shop.activeId)) setActive(shop.assignments.length ? shop.assignments[0].id : '');
-    form = null;
-    formError = '';
-    save();
-    render();
+    done();
+  }
+
+  const DELETERS = {
+    machine: deleteMachine, tool: deleteTool, part: deletePart,
+    operation: deleteOperation, assignment: deleteAssignment,
+  };
+  const DELETE_LABELS = {
+    machine: 'Delete machine', tool: 'Delete tool', part: 'Delete part',
+    operation: 'Delete operation', assignment: 'Take off this machine',
+  };
+
+  function pickField(label, options, value, onChange) {
+    const wrap = el('label', 'mf-field mf-field-wide');
+    wrap.appendChild(el('span', 'mf-field-k', label));
+    wrap.appendChild(dropdown('mf-input', options, value, onChange, label));
+    return wrap;
   }
 
   function renderForm() {
@@ -1017,13 +1238,11 @@
     box.appendChild(el('div', 'mf-section-title', FORM_TITLES[kind][draft.id ? 1 : 0]));
     const grid = el('div', 'mf-grid');
 
-    // An assignment is a link before it is anything else, so both ends are
-    // chosen first, and the fields under them are read as belonging to that
-    // pairing rather than to either end on its own.
+    // A setup is a link before it is anything else, so the three things it
+    // joins are chosen first and the fields under them read as belonging to
+    // that combination rather than to any one of them.
     if (kind === 'assignment') {
-      const pickTool = el('label', 'mf-field mf-field-wide');
-      pickTool.appendChild(el('span', 'mf-field-k', 'Tool'));
-      pickTool.appendChild(dropdown('mf-input',
+      grid.appendChild(pickField('Tool',
         [{ value: '', label: 'Choose a tool…' }].concat(shop.tools.map(t => ({
           value: t.id,
           label: toolName(t) + (t.partNumber && t.desc ? ' — ' + t.partNumber : '') +
@@ -1039,14 +1258,19 @@
             renderForm();
           }
         }));
-      grid.appendChild(pickTool);
-
-      const pickMachine = el('label', 'mf-field mf-field-wide');
-      pickMachine.appendChild(el('span', 'mf-field-k', 'Machine'));
-      pickMachine.appendChild(dropdown('mf-input',
+      grid.appendChild(pickField('Machine',
         [{ value: '', label: 'Choose a machine…' }].concat(shop.machines.map(m => ({ value: m.id, label: m.name }))),
         draft.machineId, v => { draft.machineId = v; }));
-      grid.appendChild(pickMachine);
+      grid.appendChild(pickField('Operation',
+        [{ value: '', label: 'Choose an operation…' }].concat(operationOptions()),
+        draft.operationId, v => { draft.operationId = v; }));
+    }
+    if (kind === 'operation') {
+      grid.appendChild(pickField('Part',
+        [{ value: '', label: 'Choose a part…' }].concat(
+          [...shop.parts].sort((x, y) => partName(x).localeCompare(partName(y)))
+            .map(p => ({ value: p.id, label: partName(p) }))),
+        draft.partId, v => { draft.partId = v; }));
     }
 
     for (const f of FORM_FIELDS[kind]) {
@@ -1068,9 +1292,13 @@
     const area = el('textarea', 'mf-input mf-area');
     area.value = draft.notes || '';
     area.rows = 2;
-    area.placeholder = kind === 'assignment'
-      ? 'Speeds and feeds, what it sounds like when it is dull, anything worth the next setup knowing'
-      : (kind === 'tool' ? 'Grade, chipbreaker, where it is kept' : 'Control, spindle, anything the next setup should know');
+    area.placeholder = {
+      assignment: 'Speeds and feeds, what it sounds like when it is dull, anything worth the next setup knowing',
+      tool: 'Grade, chipbreaker, where it is kept',
+      machine: 'Control, spindle, anything the next setup should know',
+      part: 'Material, stock size, anything the whole job depends on',
+      operation: 'Fixture, orientation, what this op leaves for the next',
+    }[kind];
     area.addEventListener('input', () => { draft.notes = area.value; });
     notes.appendChild(area);
     grid.appendChild(notes);
@@ -1090,18 +1318,15 @@
     row.appendChild(button('mf-btn mf-btn-go', 'Save', saveForm));
     row.appendChild(button('mf-btn mf-btn-quiet', 'Cancel', closeForm));
     if (draft.id) {
-      const remove = { machine: deleteMachine, tool: deleteTool, assignment: deleteAssignment }[kind];
-      const label = { machine: 'Delete machine', tool: 'Delete tool', assignment: 'Take off this machine' }[kind];
-      row.appendChild(button('mf-btn mf-btn-danger', label, () => remove(draft.id)));
+      row.appendChild(button('mf-btn mf-btn-danger', DELETE_LABELS[kind], () => DELETERS[kind](draft.id)));
     }
     box.appendChild(row);
   }
 
   /* ---------------- choosing what to time ---------------- */
-  // Pointing the watch at a different assignment. The time on the display
-  // belonged to the one that just left, and its cycles are already recorded
-  // against it, so the watch starts the new one from zero. Returns false if
-  // nothing moved.
+  // Pointing the watch at a different setup. The time on the display belonged
+  // to the one that just left, and its cycles are already recorded against it,
+  // so the watch starts the new one from zero. Returns false if nothing moved.
   function setActive(id) {
     if (!shop || shop.activeId === id) return false;
     shop.activeId = id;
@@ -1115,10 +1340,11 @@
     render();
   }
 
-  /* ---------------- the two lists ----------------
-     The same relation read from both ends: machines with the tools on them,
-     and tools with the machines they run on. Which one you want depends on
-     whether you are standing at a machine or holding a tool.
+  /* ---------------- the three lists ----------------
+     The same records read from three ends: the parts with the operations that
+     make them, the machines with the tools set up on them, and the crib with
+     the machines each tool runs on. Which one you want depends on whether you
+     are holding a traveller, standing at a machine, or holding a tool.
   ---------------------------------------------------------------- */
   const hay = (...parts) => parts.filter(Boolean).join(' ').toLowerCase();
 
@@ -1128,15 +1354,35 @@
   function matchesTool(t) {
     return !filter || hay(t.partNumber, t.desc, t.notes).includes(filter);
   }
+  function matchesPart(p) {
+    return !filter || hay(p.number, p.desc, p.notes).includes(filter);
+  }
   function matchesJob(a) {
     if (!filter) return true;
     const tool = jobTool(a);
-    return hay(a.part, a.op, a.station, a.notes, machineName(a.machineId),
+    const part = jobPart(a);
+    const op = jobOperation(a);
+    return hay(a.station, a.notes, machineName(a.machineId), op && op.name,
+      part && part.number, part && part.desc,
       tool && tool.partNumber, tool && tool.desc).includes(filter);
   }
 
-  function renderMachines() {
-    const box = els.machines;
+  function searchBox() {
+    const search = el('input', 'mf-input mf-search');
+    search.type = 'search';
+    search.placeholder = 'Filter by part, op, machine, tool…';
+    search.value = filter;
+    search.addEventListener('input', () => {
+      filter = search.value.trim().toLowerCase();
+      renderParts();
+      renderMachines();
+      renderTools();
+    });
+    return search;
+  }
+
+  function renderParts() {
+    const box = els.parts;
     // the lists are rebuilt as the filter is typed, so note where the caret was
     const focused = document.activeElement;
     const hadSearch = !!(focused && focused.classList && focused.classList.contains('mf-search'));
@@ -1145,26 +1391,97 @@
     if (!shop) return;
 
     const head = el('div', 'mf-section-head');
-    head.appendChild(el('div', 'mf-section-title', 'Machines'));
-    head.appendChild(button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
+    head.appendChild(el('div', 'mf-section-title', 'Parts and operations'));
+    head.appendChild(button('mf-btn mf-btn-sm', '+ Part', () => openForm('part')));
     box.appendChild(head);
 
-    if (shop.assignments.length > 3 || shop.tools.length > 3 || shop.machines.length > 3) {
-      const search = el('input', 'mf-input mf-search');
-      search.type = 'search';
-      search.placeholder = 'Filter by machine, tool, part, op…';
-      search.value = filter;
-      search.addEventListener('input', () => {
-        filter = search.value.trim().toLowerCase();
-        renderMachines();
-        renderTools();
-      });
+    if (shop.assignments.length > 3 || shop.tools.length > 3 || shop.machines.length > 3 || shop.parts.length > 3) {
+      const search = searchBox();
       box.appendChild(search);
       if (hadSearch) { search.focus(); search.setSelectionRange(caret, caret); }
     }
 
+    if (!shop.parts.length) {
+      box.appendChild(el('div', 'mf-note',
+        'No parts yet. A part has operations, and an operation is what a tool is set up for — which is what gives a cutting time something to be true of.'));
+      return;
+    }
+
+    let shownAny = false;
+    for (const p of [...shop.parts].sort((x, y) => partName(x).localeCompare(partName(y)))) {
+      const ops = opsOfPart(p.id);
+      const shown = matchesPart(p) ? ops : ops.filter(o => jobsOfOperation(o.id).some(matchesJob) ||
+        (filter && o.name.toLowerCase().includes(filter)));
+      if (filter && !shown.length && !matchesPart(p)) continue;
+      shownAny = true;
+
+      const block = el('div', 'mf-machine');
+      const ph = el('div', 'mf-machine-head');
+      ph.appendChild(el('div', 'mf-machine-k', partName(p)));
+      if (p.number && p.desc) ph.appendChild(el('div', 'mf-machine-v', p.desc));
+      const pb = el('div', 'mf-machine-btns');
+      pb.appendChild(button('mf-btn mf-btn-sm', '+ Operation', () => openForm('operation', '', { partId: p.id }),
+        'Another step in making this part'));
+      pb.appendChild(button('mf-link', 'Edit', () => openForm('part', p.id)));
+      ph.appendChild(pb);
+      block.appendChild(ph);
+
+      if (!shown.length) {
+        block.appendChild(el('div', 'mf-note', ops.length
+          ? 'Nothing on this part matches that.'
+          : 'No operations yet — a part is made by its ops, and a tool is set up for one of them.'));
+        box.appendChild(block);
+        continue;
+      }
+
+      for (const o of shown) {
+        const jobs = jobsOfOperation(o.id).sort(bySeq);
+        const row = el('div', 'mf-op' + (jobs.some(a => a.id === shop.activeId) ? ' mf-op-on' : ''));
+        const name = el('div', 'mf-op-k');
+        name.appendChild(el('span', 'mf-seq', o.seq ? String(o.seq) : '–'));
+        name.appendChild(el('span', 'mf-op-name', o.name));
+        row.appendChild(name);
+
+        const machines = machinesOfOperation(o.id).map(machineName);
+        const bits = [];
+        bits.push(machines.length ? machines.join(', ') : 'no machine yet');
+        bits.push(jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : 'no tools set up');
+        let total = 0, timed = 0;
+        for (const a of jobs) {
+          const s = statsFor(a);
+          if (s) { total += s.avg; timed++; }
+        }
+        if (timed) bits.push(fmtSec(total) + ' measured');
+        row.appendChild(el('div', 'mf-op-v', bits.join(' · ')));
+
+        const acts = el('div', 'mf-op-btns');
+        if (jobs.length) {
+          acts.appendChild(button('mf-link', 'Time it', () => selectJob(jobs[0].id),
+            'Point the watch at the first tool of this op'));
+        } else {
+          acts.appendChild(button('mf-link', 'Set up a tool', () => openForm('assignment', '', { operationId: o.id })));
+        }
+        acts.appendChild(button('mf-link', 'Edit', () => openForm('operation', o.id)));
+        row.appendChild(acts);
+        block.appendChild(row);
+      }
+      box.appendChild(block);
+    }
+    if (!shownAny) box.appendChild(el('div', 'mf-note', 'No part matches that.'));
+  }
+
+  function renderMachines() {
+    const box = els.machines;
+    box.innerHTML = '';
+    if (!shop) return;
+
+    const head = el('div', 'mf-section-head');
+    head.appendChild(el('div', 'mf-section-title', 'Machines'));
+    head.appendChild(button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
+    box.appendChild(head);
+
     if (!shop.machines.length) {
-      box.appendChild(el('div', 'mf-note', 'No machines yet. A machine is what a tool gets assigned to.'));
+      box.appendChild(el('div', 'mf-note', 'No machines yet. A machine is what a tool gets set up on.'));
       return;
     }
 
@@ -1180,8 +1497,7 @@
 
       const block = el('div', 'mf-machine');
       const mh = el('div', 'mf-machine-head');
-      const name = el('div', 'mf-machine-k', m.name);
-      mh.appendChild(name);
+      mh.appendChild(el('div', 'mf-machine-k', m.name));
       let total = 0, timed = 0;
       for (const a of all) {
         const s = statsFor(a);
@@ -1192,7 +1508,7 @@
         : 'no tools yet'));
       const mb = el('div', 'mf-machine-btns');
       mb.appendChild(button('mf-btn mf-btn-sm', '+ Tool here', () => openForm('assignment', '', { machineId: m.id }),
-        'Assign a tool from the crib to this machine'));
+        'Set a tool from the crib up on this machine'));
       mb.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id)));
       mh.appendChild(mb);
       block.appendChild(mh);
@@ -1200,13 +1516,13 @@
       if (!jobs.length) {
         block.appendChild(el('div', 'mf-note', all.length
           ? 'Nothing on this machine matches that.'
-          : 'No tools assigned to this machine yet.'));
+          : 'No tools set up on this machine yet.'));
         box.appendChild(block);
         continue;
       }
 
-      // within a machine, the tools are grouped by the job they are set up for
-      // and run in the order they cut
+      // within a machine, the tools are grouped by the operation they are set
+      // up for and run in the order they cut
       const groups = new Map();
       for (const a of jobs) {
         const key = opKey(a);
@@ -1274,7 +1590,7 @@
       (s ? s.count + (s.count === 1 ? ' cycle' : ' cycles') : 'not timed yet') +
       (life ? ' · index every ' + life.parts + ' parts' : '')));
     foot.appendChild(button('mf-link', 'Setup', e => { e.stopPropagation(); openForm('assignment', a.id); },
-      'The cutting time, edges and tool life of this tool here'));
+      'The operation, cutting time, edges and tool life of this tool here'));
     card.appendChild(foot);
 
     const choose = () => selectJob(a.id);
@@ -1285,7 +1601,7 @@
     return card;
   }
 
-  // Move a tool one place earlier or later in its op, and renumber the op so
+  // Move a tool one place earlier or later in its operation, and renumber so
   // the sequence stays 1..n.
   function moveJob(id, to) {
     const a = jobById(id);
@@ -1316,7 +1632,7 @@
       return;
     }
 
-    // a tool shows if it matches, or if any machine it is on does
+    // a tool shows if it matches, or if any setup it is in does
     const shown = shop.tools.filter(t => matchesTool(t) || jobsOfTool(t.id).some(matchesJob));
     if (!shown.length) {
       box.appendChild(el('div', 'mf-note', 'No tool matches that.'));
@@ -1337,29 +1653,27 @@
       const tags = el('div', 'mf-tags');
       if (jobs.length) {
         // the other direction of the relation: every machine this one tool is
-        // on, and the setup it has there
+        // set up on, and what it is cutting there
         for (const a of jobs.sort((x, y) => machineName(x.machineId).localeCompare(machineName(y.machineId)))) {
           const label = machineName(a.machineId) + (a.station ? ' · ' + a.station : '');
-          const tag = button('mf-tag' + (a.id === shop.activeId ? ' mf-tag-on' : ''), label,
+          tags.appendChild(button('mf-tag' + (a.id === shop.activeId ? ' mf-tag-on' : ''), label,
             () => selectJob(a.id),
-            [opLabel(a), a.partsPerIndex ? a.partsPerIndex + ' parts per index' : 'no tool life set yet',
-              a.cutSec ? fmtSec(a.cutSec) + ' in cut' : ''].filter(Boolean).join(' · '));
-          tags.appendChild(tag);
+            [jobLabel(a), a.cutSec ? fmtSec(a.cutSec) + ' in cut' : '',
+              a.partsPerIndex ? a.partsPerIndex + ' parts per index' : 'no tool life set yet'].filter(Boolean).join(' · ')));
         }
       } else {
-        tags.appendChild(el('span', 'mf-tag mf-tag-off', 'Not on a machine yet'));
+        tags.appendChild(el('span', 'mf-tag mf-tag-off', 'Not set up anywhere yet'));
       }
       card.appendChild(tags);
 
       const foot = el('div', 'mf-card-foot');
       const bits = [];
       if (t.cost) bits.push('costs ' + t.cost);
-      bits.push(jobs.length
-        ? 'on ' + machinesOfTool(t.id).length + (machinesOfTool(t.id).length === 1 ? ' machine' : ' machines')
-        : 'unassigned');
+      const machines = machinesOfTool(t.id).length;
+      bits.push(machines ? 'on ' + machines + (machines === 1 ? ' machine' : ' machines') : 'unassigned');
       foot.appendChild(el('span', null, bits.join(' · ')));
-      foot.appendChild(button('mf-link', 'Assign', () => openForm('assignment', '', { toolId: t.id }),
-        'Put this tool on a machine'));
+      foot.appendChild(button('mf-link', 'Set up', () => openForm('assignment', '', { toolId: t.id }),
+        'Put this tool on a machine, for an operation'));
       foot.appendChild(button('mf-link', 'Edit', () => openForm('tool', t.id)));
       card.appendChild(foot);
       box.appendChild(card);
@@ -1375,30 +1689,38 @@
      are derived, and taking them as given would let a stale figure in a
      spreadsheet contradict the times it was supposed to summarize.
 
-     One row can name a machine, a tool, the assignment between them and a
-     cycle timed against it; whichever of those it names are the ones it makes.
-     An import never deletes anything. A machine is matched by name, a tool by
-     its part number and description, an assignment by the machine and tool it
-     joins plus the part, op and station it is set up for. Re-importing the same
+     One row can name a part, an operation of it, a machine, a tool, the setup
+     joining them and a cycle timed against it; whichever of those it names are
+     the ones it makes. An import never deletes anything. A part is matched by
+     number, an operation by its name within that part, a machine by name, a
+     tool by its part number and description, and a setup by the machine, tool
+     and operation it joins plus the station it sits in. Re-importing the same
      file changes nothing, because a cycle is recognized by when it was recorded
      and how long it took.
   ---------------------------------------------------------------- */
+  // Each record that can carry notes has its own notes column, so none can
+  // swallow another's and a file that came out of here goes back in whole.
   const IMPORT_COLUMNS = [
-    'machine', 'machine_notes', 'part', 'op', 'seq', 'station',
+    'machine', 'machine_notes',
+    'part', 'part_description', 'part_notes', 'op', 'op_notes',
+    'seq', 'station',
     'tool_part_number', 'tool_description', 'cutting_edges', 'tool_cost', 'tool_notes',
     'cutting_time_sec', 'indexable_edges', 'parts_per_index',
     'notes', 'cycle_seconds', 'recorded_at',
   ];
+  const DERIVED_COLUMNS = ['cycles_timed', 'average_seconds', 'parts_per_tool'];
   // header name (normalized) → the field it fills. The export's own names, the
-  // shorter ones a person is likely to type, and the ones version 1 of this
-  // add-on wrote, so a file exported before tools and machines were separate
-  // still reads.
+  // shorter ones a person is likely to type, and the ones earlier versions of
+  // this add-on wrote, so a file exported before any of this still reads.
   const COLUMN_ALIASES = {
     machine: 'machine', machine_name: 'machine', machine_no: 'machine',
     machine_notes: 'machineNotes', machine_note: 'machineNotes',
     tool_notes: 'toolNotes', tool_note: 'toolNotes',
     part: 'part', part_number: 'part', partno: 'part', job: 'part',
-    op: 'op', operation: 'op',
+    part_description: 'partDesc', part_desc: 'partDesc', part_name: 'partDesc',
+    part_notes: 'partNotes', part_note: 'partNotes',
+    op: 'op', operation: 'op', op_name: 'op',
+    op_notes: 'opNotes', op_note: 'opNotes', operation_notes: 'opNotes',
     seq: 'seq', sequence: 'seq', order: 'seq',
     station: 'station', turret: 'station', pocket: 'station',
     tool_part_number: 'toolPartNumber', tool_part: 'toolPartNumber', tool_pn: 'toolPartNumber',
@@ -1427,9 +1749,11 @@
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
 
+  const lower = v => String(v || '').trim().toLowerCase();
   const toolKeyOf = (partNumber, desc) => ((partNumber || '') + ' ' + (desc || '')).trim().toLowerCase();
-  const jobKeyOf = (machineKey, toolKey, part, op, station) =>
-    [machineKey, toolKey, part || '', op || '', station || ''].join('\u0000').toLowerCase();
+  const opKeyOf = (partKey, name) => partKey + ' ' + lower(name);
+  const jobKeyOf = (machineKey, toolKey, operationKey, station) =>
+    [machineKey, toolKey, operationKey, lower(station)].join(' ');
 
   // A CSV reader that handles what a spreadsheet actually writes: quoted fields,
   // "" for a quote inside one, commas and newlines inside quotes, and CRLF.
@@ -1475,18 +1799,20 @@
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
 
-  // Read a file into the machines, tools, assignments and cycles it describes,
-  // with a note of anything that could not be used. Nothing is changed here —
-  // this only reads.
+  // Read a file into the parts, operations, machines, tools, setups and cycles
+  // it describes, with a note of anything that could not be used. Nothing is
+  // changed here — this only reads.
   function readImport(text) {
     const rows = parseCsv(text, sniffSeparator(text));
     if (!rows.length) return { error: 'That file has nothing in it.' };
     const header = rows[0].map(normHeader).map(h => COLUMN_ALIASES[h] || '');
-    const names = ['machine', 'toolPartNumber', 'desc'];
+    const names = ['machine', 'toolPartNumber', 'desc', 'part'];
     if (!header.some(f => names.includes(f))) {
-      return { error: 'That file has no column naming a machine or a tool. It needs at least one of ' +
-        'machine, tool part number or tool description — the columns the ⤓ Export button writes.' };
+      return { error: 'That file has no column naming a part, a machine or a tool. It needs at least one of ' +
+        'part, machine, tool part number or tool description — the columns the ⤓ Export button writes.' };
     }
+    const parts = new Map();
+    const operations = new Map();
     const machines = new Map();
     const tools = new Map();
     const links = new Map();
@@ -1497,21 +1823,18 @@
       const cell = {};
       header.forEach((field, i) => { if (field) cell[field] = String(raw[i] == null ? '' : raw[i]).trim(); });
 
-      // Three things carry notes — the machine, the tool and the setup between
-      // them — so each has its own column and none can swallow another's.
+      // Each record has its own notes column, so none can swallow another's.
       const machineName = cell.machine || '';
-      const machineKey = machineName.toLowerCase();
+      const machineKey = lower(machineName);
       const toolKey = toolKeyOf(cell.toolPartNumber, cell.desc);
 
       if (machineName) {
         if (!machines.has(machineKey)) machines.set(machineKey, { name: machineName, notes: '' });
         if (cell.machineNotes) machines.get(machineKey).notes = cell.machineNotes;
       }
-
-      let tool = null;
       if (toolKey) {
         if (!tools.has(toolKey)) tools.set(toolKey, { key: toolKey, fields: {} });
-        tool = tools.get(toolKey);
+        const tool = tools.get(toolKey);
         if (cell.toolPartNumber) tool.fields.partNumber = cell.toolPartNumber;
         if (cell.desc) tool.fields.desc = cell.desc;
         if (cell.toolNotes) tool.fields.notes = cell.toolNotes;
@@ -1521,17 +1844,37 @@
           if (n) tool.fields[f] = f === 'cost' ? n : Math.floor(n);
         }
       }
-      if (!machineName && !toolKey) { skipped++; continue; }
-      // A row naming only one end makes that one thing and nothing else: a
-      // machine with no tools yet, or a tool waiting to be put on one.
+
+      // An op named without a part still belongs to something; they gather
+      // under one clearly named part rather than each inventing one.
+      const partNumber = cell.part || (cell.op ? 'Unassigned' : '');
+      const partKey = lower(partNumber);
+      let operationKey = '';
+      if (partNumber) {
+        if (!parts.has(partKey)) parts.set(partKey, { key: partKey, number: partNumber, desc: '', notes: '' });
+        const part = parts.get(partKey);
+        if (cell.partDesc) part.desc = cell.partDesc;
+        if (cell.partNotes) part.notes = cell.partNotes;
+        if (cell.op) {
+          operationKey = opKeyOf(partKey, cell.op);
+          if (!operations.has(operationKey)) {
+            operations.set(operationKey, { key: operationKey, partKey, name: cell.op, notes: '' });
+          }
+          if (cell.opNotes) operations.get(operationKey).notes = cell.opNotes;
+        }
+      }
+
+      if (!machineName && !toolKey && !partNumber) { skipped++; continue; }
+      // A row naming only some of them makes those and nothing else: a part
+      // waiting for its ops, a machine with no tools, a tool in the crib.
       if (!machineName || !toolKey) continue;
 
-      const key = jobKeyOf(machineKey, toolKey, cell.part, cell.op, cell.station);
+      const key = jobKeyOf(machineKey, toolKey, operationKey, cell.station);
       if (!links.has(key)) {
-        links.set(key, { key, machineKey, toolKey, fields: {}, runs: [], lifeMin: 0 });
+        links.set(key, { key, machineKey, toolKey, operationKey, fields: {}, runs: [], lifeMin: 0 });
       }
       const link = links.get(key);
-      for (const f of ['part', 'op', 'station', 'notes']) {
+      for (const f of ['station', 'notes']) {
         if (cell[f]) link.fields[f] = cell[f];
       }
       for (const f of JOB_NUMERIC) {
@@ -1573,6 +1916,8 @@
     }
 
     return {
+      parts: [...parts.values()],
+      operations: [...operations.values()],
       machines: [...machines.entries()].map(([key, m]) => ({ key, name: m.name, notes: m.notes })),
       tools: [...tools.values()],
       links: [...links.values()],
@@ -1584,21 +1929,51 @@
   // preview and the import itself both read this, so what is shown is what runs.
   function planImport(read) {
     const plan = {
-      machines: [], tools: [], add: [], update: [],
+      parts: [], operations: [], machines: [], tools: [], add: [], update: [],
       newRuns: 0, dupeRuns: 0,
-      overflowMachines: 0, overflowTools: 0, overflowJobs: 0, overflowRuns: 0,
+      overflowParts: 0, overflowOperations: 0, overflowMachines: 0, overflowTools: 0,
+      overflowJobs: 0, overflowRuns: 0,
     };
-    const machineByKey = new Map(shop.machines.map(m => [m.name.toLowerCase(), m]));
+    const partByKey = new Map(shop.parts.map(p => [lower(p.number || p.desc), p]));
+    const machineByKey = new Map(shop.machines.map(m => [lower(m.name), m]));
     const toolByKey = new Map(shop.tools.map(t => [toolKeyOf(t.partNumber, t.desc), t]));
+    const opByKey = new Map(shop.operations.map(o => {
+      const p = partById(o.partId);
+      return [opKeyOf(lower(p && (p.number || p.desc)), o.name), o];
+    }));
     const jobByKey = new Map(shop.assignments.map(a => {
       const tool = jobTool(a);
-      return [jobKeyOf(machineName(a.machineId).toLowerCase(),
-        toolKeyOf(tool && tool.partNumber, tool && tool.desc), a.part, a.op, a.station), a];
+      const op = jobOperation(a);
+      const part = jobPart(a);
+      return [jobKeyOf(lower(machineName(a.machineId)),
+        toolKeyOf(tool && tool.partNumber, tool && tool.desc),
+        op ? opKeyOf(lower(part && (part.number || part.desc)), op.name) : '',
+        a.station), a];
     }));
+    let partRoom = Math.max(0, limits.maxParts - shop.parts.length);
+    let opRoom = Math.max(0, limits.maxOperations - shop.operations.length);
     let machineRoom = Math.max(0, limits.maxMachines - shop.machines.length);
     let toolRoom = Math.max(0, limits.maxTools - shop.tools.length);
     let jobRoom = Math.max(0, limits.maxAssignments - shop.assignments.length);
 
+    const newParts = new Set();
+    for (const p of read.parts) {
+      const fill = {};
+      if (p.desc) fill.desc = p.desc;
+      if (p.notes) fill.notes = p.notes;
+      const match = partByKey.get(p.key);
+      if (match) { plan.parts.push({ part: match, fields: fill, existing: true }); continue; }
+      if (partRoom > 0) { partRoom--; plan.parts.push({ key: p.key, fields: { number: p.number, ...fill } }); newParts.add(p.key); }
+      else plan.overflowParts++;
+    }
+    const newOps = new Set();
+    for (const o of read.operations) {
+      if (opByKey.has(o.key)) continue;
+      // an operation whose part could not be made has nothing to belong to
+      if (!partByKey.has(o.partKey) && !newParts.has(o.partKey)) { plan.overflowOperations++; continue; }
+      if (opRoom > 0) { opRoom--; plan.operations.push(o); newOps.add(o.key); }
+      else plan.overflowOperations++;
+    }
     const newMachines = new Set();
     for (const m of read.machines) {
       if (machineByKey.has(m.key)) continue;
@@ -1620,6 +1995,8 @@
       const machineIn = machineByKey.has(link.machineKey) || newMachines.has(link.machineKey);
       const toolIn = toolByKey.has(link.toolKey) || newTools.has(link.toolKey);
       if (!machineIn || !toolIn) { plan.overflowJobs++; continue; }
+      // an op that did not fit leaves the tool on the machine with none set
+      const opIn = !link.operationKey || opByKey.has(link.operationKey) || newOps.has(link.operationKey);
 
       const match = jobByKey.get(link.key);
       // A cycle is the same cycle if it was recorded at the same moment and ran
@@ -1641,7 +2018,7 @@
       } else if (jobRoom > 0) {
         jobRoom--;
         plan.newRuns += fresh.length;
-        plan.add.push({ link, runs: fresh });
+        plan.add.push({ link, runs: fresh, withOp: opIn });
       } else {
         plan.overflowJobs++;
       }
@@ -1651,9 +2028,38 @@
 
   function applyImport(plan) {
     const now = Date.now();
-    const machineByKey = new Map(shop.machines.map(m => [m.name.toLowerCase(), m]));
+    const partByKey = new Map(shop.parts.map(p => [lower(p.number || p.desc), p]));
+    const machineByKey = new Map(shop.machines.map(m => [lower(m.name), m]));
     const toolByKey = new Map(shop.tools.map(t => [toolKeyOf(t.partNumber, t.desc), t]));
+    const opByKey = new Map(shop.operations.map(o => {
+      const p = partById(o.partId);
+      return [opKeyOf(lower(p && (p.number || p.desc)), o.name), o];
+    }));
 
+    for (const p of plan.parts) {
+      if (p.existing) {
+        Object.assign(p.part, p.fields); // a blank cell leaves what is already there
+        touch(p.part);
+        continue;
+      }
+      const part = {
+        id: newId('p'), number: '', desc: '', notes: '', ...p.fields,
+        createdAt: now, updatedAt: now,
+      };
+      shop.parts.push(part);
+      partByKey.set(p.key, part);
+    }
+    for (const o of plan.operations) {
+      const part = partByKey.get(o.partKey);
+      if (!part) continue;
+      const operation = {
+        id: newId('o'), partId: part.id, name: o.name,
+        seq: opsOfPart(part.id).reduce((max, x) => Math.max(max, x.seq || 0), 0) + 1,
+        notes: o.notes || '', createdAt: now, updatedAt: now,
+      };
+      shop.operations.push(operation);
+      opByKey.set(o.key, operation);
+    }
     for (const m of plan.machines) {
       const machine = { id: newId('m'), name: m.name, notes: m.notes || '', createdAt: now, updatedAt: now };
       shop.machines.push(machine);
@@ -1661,7 +2067,7 @@
     }
     for (const t of plan.tools) {
       if (t.existing) {
-        Object.assign(t.tool, t.fields); // a blank cell leaves what is already there
+        Object.assign(t.tool, t.fields);
         touch(t.tool);
         continue;
       }
@@ -1684,20 +2090,23 @@
       const machine = machineByKey.get(a.link.machineKey);
       const tool = toolByKey.get(a.link.toolKey);
       if (!machine || !tool) continue;
+      const operation = a.link.operationKey ? opByKey.get(a.link.operationKey) : null;
       const job = {
         id: newId('a'), toolId: tool.id, machineId: machine.id,
-        part: '', op: '', station: '', seq: 0, cutSec: 0, indexEdges: 0, partsPerIndex: 0, notes: '',
+        operationId: operation ? operation.id : '',
+        station: '', seq: 0, cutSec: 0, indexEdges: 0, partsPerIndex: 0, notes: '',
         ...a.link.fields,
         runs: a.runs.sort((x, y) => y.at - x.at).slice(0, limits.maxRuns),
         createdAt: now, updatedAt: now,
       };
-      // a tool assigned without saying how many edges are indexed there uses
+      // a tool set up without saying how many edges are indexed there uses
       // every edge the tool has
       if (!job.indexEdges && tool.cuttingEdges) job.indexEdges = tool.cuttingEdges;
       shop.assignments.push(job);
       touched.add(opKey(job));
     }
     for (const key of touched) renumberOp(key);
+    for (const p of shop.parts) renumberPart(p.id);
     if (!jobById(shop.activeId) && shop.assignments.length) shop.activeId = shop.assignments[0].id;
     saveNow(); // a bulk import goes out at once rather than sitting in the debounce
     render();
@@ -1711,18 +2120,22 @@
     const { read, plan, name } = pendingImport;
 
     box.appendChild(el('div', 'mf-section-title', 'Import ' + name));
+    const newParts = plan.parts.filter(p => !p.existing).length;
     const newTools = plan.tools.filter(t => !t.existing).length;
     const lines = [];
-    if (plan.machines.length) lines.push(plan.machines.length + (plan.machines.length === 1 ? ' new machine' : ' new machines'));
-    if (newTools) lines.push(newTools + (newTools === 1 ? ' new tool' : ' new tools'));
-    if (plan.add.length) lines.push(plan.add.length + (plan.add.length === 1 ? ' new assignment' : ' new assignments'));
-    if (plan.update.length) lines.push(plan.update.length + ' already assigned');
+    const count = (n, one, many) => { if (n) lines.push(n + ' new ' + (n === 1 ? one : many)); };
+    count(newParts, 'part', 'parts');
+    count(plan.operations.length, 'operation', 'operations');
+    count(plan.machines.length, 'machine', 'machines');
+    count(newTools, 'tool', 'tools');
+    count(plan.add.length, 'setup', 'setups');
+    if (plan.update.length) lines.push(plan.update.length + ' already set up');
     lines.push(plan.newRuns + (plan.newRuns === 1 ? ' new cycle' : ' new cycles'));
     box.appendChild(el('div', 'mf-import-sum', lines.join(' · ')));
 
     const notes = [];
-    if (plan.update.length || plan.tools.some(t => t.existing)) {
-      notes.push('Tools and assignments already on the board keep every field this file leaves blank, and keep every cycle they already have.');
+    if (plan.update.length || plan.tools.some(t => t.existing) || plan.parts.some(p => p.existing)) {
+      notes.push('Records already on the board keep every field this file leaves blank, and keep every cycle they already have.');
     }
     if (read.converted) notes.push(read.converted + ' tool life' + (read.converted === 1 ? '' : 's') +
       ' given in cutting minutes per edge ' + (read.converted === 1 ? 'was' : 'were') +
@@ -1733,30 +2146,34 @@
     if (plan.dupeRuns) notes.push(plan.dupeRuns + ' cycle' + (plan.dupeRuns === 1 ? ' is' : 's are') +
       ' already recorded and will be left alone.');
     if (read.skipped) notes.push(read.skipped + ' row' + (read.skipped === 1 ? '' : 's') +
-      ' named neither a machine nor a tool and will be skipped.');
+      ' named no part, machine or tool and will be skipped.');
     if (read.badSecs) notes.push(read.badSecs + ' cycle time' + (read.badSecs === 1 ? '' : 's') +
       ' could not be read as a number.');
     if (read.badTimes) notes.push(read.badTimes + ' date' + (read.badTimes === 1 ? '' : 's') +
       ' could not be read; those cycles will be stamped now.');
-    if (plan.overflowMachines) notes.push(plan.overflowMachines + ' machine' + (plan.overflowMachines === 1 ? '' : 's') +
-      ' will not fit — this account holds ' + limits.maxMachines + '.');
-    if (plan.overflowTools) notes.push(plan.overflowTools + ' tool' + (plan.overflowTools === 1 ? '' : 's') +
-      ' will not fit — this account holds ' + limits.maxTools + '.');
-    if (plan.overflowJobs) notes.push(plan.overflowJobs + ' assignment' + (plan.overflowJobs === 1 ? '' : 's') +
-      ' will not fit — this account holds ' + limits.maxAssignments + '.');
-    if (plan.overflowRuns) notes.push('The oldest cycles on some assignments will roll off at ' + limits.maxRuns + ' each.');
+    const overflow = [
+      [plan.overflowParts, 'part', 'parts', limits.maxParts],
+      [plan.overflowOperations, 'operation', 'operations', limits.maxOperations],
+      [plan.overflowMachines, 'machine', 'machines', limits.maxMachines],
+      [plan.overflowTools, 'tool', 'tools', limits.maxTools],
+      [plan.overflowJobs, 'setup', 'setups', limits.maxAssignments],
+    ];
+    for (const [n, one, many, cap] of overflow) {
+      if (n) notes.push(n + ' ' + (n === 1 ? one : many) + ' will not fit — this account holds ' + cap + '.');
+    }
+    if (plan.overflowRuns) notes.push('The oldest cycles on some setups will roll off at ' + limits.maxRuns + ' each.');
     notes.push('Nothing is deleted by an import.');
     for (const n of notes) box.appendChild(el('div', 'mf-note', n));
 
     const btns = el('div', 'mf-form-btns');
-    const nothing = !plan.machines.length && !plan.tools.length && !plan.add.length && !plan.update.length;
+    const nothing = !plan.parts.length && !plan.operations.length && !plan.machines.length &&
+      !plan.tools.length && !plan.add.length && !plan.update.length;
     btns.appendChild(button('mf-btn mf-btn-go', 'Import', () => {
       const job = pendingImport;
       pendingImport = null;
       applyImport(job.plan);
-      flash('Imported ' + job.name + ' — ' + job.plan.machines.length + ' machines, ' +
-        job.plan.tools.filter(t => !t.existing).length + ' tools, ' +
-        job.plan.add.length + ' assignments, ' + job.plan.newRuns + ' cycles added.');
+      flash('Imported ' + job.name + ' — ' + job.plan.add.length + ' setups and ' +
+        job.plan.newRuns + ' cycles added.');
     }, nothing ? 'There is nothing in this file to add' : ''));
     btns.appendChild(button('mf-btn mf-btn-quiet', 'Cancel', () => { pendingImport = null; renderImport(); }));
     if (nothing) btns.firstChild.disabled = true;
@@ -1772,68 +2189,89 @@
     catch (err) { flash('That file could not be read. ' + err.message); return; }
     const read = readImport(text);
     if (read.error) { flash(read.error); return; }
-    if (!read.machines.length && !read.tools.length) { flash('No machines or tools could be read out of that file.'); return; }
+    if (!read.machines.length && !read.tools.length && !read.parts.length) {
+      flash('No parts, machines or tools could be read out of that file.');
+      return;
+    }
     pendingImport = { read, plan: planImport(read), name: file.name || 'the file' };
     renderImport();
   }
 
   /* ---------------- export ---------------- */
-  // One row per recorded cycle, carrying the tool, the machine and the setup
-  // between them, so the file can be pivoted in a spreadsheet without going
-  // back to the app. An assignment with nothing timed still gets its row, and
-  // so does a tool that is not on a machine yet.
+  // One row per recorded cycle, carrying the part, the operation, the machine,
+  // the tool and the setup between them, so the file can be pivoted in a
+  // spreadsheet without going back to the app. A setup with nothing timed still
+  // gets its row, and so do a part with no operations, an operation with no
+  // tools, a tool in the crib and a machine with nothing on it.
   function exportCsv() {
-    if (!shop || (!shop.tools.length && !shop.machines.length)) { flash('Nothing to export yet.'); return; }
+    if (!shop || (!shop.tools.length && !shop.machines.length && !shop.parts.length)) {
+      flash('Nothing to export yet.');
+      return;
+    }
     const cell = v => {
       const s = String(v == null ? '' : v);
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const rows = [[
-      ...IMPORT_COLUMNS, // everything an import reads back, in the order it is written
-      'cycles_timed', 'average_seconds', 'parts_per_tool', // worked out from the rest
-    ]];
+    // Rows are written from a named object rather than a bare list, so a column
+    // added in the middle cannot silently shift what is under the ones after it.
+    const columns = [...IMPORT_COLUMNS, ...DERIVED_COLUMNS];
+    const rows = [columns];
+    const push = obj => rows.push(columns.map(k => (obj[k] == null ? '' : obj[k])));
+
+    const machineCells = id => {
+      const m = machineById(id);
+      return m ? { machine: m.name, machine_notes: m.notes } : {};
+    };
+    const partCells = p => (p ? { part: p.number, part_description: p.desc, part_notes: p.notes } : {});
+    const opCells = o => (o ? { ...partCells(partById(o.partId)), op: o.name, op_notes: o.notes } : {});
+    const toolCells = t => (t ? {
+      tool_part_number: t.partNumber, tool_description: t.desc,
+      cutting_edges: t.cuttingEdges || '', tool_cost: t.cost || '', tool_notes: t.notes,
+    } : {});
 
     // in running order, machine by machine and op by op, so the file opens the
     // way the floor runs
     const jobs = [...shop.assignments].sort((a, b) =>
       opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b));
-    const machineCell = id => {
-      const m = machineById(id);
-      return m ? [m.name, m.notes] : ['', ''];
-    };
-    const toolCell = t => [t.partNumber || '', t.desc || '', t.cuttingEdges || '', t.cost || '', t.notes || ''];
-    const blank = n => Array(n).fill('');
-
     for (const a of jobs) {
       const s = statsFor(a);
       const life = lifeFor(a, s ? s.avg : 0);
-      const base = [
-        ...machineCell(a.machineId), a.part, a.op, a.seq || '', a.station,
-        ...toolCell(jobTool(a) || {}),
-        a.cutSec || '', a.indexEdges || '', a.partsPerIndex || '', a.notes,
-      ];
-      const tail = [s ? s.count : 0, s ? round(s.avg, 2) : '', life ? life.partsPerTool || '' : ''];
-      if (!a.runs.length) { rows.push(base.concat(['', '']).concat(tail)); continue; }
+      const base = {
+        ...machineCells(a.machineId),
+        ...opCells(jobOperation(a)),
+        ...toolCells(jobTool(a)),
+        seq: a.seq || '', station: a.station,
+        cutting_time_sec: a.cutSec || '', indexable_edges: a.indexEdges || '',
+        parts_per_index: a.partsPerIndex || '', notes: a.notes,
+        cycles_timed: s ? s.count : 0,
+        average_seconds: s ? round(s.avg, 2) : '',
+        parts_per_tool: life ? life.partsPerTool || '' : '',
+      };
+      if (!a.runs.length) { push(base); continue; }
       for (const r of a.runs) {
-        rows.push(base.concat([round(r.sec, 2), new Date(r.at).toISOString()]).concat(tail));
+        push({ ...base, cycle_seconds: round(r.sec, 2), recorded_at: new Date(r.at).toISOString() });
       }
     }
-    // the crib and the floor in full: a tool on no machine, and a machine with
-    // no tools, are both worth carrying out of here
+    // the whole floor, not only the timed part of it: an operation nothing is
+    // set up for, a part with no operations, a tool in the crib, an idle machine
+    for (const o of shop.operations) {
+      if (!jobsOfOperation(o.id).length) push({ ...opCells(o), cycles_timed: 0 });
+    }
+    for (const p of shop.parts) {
+      if (!opsOfPart(p.id).length) push({ ...partCells(p), cycles_timed: 0 });
+    }
     for (const t of shop.tools) {
-      if (jobsOfTool(t.id).length) continue;
-      rows.push([...blank(6), ...toolCell(t), ...blank(4), '', '', 0, '', '']);
+      if (!jobsOfTool(t.id).length) push({ ...toolCells(t), cycles_timed: 0 });
     }
     for (const m of shop.machines) {
-      if (jobsOnMachine(m.id).length) continue;
-      rows.push([m.name, m.notes, ...blank(4), ...blank(5), ...blank(4), '', '', 0, '', '']);
+      if (!jobsOnMachine(m.id).length) push({ ...machineCells(m.id), cycles_timed: 0 });
     }
 
     const csv = rows.map(r => r.map(cell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'shop-tooling-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.download = 'shopwatch-' + new Date().toISOString().slice(0, 10) + '.csv';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1843,7 +2281,7 @@
   /* ---------------- keyboard ---------------- */
   // Hands are usually on the machine rather than the keyboard, but a laptop at
   // the bench gets the three keys that matter. Ignored while typing, and while
-  // the Shop screen is not the one on show.
+  // this screen is not the one on show.
   function onKey(e) {
     if (!host || host.hidden || form) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1864,14 +2302,15 @@
 
     const top = el('div', 'mf-top');
     const heading = el('div');
-    heading.appendChild(el('h1', 'mf-h1', 'Shop floor'));
-    heading.appendChild(el('div', 'mf-sub', 'Tools, machines, and the cycle times between them'));
+    heading.appendChild(el('h1', 'mf-h1', 'Shopwatch'));
+    heading.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, op by op'));
     top.appendChild(heading);
     const actions = el('div', 'mf-top-btns');
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Part', () => openForm('part')));
     actions.appendChild(button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
     actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool')));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Assign', () => openForm('assignment'),
-      'Put a tool from the crib on a machine'));
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Setup', () => openForm('assignment'),
+      'Put a tool from the crib on a machine, for an operation'));
     // The file input is driven by the button beside it rather than shown raw,
     // and is reset after each pick so choosing the same file twice still fires.
     const file = el('input', 'mf-file');
@@ -1904,6 +2343,7 @@
     els.form.hidden = true;
     els.chart = el('div', 'mf-chart');
     els.chart.hidden = true;
+    els.parts = el('div', 'mf-parts');
     els.machines = el('div', 'mf-machines');
     els.tools = el('div', 'mf-tools');
     page.appendChild(els.watch);
@@ -1911,6 +2351,7 @@
     page.appendChild(els.runs);
     page.appendChild(els.form);
     page.appendChild(els.chart);
+    page.appendChild(els.parts);
     page.appendChild(els.machines);
     page.appendChild(els.tools);
     host.appendChild(page);
@@ -1921,7 +2362,7 @@
   }
 
   // Coming back to the screen: the record may have moved on another device, and
-  // #/p/manufacturing/t/<id> points the watch at a particular tool on a machine.
+  // #/p/manufacturing/t/<id> points the watch at a particular setup.
   function open(sub) {
     startTick();
     const pick = String(sub || '').match(/^[ta]\/([A-Za-z0-9]{1,24})$/);

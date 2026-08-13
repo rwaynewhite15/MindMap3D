@@ -35,10 +35,14 @@ body {
 button { font-family: inherit; cursor: pointer; }
 input, textarea { font-family: inherit; }
 
-/* ---------------- top bar ---------------- */
+/* ---------------- top bar ----------------
+   No title of its own: the bar is the account's toolbar and the notification
+   bell, and the screen underneath says what it is. Everything in here sits
+   against the right edge, however few of them are showing. */
 #topbar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   padding: 8px 12px;
   padding-top: max(8px, env(safe-area-inset-top));
@@ -46,13 +50,12 @@ input, textarea { font-family: inherit; }
   border-bottom: 1px solid var(--line);
   z-index: 30;
 }
-#logo, .auth-logo { font-weight: 700; letter-spacing: 0.06em; font-size: 15px; white-space: nowrap; }
-#logo span, .auth-logo span { color: var(--accent); }
-#logo em, .auth-logo em { color: var(--dim); font-weight: 400; font-style: normal; }
+.auth-logo { font-weight: 700; letter-spacing: 0.06em; font-size: 15px; white-space: nowrap; }
+.auth-logo span { color: var(--accent); }
+.auth-logo em { color: var(--dim); font-weight: 400; font-style: normal; }
 
 /* hamburger toggle — only shown on phones (see the small-screen media query) */
 .nav-toggle {
-  margin-left: auto;
   border: none;
   background: none;
   padding: 8px;
@@ -80,7 +83,7 @@ input, textarea { font-family: inherit; }
 .nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
 .nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
 
-#mainNav { display: flex; gap: 2px; margin-left: auto; }
+#mainNav { display: flex; gap: 2px; }
 #mainNav a {
   color: var(--dim);
   text-decoration: none;
@@ -109,7 +112,7 @@ input, textarea { font-family: inherit; }
 }
 
 /* ---- notification bell + dropdown panel ---- */
-#notifWrap { position: relative; margin-left: auto; }
+#notifWrap { position: relative; }
 #notifBell {
   position: relative;
   background: none;
@@ -1355,17 +1358,14 @@ button.primary {
 
 /* ---------------- tablets / narrow desktop ----------------
    Between the hamburger breakpoint below and a full-width window the top bar
-   has to fit the logo, the bell, and six nav links on one line. Drop the logo
-   tagline and tighten the links so nothing spills off the right edge. */
+   has to fit the bell and six nav links on one line. Tighten the links so
+   nothing spills off the right edge. */
 @media (max-width: 760px) {
-  #logo em { display: none; }
   #mainNav a { padding: 8px 7px; font-size: 12.5px; }
 }
 
 /* ---------------- small screens ---------------- */
 @media (max-width: 560px) {
-  #logo { font-size: 13px; }
-  #logo em { display: none; }
   .tb { padding: 10px 11px; font-size: 12.5px; }
 
   /* top nav collapses behind a hamburger */

@@ -1,5 +1,5 @@
 /* ================================================================
-   Manufacturing add-on — the Shop screen
+   Shopwatch — the shop-floor screen
 
    Borrows the shell's palette variables (--bg, --panel, --line, --ink,
    --dim, --accent, --danger) so it belongs to the app it is installed in,
@@ -270,10 +270,11 @@
 .mf-legend-v { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; }
 .mf-legend-p { font-size: 11.5px; color: var(--dim); width: 62px; text-align: right; flex: none; }
 
-/* ---------------- the two lists ----------------
-   The same relation from both ends: machines with the tools assigned to them,
-   and the crib with the machines each tool runs on. A machine is a block with
-   its tools inside it; a tool is one card with the machines as chips on it. */
+/* ---------------- the three lists ----------------
+   The same records from three ends: parts with the operations that make them,
+   machines with the tools set up on them, and the crib with the machines each
+   tool runs on. A part and a machine are each a block with its rows inside it;
+   a tool is one card with the machines as chips on it. */
 .mf-machine {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -300,6 +301,21 @@
 .mf-tag-on { color: var(--accent); border-color: var(--accent); }
 .mf-tag-off { color: var(--dim); background: none; border: 1px dashed var(--line); }
 .mf-tools { margin-bottom: 24px; }
+
+/* one operation of a part: what it is, where it runs, and what it measures */
+.mf-op {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 4px 8px 0;
+  border-top: 1px solid var(--line);
+}
+.mf-op-on .mf-op-name { color: var(--accent); }
+.mf-op-k { display: flex; align-items: center; gap: 7px; flex: none; }
+.mf-op-name { font-family: var(--mf-mono); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.mf-op-v { font-size: 12px; color: var(--dim); flex: 1; min-width: 120px; }
+.mf-op-btns { display: flex; align-items: center; gap: 8px; flex: none; }
 
 .mf-seq {
   font-family: var(--mf-mono);

@@ -1,7 +1,7 @@
 'use strict';
 
 /* ================================================================
-   Manufacturing add-on — server side
+   Shopwatch add-on — server side
 
    Two routes under /api/plugins/manufacturing, both about one thing: the
    signed-in account's shop record and the cycle times recorded against it.
@@ -9,20 +9,29 @@
      GET  /   the whole shop record, plus the limits the client should respect
      PUT  /   whole-record replace, sanitized here before it is stored
 
-   The record is three lists and the links between them:
+   The record is five lists and the links between them:
 
      machines      one per machine on the floor
      tools         the crib: a tool's own part number, what it is, and how many
                    cutting edges it has — true wherever the tool is used
-     assignments   one tool on one machine: the many-to-many between the two,
-                   carrying what is only true of that pairing — the cutting
-                   time, how many of the tool's edges are indexed through
-                   there, how many parts run between one index and the next,
-                   and every cycle timed against it
+     parts         the part numbers being made
+     operations    the ops of one part — Op 10, Op 20. An operation belongs to
+                   exactly one part, because that is what an op is: a step in
+                   making that part, not a name that means the same thing
+                   everywhere
+     assignments   one tool, on one machine, doing one operation. This is the
+                   many-to-many between tools and machines, and it carries what
+                   is only true of that combination — the cutting time, how
+                   many of the tool's edges are indexed through there, how many
+                   parts run between one index and the next, and every cycle
+                   timed against it
 
    A tool runs on as many machines as it is assigned to, and a machine holds as
-   many tools; neither owns the other. An assignment whose tool or machine is
-   gone is dropped here rather than stored as a dangling link.
+   many tools; neither owns the other. The same tool on the same machine doing
+   a different operation is a different assignment with its own cutting time,
+   because the time a tool spends in cut is a fact about the operation it is
+   doing and not about the tool. An assignment whose tool, machine or operation
+   is gone is dropped or unlinked here rather than stored as a dangling link.
 
    Whole-record replace is the same shape the Standing Desk uses: the client
    owns the state on screen and autosaves it. Everything a client sends is
@@ -35,7 +44,9 @@
 
 const MAX_MACHINES = 60;          // machines on one account
 const MAX_TOOLS = 200;            // tools in the crib
-const MAX_ASSIGNMENTS = 200;      // tool-on-machine links
+const MAX_PARTS = 120;            // part numbers being made
+const MAX_OPERATIONS = 300;       // operations across all of those parts
+const MAX_ASSIGNMENTS = 200;      // tool-on-machine-for-an-operation links
 const MAX_RUNS = 300;             // recorded cycles kept per assignment, newest first
 const MAX_RUN_SEC = 86400;        // a single cycle longer than a day is a stuck timer
 const MAX_CUT_SEC = 86400;        // cutting time for one part
@@ -113,24 +124,60 @@ module.exports = function (ctx) {
     return t;
   }
 
-  // One tool on one machine. The link carries the job it is doing there and
-  // the numbers that change from machine to machine.
-  function sanitizeAssignment(raw, toolIds, machineIds) {
+  // One part number being made.
+  function sanitizePart(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const p = stamp(raw, {
+      id: text(raw.id, 24) || newId(),
+      number: text(raw.number, 60),
+      desc: text(raw.desc, 80),
+      notes: text(raw.notes, 400),
+    });
+    if (!p.number && !p.desc) return null;
+    return p;
+  }
+
+  // One operation of one part. "Op 20" on its own means nothing — it is Op 20
+  // of a particular part — so an operation that names no part it belongs to is
+  // dropped rather than left floating.
+  function sanitizeOperation(raw, partIds) {
+    if (!raw || typeof raw !== 'object') return null;
+    const partId = text(raw.partId, 24);
+    if (!partIds.has(partId)) return null;
+    const name = text(raw.name, 40);
+    if (!name) return null;
+    return stamp(raw, {
+      id: text(raw.id, 24) || newId(),
+      partId,
+      name,
+      seq: num(raw.seq, MAX_SEQ, true), // where the op falls in making the part
+      notes: text(raw.notes, 400),
+    });
+  }
+
+  // One tool, on one machine, doing one operation. The numbers here belong to
+  // that combination and to nothing else.
+  function sanitizeAssignment(raw, toolIds, machineIds, operationIds) {
     if (!raw || typeof raw !== 'object') return null;
     const toolId = text(raw.toolId, 24);
     const machineId = text(raw.machineId, 24);
     // Both ends must exist. A link to a deleted tool or machine is dropped
     // rather than kept as a record that can never be read.
     if (!toolIds.has(toolId) || !machineIds.has(machineId)) return null;
+    const operationId = text(raw.operationId, 24);
     const a = stamp(raw, {
       id: text(raw.id, 24) || newId(),
       toolId,
       machineId,
-      part: text(raw.part, 60),        // the part number of the job it is cutting
-      op: text(raw.op, 40),
+      // A tool can be set up on a machine before anybody has said which op it
+      // is for; the cycle times only mean something once one is named, and the
+      // screen says so. An operation that has been deleted leaves the tool on
+      // the machine rather than taking it off.
+      operationId: operationIds.has(operationId) ? operationId : '',
       station: text(raw.station, 20),  // turret position / pocket, e.g. T0303
-      // Where this tool falls in the op's running order — 1 is first to cut.
-      // 0 means it has not been placed yet, and sorts after the ones that have.
+      // Where this tool falls in the operation's running order — 1 is first to
+      // cut. 0 means it has not been placed yet, and sorts after the ones that
+      // have.
       seq: num(raw.seq, MAX_SEQ, true),
       cutSec: num(raw.cutSec, MAX_CUT_SEC, false),
       indexEdges: num(raw.indexEdges, MAX_EDGES, true),
@@ -149,21 +196,33 @@ module.exports = function (ctx) {
   }
 
   function emptyShop() {
-    return { version: 2, machines: [], tools: [], assignments: [], activeId: '', updatedAt: 0 };
+    return {
+      version: 3,
+      machines: [], tools: [], parts: [], operations: [], assignments: [],
+      activeId: '', updatedAt: 0,
+    };
   }
 
   /* ---------------- the record as it was before ----------------
+     Two conversions, each undoing one shape the record used to have. They run
+     in order, so a record written by the very first version passes through
+     both, and the result of either goes on to be sanitized like anything else.
+
      Version 1 kept one flat record per tool, with the machine as a field on it
      — so the same tool running on two machines was two unrelated records, and
-     nothing linked them. Below, each of those records becomes a machine, a
-     tool, and the link between the two, which is what it always described.
+     nothing linked them. Each of those records becomes a machine, a tool, and
+     the link between the two, which is what it always described; tools met
+     twice under the same number and description collapse into one crib entry
+     with an assignment on each machine.
 
-     Tools met twice under the same number and description collapse into one
-     crib entry with an assignment on each machine: exactly the tools-to-
-     machines relation the flat shape could not hold.
+     Version 2 kept the part and the op as text on that link, repeated on every
+     tool of the job. Below they become records: a part, and the operations
+     belonging to it, with each assignment naming the operation it is for.
   ---------------------------------------------------------------- */
-  function migrate(s) {
-    const shop = emptyShop();
+  function fromVersion1(s) {
+    // Deliberately not emptyShop(): this returns the shape version 2 stored,
+    // which the next conversion then reads.
+    const shop = { machines: [], tools: [], assignments: [], activeId: '', updatedAt: 0 };
     const machineByName = new Map();
     const toolByKey = new Map();
     const assignmentFor = new Map(); // old tool id → new assignment id, so activeId survives
@@ -206,9 +265,9 @@ module.exports = function (ctx) {
         shop.machines.push(machine);
       }
 
-      // The insert designation was the nearest thing v1 had to the tool's own
-      // part number, and the description was already the description.
-      const toolKey = (old.insert + '\u0000' + old.desc).toLowerCase();
+      // The insert designation was the nearest thing version 1 had to the
+      // tool's own part number, and the description was already the description.
+      const toolKey = (old.insert + ' ' + old.desc).toLowerCase();
       let tool = toolByKey.get(toolKey);
       if (!tool) {
         if (shop.tools.length >= MAX_TOOLS) continue;
@@ -231,8 +290,8 @@ module.exports = function (ctx) {
       if (shop.assignments.length >= MAX_ASSIGNMENTS) continue;
       const avg = runs.length ? runs.reduce((sum, r) => sum + r.sec, 0) / runs.length : 0;
       const cutSec = avg ? Math.round(avg * 1000) / 1000 : 0;
-      // v1 held tool life as cutting minutes per edge. In parts, that is the
-      // life divided by the cycle it was measured against — so with nothing
+      // Version 1 held tool life as cutting minutes per edge. In parts, that is
+      // the life divided by the cycle it was measured against — so with nothing
       // timed there is no cycle to divide by, and the old figure is carried
       // into the notes rather than turned into a number nobody measured.
       const partsPerIndex = old.lifeMin && cutSec
@@ -269,13 +328,76 @@ module.exports = function (ctx) {
     return shop;
   }
 
+  function fromVersion2(s) {
+    const shop = emptyShop();
+    shop.machines = list(s.machines);
+    shop.tools = list(s.tools);
+    shop.activeId = s.activeId;
+    shop.updatedAt = s.updatedAt;
+
+    const partByKey = new Map();
+    const opByKey = new Map();
+
+    for (const raw of list(s.assignments)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const partNumber = text(raw.part, 60);
+      const opName = text(raw.op, 40);
+      let operationId = '';
+
+      // A link that named neither a part nor an op described no operation, and
+      // one is not invented for it: the tool stays on its machine with no
+      // operation set, which is a state the screen can show and fix.
+      if (partNumber || opName) {
+        // An op named without a part still belongs to something; they are
+        // gathered under one clearly named part rather than each inventing one.
+        const number = partNumber || 'Unassigned';
+        const partKey = number.toLowerCase();
+        let part = partByKey.get(partKey);
+        if (!part && shop.parts.length < MAX_PARTS) {
+          part = stamp(raw, { id: newId(), number, desc: '', notes: '' });
+          partByKey.set(partKey, part);
+          shop.parts.push(part);
+        }
+        if (part) {
+          const name = opName || 'Op';
+          const opKey = part.id + ' ' + name.toLowerCase();
+          let operation = opByKey.get(opKey);
+          if (!operation && shop.operations.length < MAX_OPERATIONS) {
+            operation = stamp(raw, { id: newId(), partId: part.id, name, seq: 0, notes: '' });
+            opByKey.set(opKey, operation);
+            shop.operations.push(operation);
+          }
+          if (operation) operationId = operation.id;
+        }
+      }
+
+      const assignment = { ...raw, operationId };
+      delete assignment.part;
+      delete assignment.op;
+      shop.assignments.push(assignment);
+    }
+
+    // The operations of a part are numbered in the order they were met, which
+    // is the order the job runs when the record came from a spreadsheet or a
+    // screen that kept them in it.
+    const seen = new Map();
+    for (const op of shop.operations) {
+      const n = (seen.get(op.partId) || 0) + 1;
+      seen.set(op.partId, n);
+      op.seq = n;
+    }
+    return shop;
+  }
+
   // Always returns a valid record — used both to normalize what comes out of
   // storage and to validate what a client sends in.
   function sanitizeShop(input) {
-    const s = input && typeof input === 'object' ? input : {};
-    // A record without an assignments list is one written before tools and
-    // machines were separate things, and is converted on the way past.
-    if (!Array.isArray(s.assignments)) return migrate(s);
+    let s = input && typeof input === 'object' ? input : {};
+    // A record without an assignments list was written before tools and
+    // machines were separate things; one without an operations list, before
+    // the part and the op were records rather than text on the link.
+    if (!Array.isArray(s.assignments)) s = fromVersion1(s);
+    if (!Array.isArray(s.operations)) s = fromVersion2(s);
 
     const shop = emptyShop();
     // Two records claiming the same id would make one of them unreachable, so
@@ -291,10 +413,16 @@ module.exports = function (ctx) {
 
     for (const raw of list(s.machines)) keep(shop.machines, sanitizeMachine(raw), MAX_MACHINES);
     for (const raw of list(s.tools)) keep(shop.tools, sanitizeTool(raw), MAX_TOOLS);
+    for (const raw of list(s.parts)) keep(shop.parts, sanitizePart(raw), MAX_PARTS);
+    const partIds = new Set(shop.parts.map(p => p.id));
+    for (const raw of list(s.operations)) {
+      keep(shop.operations, sanitizeOperation(raw, partIds), MAX_OPERATIONS);
+    }
     const machineIds = new Set(shop.machines.map(m => m.id));
     const toolIds = new Set(shop.tools.map(t => t.id));
+    const operationIds = new Set(shop.operations.map(o => o.id));
     for (const raw of list(s.assignments)) {
-      keep(shop.assignments, sanitizeAssignment(raw, toolIds, machineIds), MAX_ASSIGNMENTS);
+      keep(shop.assignments, sanitizeAssignment(raw, toolIds, machineIds, operationIds), MAX_ASSIGNMENTS);
     }
 
     // The stopwatch points at one assignment. An id that no longer names one
@@ -309,6 +437,8 @@ module.exports = function (ctx) {
   const limits = {
     maxMachines: MAX_MACHINES,
     maxTools: MAX_TOOLS,
+    maxParts: MAX_PARTS,
+    maxOperations: MAX_OPERATIONS,
     maxAssignments: MAX_ASSIGNMENTS,
     maxRuns: MAX_RUNS,
     maxRunSec: MAX_RUN_SEC,
@@ -354,6 +484,8 @@ module.exports = function (ctx) {
           updatedAt: shop.updatedAt,
           machines: shop.machines.length,
           tools: shop.tools.length,
+          parts: shop.parts.length,
+          operations: shop.operations.length,
           assignments: shop.assignments.length,
         });
         return true;
