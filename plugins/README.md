@@ -52,12 +52,19 @@ everything that process can reach — the database, the environment, the network
 Its client code runs on the page alongside the app. Install plugins you trust,
 from where you meant to get them. Removing one is deleting its folder.
 
-Accounts keep what a plugin saved even after it is removed: plugin data lives on
-the user record in the database, not in this folder, and it comes back if the
-plugin is installed again. It is included in **Export my data** either way.
+Accounts keep what a plugin saved even after it is removed: both its private
+per-account value and any documents it kept live on the user record in the
+database, not in this folder, and they come back if the plugin is installed
+again. Both are included in **Export my data** either way.
+
+A plugin's documents are the host's, not the plugin's: who owns one, who may
+open it and who may change it are decided by MindMapShare, and the plugin only
+says what a document's contents may be. So an add-on that shares something is
+not an add-on that was trusted with deciding who sees it.
 
 ## Writing one
 
 See `plugin-packages/manufacturing/` for a complete example, and the "Plugins"
-section of the main README for the manifest fields and the two hooks a plugin
-implements.
+section of the main README for the manifest fields, the hooks a plugin
+implements, and the `docs` contract that gets it sharing, live collaboration,
+chat and feed cards without implementing any of them.

@@ -3948,6 +3948,9 @@ let pendingProfileMapId = null; // a specific map a feed card asked to open next
 let pendingOpenComments = false; // a feed card asked to open that map's comments
 
 function feedCard(item) {
+  // an add-on's shared work reads as its own kind of card: no bubbles, no
+  // likes or comments (those belong to maps), and it opens where it lives
+  if (item.kind === 'doc') return docFeedCard(item);
   const owner = item.owner || {};
   const shownName = owner.name || '@' + owner.username;
   const card = document.createElement('div');
@@ -4023,6 +4026,60 @@ function feedCard(item) {
   return card;
 }
 
+// A shared document from an installed add-on, in the same feed as the maps.
+function docFeedCard(item) {
+  const owner = item.owner || {};
+  const shownName = owner.name || '@' + owner.username;
+  const card = document.createElement('div');
+  card.className = 'feed-card';
+
+  const head = document.createElement('div');
+  head.className = 'feed-card-head';
+  const av = document.createElement('div');
+  av.className = 'avatar sm';
+  av.style.setProperty('--av', avatarColor(owner.username || '?'));
+  av.textContent = (shownName.replace('@', '').charAt(0) || '?').toUpperCase();
+  const meta = document.createElement('div');
+  meta.className = 'feed-meta';
+  const who = document.createElement('div'); who.className = 'feed-who'; who.textContent = shownName;
+  const sub = document.createElement('div'); sub.className = 'feed-sub muted';
+  sub.textContent = '@' + owner.username + ' · ' + timeAgo(item.updatedAt);
+  meta.appendChild(who); meta.appendChild(sub);
+  head.appendChild(av); head.appendChild(meta);
+  const goProfile = () => { location.hash = '#/u/' + owner.username; };
+  av.style.cursor = who.style.cursor = 'pointer';
+  av.addEventListener('click', goProfile);
+  who.addEventListener('click', goProfile);
+
+  const openDoc = () => { location.hash = '#/p/' + item.plugin + '/d/' + item.id; };
+
+  const body = document.createElement('button');
+  body.className = 'feed-body';
+  const title = document.createElement('div'); title.className = 'feed-title'; title.textContent = item.name || 'Untitled';
+  const stat = document.createElement('div'); stat.className = 'feed-stat muted';
+  stat.textContent = [item.pluginName, item.blurb, item.visibility === 'friends' ? 'friends-only' : '']
+    .filter(Boolean).join(' · ');
+  body.appendChild(title); body.appendChild(stat);
+  body.addEventListener('click', openDoc);
+
+  const foot = document.createElement('div');
+  foot.className = 'feed-foot';
+  if (item.messages) {
+    const chat = document.createElement('span');
+    chat.className = 'muted';
+    chat.textContent = '💬 ' + item.messages;
+    foot.appendChild(chat);
+  }
+  const open = document.createElement('button');
+  open.className = 'tb';
+  open.textContent = 'Open →';
+  open.addEventListener('click', openDoc);
+  foot.appendChild(open);
+
+  card.appendChild(head); card.appendChild(body); card.appendChild(foot);
+  return card;
+}
+
 async function loadFeed() {
   const list = $('#feedList');
   list.innerHTML = '<div class="empty">Loading…</div>';
@@ -4032,8 +4089,8 @@ async function loadFeed() {
     if (!data.items.length) {
       const d = document.createElement('div'); d.className = 'empty';
       d.textContent = data.following
-        ? 'No fresh maps from people you follow yet — check back soon.'
-        : "You're not following anyone yet. Follow people to fill your feed — or explore public maps below.";
+        ? 'Nothing new from the people you follow yet — check back soon.'
+        : "You're not following anyone yet. Follow people to fill your feed — or explore what is public below.";
       list.appendChild(d);
     } else {
       for (const it of data.items) list.appendChild(feedCard(it));
@@ -4180,13 +4237,15 @@ function renderNotifs() {
       chat: ' chatted in ',
       edit: ' edited ',
       newmap: ' posted a new map ',
+      newdoc: ' shared ',
     };
     const verb = verbs[n.kind] || ' updated ';
     const title = document.createElement('div');
     title.className = 'notif-title';
     const who = document.createElement('b'); who.textContent = notifActorName(n);
-    const mapb = document.createElement('b'); mapb.textContent = '“' + (n.mapName || 'a map') + '”';
-    title.append(who, verb, mapb);
+    const what = document.createElement('b');
+    what.textContent = '“' + (n.docId ? (n.docTitle || 'a document') : (n.mapName || 'a map')) + '”';
+    title.append(who, verb, what);
     item.appendChild(title);
 
     if (n.text) {
@@ -4205,9 +4264,16 @@ function renderNotifs() {
   }
 }
 
-// Jump to what the notification is about: the map, via the profile map viewer.
+// Jump to what the notification is about: a map, via the profile map viewer,
+// or an add-on's document, which opens on the add-on's own screen.
 function openNotifTarget(n) {
   closeNotifPanel();
+  if (n.docId && n.plugin) {
+    const to = '#/p/' + n.plugin + '/d/' + n.docId;
+    if (location.hash === to) openPlugin(n.plugin, 'd/' + n.docId);
+    else location.hash = to;
+    return;
+  }
   pendingProfileMapId = n.mapId;
   const target = '#/u/' + n.mapOwner;
   if (location.hash === target) openProfile(n.mapOwner); // same hash won't refire route()

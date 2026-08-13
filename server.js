@@ -37,6 +37,13 @@ function normVisibility(v) {
   return VISIBILITIES.includes(v) ? v : 'friends';
 }
 
+// Limits the record itself is held to, rather than any one screen. Declared
+// here for the same reason normVisibility is: the storage backends normalize
+// every user as they are constructed, which runs before the domain section.
+const MAX_CHAT = 400;         // messages kept per map or document; oldest roll off
+const MAX_DOC_EDITORS = 20;   // people invited to edit one document
+const MAX_PLUGIN_DOCS = 40;   // documents one account keeps per add-on
+
 /* ----------------------------------------------------------------
    The Standing Desk — one work board per account.
    Where a mind map holds ideas, the desk holds open work: items split
@@ -278,6 +285,7 @@ function canViewDesk(owner, viewer, code) {
      init(), getUserById, getUsersByIds, getUserByUsername,
      searchUsers(q), createUser(u), saveUser(u),
      getUserByMapId(mapId), getUsersWithEditor(userId),
+     getUserByPluginDocId(docId), getUsersWithPluginDocEditor(userId),
      createSession(sid, userId), getSessionUser(sid), deleteSession(sid)
 ================================================================ */
 
@@ -306,6 +314,7 @@ function pgStore() {
     maps: r.maps,
     desk: r.desk,
     pluginData: r.plugin_data,
+    pluginDocs: r.plugin_docs,
     toolbar: r.toolbar,
   });
 
@@ -341,6 +350,10 @@ function pgStore() {
       // per-account storage for installed plugins, keyed by plugin id; empty
       // unless an add-on is installed and the account has used it
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plugin_data JSONB NOT NULL DEFAULT '{}'`);
+      // documents an add-on keeps for this account and this account owns:
+      // shareable, with their own visibility, editors and chat — the plugin
+      // equivalent of a map, held on the owner's row the same way maps are
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plugin_docs JSONB NOT NULL DEFAULT '[]'`);
       // the screens this account keeps in its navigation; empty is the default
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS toolbar JSONB NOT NULL DEFAULT '[]'`);
       // migrate legacy single-map rows into the multi-map shape
@@ -394,8 +407,9 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers, notifications, push_subs, desk, plugin_data, toolbar)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb)`,
+                            following, followers, notifications, push_subs, desk, plugin_data,
+                            plugin_docs, toolbar)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
@@ -403,7 +417,7 @@ function pgStore() {
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
          JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {}),
-         JSON.stringify(u.toolbar || [])]);
+         JSON.stringify(u.pluginDocs || []), JSON.stringify(u.toolbar || [])]);
     },
     async saveUser(u) {
       await pool.query(
@@ -411,7 +425,7 @@ function pgStore() {
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
                           following=$10::jsonb, followers=$11::jsonb,
                           notifications=$12::jsonb, push_subs=$13::jsonb, desk=$14::jsonb,
-                          plugin_data=$15::jsonb, toolbar=$16::jsonb
+                          plugin_data=$15::jsonb, plugin_docs=$16::jsonb, toolbar=$17::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
@@ -419,7 +433,7 @@ function pgStore() {
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
          JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {}),
-         JSON.stringify(u.toolbar || [])]);
+         JSON.stringify(u.pluginDocs || []), JSON.stringify(u.toolbar || [])]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -427,6 +441,20 @@ function pgStore() {
          WHERE jsonb_path_exists(maps, '$[*] ? (@.id == $mid)', jsonb_build_object('mid', $1::text))
          LIMIT 1`, [mapId]);
       return rowToUser(rows[0]);
+    },
+    async getUserByPluginDocId(docId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE jsonb_path_exists(plugin_docs, '$[*] ? (@.id == $did)', jsonb_build_object('did', $1::text))
+         LIMIT 1`, [docId]);
+      return rowToUser(rows[0]);
+    },
+    async getUsersWithPluginDocEditor(userId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM users
+         WHERE jsonb_path_exists(plugin_docs, '$[*].editors[*] ? (@ == $uid)', jsonb_build_object('uid', $1::text))`,
+        [userId]);
+      return rows.map(rowToUser);
     },
     async getUsersWithEditor(userId) {
       const { rows } = await pool.query(
@@ -554,6 +582,13 @@ function fileStore() {
     async getUsersWithEditor(userId) {
       return Object.values(db.users).filter(u => (u.maps || []).some(m => (m.editors || []).includes(userId)));
     },
+    async getUserByPluginDocId(docId) {
+      return Object.values(db.users).find(u => (u.pluginDocs || []).some(d => d.id === docId)) || null;
+    },
+    async getUsersWithPluginDocEditor(userId) {
+      return Object.values(db.users)
+        .filter(u => (u.pluginDocs || []).some(d => (d.editors || []).includes(userId)));
+    },
     async createSession(sid, userId) { db.sessions[sid] = { userId, createdAt: Date.now() }; persist(); },
     async getSessionUser(sid) {
       const s = db.sessions[sid];
@@ -680,7 +715,60 @@ function makeMap(name, visibility, seedLabel) {
   };
 }
 
-const MAX_CHAT = 400; // per map; oldest entries roll off
+/* ----------------------------------------------------------------
+   A plugin document — what an add-on's work is kept in when it is meant
+   to be shared. A map is a document the core knows the inside of; this is
+   the same envelope around a body only the add-on understands: owned by
+   one account and held on its row, with a title, a visibility, a list of
+   editors and a chat, so the sharing, the feed, the live channel and the
+   notifications that maps already have work on it unchanged.
+
+   The core never looks inside `body`. The add-on that owns the document
+   rebuilds it field by field on every write, exactly as it does for its
+   private per-account storage.
+---------------------------------------------------------------- */
+function makePluginDoc(pluginId, title, visibility, body) {
+  const now = Date.now();
+  return {
+    id: newId(),
+    plugin: String(pluginId).slice(0, 32),
+    title: String(title || '').trim().slice(0, 60) || 'Untitled',
+    // Private unless asked otherwise. A map is a thing made to be shown; an
+    // add-on's document is as likely to be a shop's cycle times, and nothing
+    // should reach anybody's feed because a default did the choosing.
+    visibility: visibility === undefined ? 'private' : normVisibility(visibility),
+    editors: [],
+    chat: [],
+    body: body || {},
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// Everything except the body, which belongs to the add-on and is checked by it.
+function sanitizePluginDoc(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = String(raw.id || '').slice(0, 40);
+  const plugin = String(raw.plugin || '').slice(0, 32);
+  if (!id || !plugin) return null;
+  const created = Number(raw.createdAt), updated = Number(raw.updatedAt);
+  return {
+    id,
+    plugin,
+    title: String(raw.title || '').trim().slice(0, 60) || 'Untitled',
+    visibility: normVisibility(raw.visibility),
+    editors: (Array.isArray(raw.editors) ? raw.editors : [])
+      .map(e => String(e || '').slice(0, 40)).filter(Boolean).slice(0, MAX_DOC_EDITORS),
+    chat: (Array.isArray(raw.chat) ? raw.chat : []).slice(-MAX_CHAT),
+    body: raw.body && typeof raw.body === 'object' ? raw.body : {},
+    createdAt: Number.isFinite(created) ? created : Date.now(),
+    updatedAt: Number.isFinite(updated) ? updated : Date.now(),
+  };
+}
+
+// (MAX_DOC_EDITORS, MAX_PLUGIN_DOCS and MAX_CHAT are declared up with
+// normVisibility: normalizeUser reaches them while the store is still being
+// built, before this section has run.)
 const MAX_COMMENTS = 500; // per map; oldest entries roll off
 const MAX_NOTIFS = 100; // per user; oldest entries roll off
 const MAX_PUSH_SUBS = 20; // per user; browsers/devices they enabled push on
@@ -697,6 +785,10 @@ function normalizeUser(u) {
   // Per-plugin storage. Each installed add-on owns one key and validates its
   // own shape; the core only guarantees there is an object here to write into.
   if (!u.pluginData || typeof u.pluginData !== 'object' || Array.isArray(u.pluginData)) u.pluginData = {};
+  // Documents an add-on keeps for this account, which this account owns and
+  // may share. Absent on accounts made before add-ons could hold any.
+  u.pluginDocs = (Array.isArray(u.pluginDocs) ? u.pluginDocs : [])
+    .map(sanitizePluginDoc).filter(Boolean);
   // The chosen toolbar. An account that has never picked has an empty one —
   // that is the default, not a missing value to fill in with everything.
   u.toolbar = sanitizeToolbar(u.toolbar);
@@ -768,6 +860,90 @@ function commentOut(c, viewer) {
     ts: c.ts,
     mine: !!viewer && c.authorId === viewer.id,
   };
+}
+
+/* ----------------------------------------------------------------
+   Plugin documents: the same questions maps answer, asked of a body the
+   core does not read.
+---------------------------------------------------------------- */
+const docsOf = (u, pluginId) => (u.pluginDocs || []).filter(d => d.plugin === pluginId);
+
+function canViewDoc(doc, owner, viewer) {
+  const rel = relationTo(viewer, owner);
+  if (rel === 'self') return true;
+  // an explicit edit grant always overrides the visibility tier, even 'private'
+  if (viewer && (doc.editors || []).includes(viewer.id)) return true;
+  if (doc.visibility === 'private') return false;
+  if (doc.visibility === 'public') return true;
+  return doc.visibility === 'friends' && rel === 'friends';
+}
+
+const visibleDocsOf = (owner, viewer, pluginId) =>
+  docsOf(owner, pluginId).filter(d => canViewDoc(d, owner, viewer));
+
+// What a client is told about a document without being sent the body: enough
+// to list it, title it, say who owns it and whether this viewer may type in it.
+function docMeta(doc, viewer, owner, canEdit) {
+  return {
+    id: doc.id,
+    plugin: doc.plugin,
+    title: doc.title,
+    visibility: doc.visibility,
+    owner,
+    mine: !!viewer && owner && owner.username === viewer.username,
+    canEdit: !!canEdit,
+    editors: (doc.editors || []).length,
+    messages: (doc.chat || []).length,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+function pushDocChat(doc, entry) {
+  doc.chat.push(entry);
+  if (doc.chat.length > MAX_CHAT) doc.chat.splice(0, doc.chat.length - MAX_CHAT);
+}
+
+// The add-on's two obligations for a document: what an empty one holds, and
+// what any body is allowed to be. A plugin that throws on either is refused
+// rather than trusted, and an add-on with no opinion gets an empty object.
+function pluginEmpty(p) {
+  try { return (p.docs.empty && p.docs.empty()) || {}; }
+  catch (err) { console.error('plugin', p.id, 'docs.empty', err); return {}; }
+}
+function pluginSanitize(p, body) {
+  try { return p.docs.sanitize(body); }
+  catch (err) { console.error('plugin', p.id, 'docs.sanitize', err); return pluginEmpty(p); }
+}
+// One line about what is in it, for a feed card. Never trusted for length.
+function pluginBlurb(p, doc) {
+  try { return String((p.docs.summary && p.docs.summary(doc.body)) || '').slice(0, 140); }
+  catch (err) { console.error('plugin', p.id, 'docs.summary', err); return ''; }
+}
+
+// One author's shared documents as feed cards. `publicOnly` is the discover
+// pass, which is looking at strangers rather than people already followed.
+function feedDocsOf(author, viewer, publicOnly) {
+  const out = [];
+  for (const doc of author.pluginDocs || []) {
+    const p = plugins.get(doc.plugin);
+    if (!p || !p.docs) continue;                       // its add-on is not installed here
+    if (publicOnly ? doc.visibility !== 'public' : !canViewDoc(doc, author, viewer)) continue;
+    if (doc.visibility === 'private') continue;        // an edit grant is not a feed post
+    out.push({
+      kind: 'doc',
+      id: doc.id,
+      plugin: doc.plugin,
+      pluginName: p.navLabel,
+      name: doc.title,
+      blurb: pluginBlurb(p, doc),
+      visibility: doc.visibility,
+      owner: ownerRef(author, viewer),
+      messages: (doc.chat || []).length,
+      updatedAt: doc.updatedAt || doc.createdAt || 0,
+    });
+  }
+  return out;
 }
 
 function canViewMapObj(m, owner, viewer) {
@@ -1051,18 +1227,21 @@ function pushToUser(userId, event, data) {
 function sendWebPush(user, notif) {
   if (!pushConfigured() || !Array.isArray(user.pushSubs) || !user.pushSubs.length) return;
   const actor = notif.actor && (notif.actor.name || '@' + notif.actor.username) || 'Someone';
+  const what = notif.docId ? notif.docTitle : notif.mapName;
   let title;
   switch (notif.kind) {
-    case 'comment': title = `${actor} commented on “${notif.mapName}”`; break;
-    case 'edit':    title = `${actor} edited “${notif.mapName}”`; break;
-    case 'newmap':  title = `${actor} posted a new map: “${notif.mapName}”`; break;
-    default:        title = `${actor} chatted in “${notif.mapName}”`;
+    case 'comment': title = `${actor} commented on “${what}”`; break;
+    case 'edit':    title = `${actor} edited “${what}”`; break;
+    case 'newmap':  title = `${actor} posted a new map: “${what}”`; break;
+    case 'newdoc':  title = `${actor} shared “${what}”`; break;
+    default:        title = `${actor} chatted in “${what}”`;
   }
   const payload = JSON.stringify({
     title,
     body: notif.text || '',
-    url: '/#/u/' + notif.mapOwner,
-    tag: 'map-' + notif.mapId,
+    // a document opens where it lives; a map opens on its owner's profile
+    url: notif.docId ? `/#/p/${notif.plugin}/d/${notif.docId}` : '/#/u/' + notif.mapOwner,
+    tag: notif.docId ? 'doc-' + notif.docId : 'map-' + notif.mapId,
   });
   let pruned = false;
   for (const sub of [...user.pushSubs]) {
@@ -1084,6 +1263,8 @@ function notifOut(n) {
   return {
     id: n.id, kind: n.kind, mapId: n.mapId, mapOwner: n.mapOwner,
     mapName: n.mapName, actor: n.actor, text: n.text, ts: n.ts, read: !!n.read,
+    // an alert about an add-on's document rather than a map
+    docId: n.docId, plugin: n.plugin, docOwner: n.docOwner, docTitle: n.docTitle,
   };
 }
 
@@ -1147,6 +1328,41 @@ async function notifyMapEvent(owner, m, actorUser, kind, text, opts = {}) {
     deliverNotif(target, base);
     // The owner's record is saved by the caller (it also carries the map write);
     // every other recipient we persist right here.
+    if (rid !== owner.id) await store.saveUser(target);
+  }
+}
+
+// The same alert for a plugin document: its owner and everyone invited to edit
+// it, minus whoever acted. A document has no commenters, so that is the whole
+// list. The notification carries a docId rather than a mapId, which is what
+// the bell uses to build the link back.
+async function notifyDocEvent(owner, doc, actorUser, kind, text, opts = {}) {
+  const dedupeMs = opts.dedupeMs || 0;
+  const recipientIds = new Set([owner.id, ...(doc.editors || [])]);
+  recipientIds.delete(actorUser.id);
+
+  const base = {
+    kind,
+    docId: doc.id,
+    plugin: doc.plugin,
+    docOwner: owner.username,
+    docTitle: doc.title,
+    actor: actorRef(actorUser),
+    text: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 140),
+  };
+
+  for (const rid of recipientIds) {
+    const target = rid === owner.id ? owner : await store.getUserById(rid);
+    if (!target) continue;
+    if (!Array.isArray(target.notifications)) target.notifications = [];
+    if (dedupeMs) {
+      const cutoff = Date.now() - dedupeMs;
+      const seen = target.notifications.some(n =>
+        n.kind === kind && n.docId === doc.id &&
+        n.actor && n.actor.username === actorUser.username && n.ts >= cutoff);
+      if (seen) continue;
+    }
+    deliverNotif(target, base);
     if (rid !== owner.id) await store.saveUser(target);
   }
 }
@@ -1628,10 +1844,15 @@ function tooMany(key, limit, windowMs) {
    package is; that is on the person who copies the folder in.
 ================================================================ */
 const PLUGINS_DIR = path.join(__dirname, 'plugins');
-// The plugin contract this build implements. A plugin declares the version it
-// was written against in its manifest; one that needs a newer host than this is
-// refused at startup instead of half-working at runtime.
-const PLUGIN_HOST_VERSION = 1;
+// The plugin contract this build implements.
+//   1  a screen, its own API namespace, and private per-account storage
+//   2  and documents: work the add-on owns but the account can share, with a
+//      visibility, invited editors, a chat and a live channel, all handled by
+//      the core so an add-on never writes its own sharing rules
+// A plugin declares the version it was written against in its manifest; one
+// that needs a newer host than this is refused at startup instead of
+// half-working at runtime.
+const PLUGIN_HOST_VERSION = 2;
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const PLUGIN_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/; // a single file name, no separators
 const MAX_PLUGIN_DATA = 512 * 1024; // serialized bytes one plugin may keep per account
@@ -1702,6 +1923,7 @@ function loadPlugin(folder) {
     dir,
     publicDir,
     handle: null,
+    docs: null,
   };
   if (manifest.server) {
     const file = String(manifest.server);
@@ -1709,8 +1931,19 @@ function loadPlugin(folder) {
     const factory = require(path.join(dir, file));
     if (typeof factory !== 'function') throw new Error(`${file} must export a function`);
     const api = factory(pluginContext(p));
-    if (!api || typeof api.handle !== 'function') throw new Error(`${file} must return { handle(req, res, sub, user) }`);
-    p.handle = api.handle;
+    if (!api || (typeof api.handle !== 'function' && !api.docs)) {
+      throw new Error(`${file} must return { handle(req, res, sub, user) } or { docs }`);
+    }
+    p.handle = typeof api.handle === 'function' ? api.handle : null;
+    // Documents are optional. An add-on that wants them must say what an empty
+    // one holds and what any body may be, because the core stores the body
+    // without ever reading it and hands it to other accounts.
+    if (api.docs) {
+      if (typeof api.docs.sanitize !== 'function') {
+        throw new Error(`${file} declares docs but no docs.sanitize(body)`);
+      }
+      p.docs = api.docs;
+    }
   }
   plugins.set(id, p);
   return p;
@@ -1742,6 +1975,8 @@ function pluginMeta(p) {
     navLabel: p.navLabel,
     client: p.client ? `/plugins/${p.id}/${p.client}` : '',
     styles: p.styles ? `/plugins/${p.id}/${p.styles}` : '',
+    docs: !!p.docs,       // whether its work can be shared
+    hostVersion: PLUGIN_HOST_VERSION,
   };
 }
 
@@ -1850,6 +2085,7 @@ async function handleApi(req, res, pathname) {
       maps: [makeMap('My Map', body.visibility, displayName || username)],
       desk: makeDesk(),
       pluginData: {},
+      pluginDocs: [], // an add-on's shareable work; none until an add-on makes some
       toolbar: [], // nothing in the navigation until it is chosen from the library
     };
     try {
@@ -2112,6 +2348,7 @@ async function handleApi(req, res, pathname) {
       ...(user.friends || []), ...(user.requestsIn || []), ...(user.requestsOut || []),
       ...(user.following || []), ...(user.followers || []),
       ...user.maps.flatMap(m => m.editors || []),
+      ...(user.pluginDocs || []).flatMap(d => d.editors || []),
     ])];
     const refUsers = await store.getUsersByIds(refIds);
     const uname = id => { const u = refUsers.find(x => x.id === id); return u ? u.username : null; };
@@ -2170,6 +2407,20 @@ async function handleApi(req, res, pathname) {
       // it. Included raw so an export stays complete even for a plugin this
       // server has since had removed.
       addOns: user.pluginData || {},
+      // An add-on's documents are this account's too — a shop floor, a board,
+      // whatever the add-on keeps — so they leave with it, bodies and all,
+      // named the same way maps are.
+      addOnDocuments: (user.pluginDocs || []).map(d => ({
+        id: d.id,
+        addOn: d.plugin,
+        title: d.title,
+        visibility: d.visibility,
+        editors: unames(d.editors),
+        createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null,
+        updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
+        body: d.body,
+        chat: d.chat || [],
+      })),
       maps: user.maps.map(m => ({
         id: m.id, name: m.name, visibility: m.visibility,
         editors: unames(m.editors),
@@ -2218,6 +2469,167 @@ async function handleApi(req, res, pathname) {
     user.toolbar = sanitizeToolbar(body.items);
     await store.saveUser(user);
     return sendJSON(res, 200, { toolbar: user.toolbar });
+  }
+
+  /* --- an add-on's documents: /api/plugins/<id>/docs/… is the core's ------
+     Everything under docs/ is answered here rather than by the add-on,
+     because it is the part that reaches across accounts: whose document it
+     is, who may see it, who may edit it, what is said about it and who is
+     looking at it right now. The add-on only ever supplies and validates the
+     body. Mounted ahead of the add-on's own handler, so an add-on cannot
+     serve — or shadow — its own sharing rules. */
+  const docApi = pathname.match(/^\/api\/plugins\/([a-z0-9-]{2,32})\/docs(?:\/([A-Za-z0-9]{1,40}))?(?:\/(meta|editors|chat|live|copy))?$/);
+  if (docApi) {
+    const p = plugins.get(docApi[1]);
+    if (!p) return sendJSON(res, 404, { error: 'No such plugin.' });
+    if (!p.docs) return sendJSON(res, 404, { error: `The ${p.name} add-on does not keep documents.` });
+    const docId = docApi[2], sub = docApi[3];
+
+    // the account's own documents for this add-on, plus the ones it may edit
+    if (!docId && req.method === 'GET') {
+      const mine = docsOf(user, p.id).map(d => docMeta(d, user, ownerRef(user, user), true));
+      const shared = [];
+      for (const other of await store.getUsersWithPluginDocEditor(user.id)) {
+        if (other.id === user.id) continue;
+        for (const d of docsOf(other, p.id)) {
+          if ((d.editors || []).includes(user.id)) shared.push(docMeta(d, user, ownerRef(other, user), true));
+        }
+      }
+      return sendJSON(res, 200, { docs: mine, shared });
+    }
+
+    if (!docId && req.method === 'POST') {
+      if (docsOf(user, p.id).length >= MAX_PLUGIN_DOCS) {
+        return sendJSON(res, 400, { error: `That is as many as one account keeps (${MAX_PLUGIN_DOCS}).` });
+      }
+      const body = await readBody(req);
+      // A new document starts from whatever the add-on calls empty, or from a
+      // body it supplies — sanitized either way, because it came over the wire.
+      const seed = body.body === undefined ? pluginEmpty(p) : pluginSanitize(p, body.body);
+      const doc = makePluginDoc(p.id, body.title, body.visibility, seed);
+      if (!Array.isArray(user.pluginDocs)) user.pluginDocs = [];
+      user.pluginDocs.push(doc);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { doc: docMeta(doc, user, ownerRef(user, user), true), body: doc.body });
+    }
+
+    if (!docId) return sendJSON(res, 405, { error: 'Method not allowed.' });
+
+    const owner = (user.pluginDocs || []).some(d => d.id === docId)
+      ? user : await store.getUserByPluginDocId(docId);
+    const doc = owner && (owner.pluginDocs || []).find(d => d.id === docId);
+    // a document the viewer may not see behaves exactly like one that is not there
+    if (!doc || doc.plugin !== p.id || !canViewDoc(doc, owner, user)) {
+      return sendJSON(res, 404, { error: 'No such document.' });
+    }
+    const isOwner = owner.id === user.id;
+    const canEdit = isOwner || (doc.editors || []).includes(user.id);
+    const meta = () => docMeta(doc, user, ownerRef(owner, user), canEdit);
+
+    if (!sub && req.method === 'GET') {
+      return sendJSON(res, 200, { doc: meta(), body: doc.body });
+    }
+
+    if (!sub && req.method === 'PUT') {
+      if (!canEdit) return sendJSON(res, 403, { error: 'You do not have edit permission here.' });
+      const body = await readBody(req);
+      if (!body || typeof body.body !== 'object' || body.body === null) {
+        return sendJSON(res, 400, { error: 'Invalid document body.' });
+      }
+      doc.body = pluginSanitize(p, body.body);
+      doc.updatedAt = Date.now();
+      await store.saveUser(owner);
+      // everyone else with this document open gets the new body at once
+      broadcast('doc:' + doc.id, 'doc', { body: doc.body, by: user.username }, res);
+      const note = String(body.note || '').trim().slice(0, 120);
+      if (note) {
+        const entry = { kind: 'activity', actor: actorRef(user), text: note, ts: Date.now(), id: newId() };
+        pushDocChat(doc, entry);
+        broadcast('doc:' + doc.id, 'chat', entry);
+        await notifyDocEvent(owner, doc, user, 'edit', note, { dedupeMs: 15 * 60 * 1000 });
+        await store.saveUser(owner);
+      }
+      return sendJSON(res, 200, { ok: true, updatedAt: doc.updatedAt });
+    }
+
+    if (sub === 'meta' && req.method === 'PUT') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can rename or reshare this.' });
+      const body = await readBody(req);
+      if (body.title !== undefined) doc.title = String(body.title || '').trim().slice(0, 60) || 'Untitled';
+      if (body.visibility !== undefined) doc.visibility = normVisibility(body.visibility);
+      doc.updatedAt = Date.now();
+      await store.saveUser(owner);
+      broadcast('doc:' + doc.id, 'meta', { title: doc.title, visibility: doc.visibility });
+      return sendJSON(res, 200, { doc: meta() });
+    }
+
+    if (sub === 'editors' && req.method === 'GET') {
+      const people = await store.getUsersByIds(doc.editors || []);
+      return sendJSON(res, 200, { editors: people.map(u => ownerRef(u, user)) });
+    }
+
+    if (sub === 'editors' && req.method === 'PUT') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can choose who edits this.' });
+      const body = await readBody(req);
+      const names = (Array.isArray(body.usernames) ? body.usernames : []).slice(0, MAX_DOC_EDITORS);
+      const ids = [];
+      const missing = [];
+      for (const name of names) {
+        const u = await store.getUserByUsername(String(name || '').trim());
+        if (!u) { missing.push(String(name).slice(0, 20)); continue; }
+        if (u.id !== owner.id && !ids.includes(u.id)) ids.push(u.id);
+      }
+      doc.editors = ids;
+      doc.updatedAt = Date.now();
+      await store.saveUser(owner);
+      const people = await store.getUsersByIds(ids);
+      return sendJSON(res, 200, { editors: people.map(u => ownerRef(u, user)), missing });
+    }
+
+    if (sub === 'chat' && req.method === 'GET') {
+      return sendJSON(res, 200, { chat: doc.chat, canPost: canEdit });
+    }
+
+    if (sub === 'chat' && req.method === 'POST') {
+      if (!canEdit) return sendJSON(res, 403, { error: 'Only people who can edit this can chat here.' });
+      const body = await readBody(req);
+      const text = String(body.text || '').trim().slice(0, 500);
+      if (!text) return sendJSON(res, 400, { error: 'Empty message.' });
+      const entry = { kind: 'message', actor: actorRef(user), text, ts: Date.now(), id: newId() };
+      pushDocChat(doc, entry);
+      await notifyDocEvent(owner, doc, user, 'chat', text);
+      await store.saveUser(owner);
+      broadcast('doc:' + doc.id, 'chat', entry);
+      return sendJSON(res, 200, { entry });
+    }
+
+    if (sub === 'live' && req.method === 'GET') {
+      return startLiveStream(req, res, 'doc:' + doc.id, Object.assign(actorRef(user), { canEdit }));
+    }
+
+    // Take a copy of somebody else's document into your own account — the same
+    // move as saving a copy of a map, and the only way a viewer who cannot edit
+    // gets one of their own to work in.
+    if (sub === 'copy' && req.method === 'POST') {
+      if (docsOf(user, p.id).length >= MAX_PLUGIN_DOCS) {
+        return sendJSON(res, 400, { error: `That is as many as one account keeps (${MAX_PLUGIN_DOCS}).` });
+      }
+      const copy = makePluginDoc(p.id, doc.title + ' (copy)', 'private',
+        pluginSanitize(p, JSON.parse(JSON.stringify(doc.body))));
+      if (!Array.isArray(user.pluginDocs)) user.pluginDocs = [];
+      user.pluginDocs.push(copy);
+      await store.saveUser(user);
+      return sendJSON(res, 200, { doc: docMeta(copy, user, ownerRef(user, user), true) });
+    }
+
+    if (!sub && req.method === 'DELETE') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'Only the owner can delete this.' });
+      owner.pluginDocs = owner.pluginDocs.filter(d => d.id !== docId);
+      await store.saveUser(owner);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    return sendJSON(res, 405, { error: 'Method not allowed.' });
   }
 
   // --- an installed plugin's own API: /api/plugins/<id>/… is its to answer ---
@@ -2726,6 +3138,9 @@ async function handleApi(req, res, pathname) {
           updatedAt: m.updatedAt || m.createdAt || 0,
         }));
       }
+      // an add-on's shared work sits in the same feed as a map, because to the
+      // person reading it, it is the same thing: something someone made
+      for (const doc of feedDocsOf(author, user)) items.push(doc);
     }
     items.sort((a, b) => b.updatedAt - a.updatedAt);
     const following = (user.following || []).length;
@@ -2745,6 +3160,7 @@ async function handleApi(req, res, pathname) {
             }));
           }
         }
+        for (const doc of feedDocsOf(other, user, true)) pool.push(doc);
       }
       pool.sort((a, b) => b.updatedAt - a.updatedAt);
       discover = pool.slice(0, 12);

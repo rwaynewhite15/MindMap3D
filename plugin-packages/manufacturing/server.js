@@ -446,9 +446,47 @@ module.exports = function (ctx) {
     maxPartsPerIndex: MAX_PARTS_PER_INDEX,
   };
 
+  // One line about a stopwatch, for its card in the feed. Counts rather than
+  // adjectives: somebody scrolling past should be able to tell whether there is
+  // a shop in here or an empty one.
+  function summary(body) {
+    const shop = sanitizeShop(body);
+    const timed = shop.assignments.reduce((n, a) => n + a.runs.length, 0);
+    const bits = [];
+    if (shop.parts.length) bits.push(shop.parts.length + (shop.parts.length === 1 ? ' part' : ' parts'));
+    if (shop.machines.length) bits.push(shop.machines.length + (shop.machines.length === 1 ? ' machine' : ' machines'));
+    if (shop.tools.length) bits.push(shop.tools.length + (shop.tools.length === 1 ? ' tool' : ' tools'));
+    if (timed) bits.push(timed + (timed === 1 ? ' cycle timed' : ' cycles timed'));
+    return bits.join(' · ') || 'nothing in it yet';
+  }
+
   return {
+    /* A stopwatch is a document the host owns the envelope of: who it belongs
+       to, who may see it, who may edit it, what is said about it. All this
+       side has to do is say what an empty one is and what a body may contain —
+       the same rebuilding that has always guarded the private record, now
+       guarding one that other accounts can be handed. */
+    docs: {
+      empty: emptyShop,
+      sanitize: sanitizeShop,
+      summary,
+      limits,
+    },
+
     async handle(req, res, sub, user) {
       const route = req.method + ' ' + sub;
+
+      // What this account's private record holds, if it still has one. The
+      // screen offers it as the first stopwatch to bring across; once it has
+      // been brought across it is left alone rather than deleted, so a rolled
+      // back install still finds it.
+      if (route === 'GET /legacy') {
+        const raw = data.get(user);
+        const shop = raw ? sanitizeShop(raw) : null;
+        const has = !!shop && !!(shop.machines.length || shop.tools.length || shop.parts.length);
+        sendJSON(res, 200, { has, shop: has ? shop : null, limits });
+        return true;
+      }
 
       if (route === 'GET /') {
         sendJSON(res, 200, { shop: sanitizeShop(data.get(user) || emptyShop()), limits });

@@ -41,12 +41,22 @@
   };
   let dirty = false;
   let saveTimer = null;
+  let saveNote = '';        // what the next save did, for the document's chat
   let flashTimer = null;
   let filter = '';
   let form = null;          // { kind: 'machine' | 'tool' | 'part' | 'operation' | 'assignment', draft }
   let formError = '';
   let pendingPick = '';     // a record named by the URL, waiting on the shop to load
   let pendingImport = null; // a read CSV and what importing it would do, awaiting a yes
+  let docs = { mine: [], shared: [] }; // every stopwatch this account can open
+  let docsIn = false;       // the list has been fetched at least once
+  let doc = null;           // the one open: title, visibility, owner, canEdit
+  let wantDoc = '';         // a stopwatch named by the URL, before the list is in
+  let live = null;          // EventSource for the open stopwatch
+  let here = [];            // who else has it open
+  let chat = [];            // what has been said about it
+  let chatOpen = false;
+  let legacy = null;        // the private record from before stopwatches were shared
   let tick = null;          // display interval while the watch runs
   const els = {};           // the panels render() refills
 
@@ -344,28 +354,79 @@
   }
 
   /* ---------------- loading & saving ---------------- */
-  async function load() {
+  const emptyShop = () =>
+    ({ machines: [], tools: [], parts: [], operations: [], assignments: [], activeId: '' });
+  const canEdit = () => !!(doc && doc.canEdit);
+
+  /* ---------------- the stopwatches ----------------
+     A stopwatch is a document the app owns the sharing of: it belongs to an
+     account, has a name, a privacy setting, people invited to edit it, a chat
+     and a live channel. Everything below this line still works on one shop
+     record — that record is now the document's body.
+  ---------------------------------------------------------------- */
+  async function loadDocs() {
     try {
-      const data = await ctx.api('/');
-      shop = data.shop;
-      limits = data.limits || limits;
+      const data = await ctx.api('/docs');
+      docs = { mine: data.docs || [], shared: data.shared || [] };
     } catch (err) {
-      shop = shop || { machines: [], tools: [], parts: [], operations: [], assignments: [], activeId: '' };
-      flash('Your shop record could not be loaded (' + err.message + ').');
+      flash('Your stopwatches could not be listed (' + err.message + ').');
+      docs = { mine: [], shared: [] };
     }
-    // a link that named a record arrived before the record did
+    docsIn = true;
+    // an account that has used this add-on before stopwatches could be shared
+    // has a private record sitting there; offer to bring it across
+    if (!docs.mine.length && !legacy) {
+      try { legacy = await ctx.api('/legacy'); } catch { legacy = { has: false }; }
+    }
+    const all = docs.mine.concat(docs.shared);
+    // A stopwatch named in the address is opened whether or not it is in the
+    // list: the list is what this account owns or was invited into, and a
+    // public one is neither. The host answers 404 if it may not be seen, and
+    // openDoc says so, rather than the screen quietly showing something else.
+    if (wantDoc) {
+      const id = wantDoc;
+      wantDoc = '';
+      return openDoc(id);
+    }
+    if (doc && all.some(d => d.id === doc.id)) return openDoc(doc.id);
+    if (all.length) return openDoc(all[0].id);
+    doc = null;
+    shop = null;
+    render();
+  }
+
+  async function openDoc(id) {
+    if (dirty) flush();          // never leave a measured time behind
+    stopLive();
+    try {
+      const data = await ctx.api('/docs/' + id);
+      doc = data.doc;
+      shop = data.body && data.body.assignments ? data.body : emptyShop();
+      limits = (data.limits || limits);
+    } catch (err) {
+      doc = null;
+      shop = null;
+      flash('That stopwatch could not be opened (' + err.message + ').');
+      render();
+      return;
+    }
+    chat = [];
+    here = [];
+    try { ctx.go('d/' + doc.id); } catch { /* the shell owns the address bar */ }
+    startLive();
+    loadChat();
     if (pendingPick) {
-      const id = pendingPick;
+      const id2 = pendingPick;
       pendingPick = '';
-      // the id may name a setup, or a tool whose first setup it is
-      const first = jobById(id) || jobsOfTool(id)[0];
+      const first = jobById(id2) || jobsOfTool(id2)[0];
       if (first) { selectJob(first.id); return; }
     }
     render();
   }
 
   function save() {
-    if (!shop) return;
+    if (!shop || !doc) return;
+    if (!canEdit()) return;   // a viewer's screen never writes
     dirty = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(doSave, 700);
@@ -381,9 +442,10 @@
   }
 
   async function doSave() {
-    if (!shop || !dirty) return;
+    if (!shop || !dirty || !doc || !canEdit()) return;
     try {
-      await ctx.api('/', 'PUT', { shop });
+      await ctx.api('/docs/' + doc.id, 'PUT', { body: shop, note: saveNote });
+      saveNote = '';
       dirty = false;
     } catch (err) {
       // keep the edit in memory and keep trying — on the floor this may be the
@@ -398,19 +460,91 @@
   // unload the way a queued beacon would.
   function flush() {
     clearTimeout(saveTimer);
-    if (!shop || !dirty) return;
+    if (!shop || !dirty || !doc || !canEdit()) return;
     dirty = false;
-    fetch('/api/plugins/' + ID + '/', {
+    fetch('/api/plugins/' + ID + '/docs/' + doc.id, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shop }),
+      body: JSON.stringify({ body: shop, note: saveNote }),
       keepalive: true,
     }).catch(() => { dirty = true; saveTimer = setTimeout(doSave, 4000); });
+    saveNote = '';
   }
 
-  function flash(message) {
+  /* ---------------- the live channel ----------------
+     The same stream a shared map runs on: everyone with this stopwatch open
+     gets each saved change, each message and the list of who is here. A
+     measured cycle appears on the other phone as it is measured.
+  ---------------------------------------------------------------- */
+  function startLive() {
+    stopLive();
+    if (!doc) return;
+    try {
+      live = new EventSource('/api/plugins/' + ID + '/docs/' + doc.id + '/live');
+    } catch { return; } // no stream is a working screen, just not a live one
+    live.addEventListener('hello', e => {
+      try { here = (JSON.parse(e.data).users || []); } catch { here = []; }
+      renderDocBar();
+    });
+    live.addEventListener('presence', e => {
+      try { here = (JSON.parse(e.data).users || []); } catch { here = []; }
+      renderDocBar();
+    });
+    live.addEventListener('doc', e => {
+      let payload;
+      try { payload = JSON.parse(e.data); } catch { return; }
+      // An unsaved edit here outranks the one arriving: ours is going out in a
+      // moment and will be broadcast in its turn. Whole-record replace is what
+      // a shared map does too, so the last save wins either way.
+      if (dirty || !payload.body) return;
+      shop = payload.body;
+      render();
+    });
+    live.addEventListener('chat', e => {
+      try { chat.push(JSON.parse(e.data)); } catch { return; }
+      if (chat.length > 400) chat.splice(0, chat.length - 400);
+      renderChat();
+      renderDocBar();
+    });
+    live.addEventListener('meta', e => {
+      try {
+        const m = JSON.parse(e.data);
+        if (doc) { doc.title = m.title; doc.visibility = m.visibility; }
+      } catch { /* leave what we have */ }
+      renderDocBar();
+    });
+  }
+
+  function stopLive() {
+    if (live) { try { live.close(); } catch { /* already gone */ } }
+    live = null;
+    here = [];
+  }
+
+  async function loadChat() {
+    if (!doc) return;
+    try {
+      const data = await ctx.api('/docs/' + doc.id + '/chat');
+      chat = data.chat || [];
+    } catch { chat = []; }
+    renderChat();
+  }
+
+  async function sendChat(text) {
+    if (!doc || !text.trim()) return;
+    try {
+      await ctx.api('/docs/' + doc.id + '/chat', 'POST', { text });
+      // our own message arrives back over the stream, so nothing is added here
+    } catch (err) { flash('Not sent (' + err.message + ').'); }
+  }
+
+  // Most of these are corrections — something could not be done, or wants
+  // doing first — and are coloured as such. A few are the opposite: the thing
+  // asked for happened. Saying so in the same alarmed red would be a lie.
+  function flash(message, done) {
     if (!els.flash) return;
     els.flash.textContent = message;
+    els.flash.classList.toggle('mf-flash-done', !!done);
     els.flash.hidden = false;
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => { els.flash.hidden = true; }, 6000);
@@ -462,6 +596,8 @@
     a.runs.unshift({ id: newId('r'), sec, at: at || Date.now(), note: '' });
     if (a.runs.length > limits.maxRuns) a.runs.length = limits.maxRuns;
     touch(a);
+    // what the others in this stopwatch see happen, in their chat
+    saveNote = 'timed ' + jobName(a) + ' at ' + fmtSec(sec) + ' on ' + machineName(a.machineId);
     saveNow();
     renderStats();
     renderRuns();
@@ -482,8 +618,306 @@
     tick = null;
   }
 
+  /* ---------------- the stopwatch bar ----------------
+     Which stopwatch is open, who else is in it, and — for whoever owns it —
+     who may see it and who may type in it.
+  ---------------------------------------------------------------- */
+  const VISIBILITIES = [
+    ['private', 'Private', 'Only you, and anyone you invite to edit'],
+    ['friends', 'Friends', 'Your friends can open it, and it goes to their feed'],
+    ['public', 'Everyone', 'Anyone can open it, and it can be discovered'],
+  ];
+
+  function renderDocBar() {
+    const box = els.docbar;
+    box.innerHTML = '';
+    if (!shop && !doc) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const row = el('div', 'mf-docbar-row');
+    const all = docs.mine.concat(docs.shared);
+    // whatever is open belongs in the switcher, including one opened from a
+    // link that this account neither owns nor was invited into
+    if (doc && !all.some(d => d.id === doc.id)) all.push(doc);
+    if (all.length > 1) {
+      row.appendChild(dropdown('mf-docpick', all.map(d => ({
+        value: d.id,
+        label: d.title + (d.mine ? '' : ' — ' + (d.owner ? '@' + d.owner.username : 'shared')),
+      })), doc ? doc.id : '', id => openDoc(id), 'Stopwatch'));
+    } else if (doc) {
+      row.appendChild(el('div', 'mf-doctitle', doc.title));
+    }
+
+    if (doc) {
+      const tag = el('span', 'mf-doctag', doc.mine
+        ? VISIBILITIES.find(v => v[0] === doc.visibility)[1]
+        : 'from @' + doc.owner.username + (doc.canEdit ? ' · you can edit' : ' · read only'));
+      tag.title = doc.mine
+        ? VISIBILITIES.find(v => v[0] === doc.visibility)[2]
+        : (doc.canEdit ? 'You were invited to edit this' : 'You can watch, but not change it');
+      row.appendChild(tag);
+    }
+
+    const btns = el('div', 'mf-docbar-btns');
+    btns.appendChild(button('mf-btn mf-btn-sm', '+ Stopwatch', newDoc, 'Start another one, empty'));
+    if (doc && doc.mine) {
+      btns.appendChild(button('mf-btn mf-btn-sm', 'Share', () => openShare(),
+        'Who can see this stopwatch, and who can change it'));
+    }
+    if (doc && !doc.mine) {
+      btns.appendChild(button('mf-btn mf-btn-sm', 'Save a copy', copyDoc,
+        'Take a copy of this into your own stopwatches'));
+    }
+    if (doc) {
+      const label = '💬' + (chat.length ? ' ' + chat.length : '') +
+        (here.length > 1 ? ' · ' + here.length + ' here' : '');
+      btns.appendChild(button('mf-btn mf-btn-sm' + (chatOpen ? ' mf-btn-lap' : ''), label,
+        () => { chatOpen = !chatOpen; renderChat(); renderDocBar(); },
+        'Chat with whoever else is in this stopwatch'));
+    }
+    row.appendChild(btns);
+    box.appendChild(row);
+
+    if (legacy && legacy.has && !docs.mine.length) {
+      const note = el('div', 'mf-note');
+      note.appendChild(document.createTextNode(
+        'The shop record this account kept before stopwatches could be shared is still here. '));
+      note.appendChild(button('mf-link', 'Bring it in as a stopwatch', adoptLegacy));
+      box.appendChild(note);
+    }
+  }
+
+  // Made and opened without asking anything: the caller already has the name.
+  async function createDoc(title, seedBody) {
+    try {
+      const made = await ctx.api('/docs', 'POST',
+        seedBody ? { title, body: seedBody } : { title });
+      docs.mine.push(made.doc);
+      await openDoc(made.doc.id);
+      return doc;
+    } catch (err) { flash('Not created (' + err.message + ').'); return null; }
+  }
+
+  async function newDoc(seedBody, seedTitle) {
+    const title = prompt('What is this stopwatch called?',
+      seedTitle || (docs.mine.length ? 'Shop floor ' + (docs.mine.length + 1) : 'Shop floor'));
+    if (title === null) return null;
+    const made = await createDoc(title.trim() || 'Shop floor', seedBody);
+    if (made) flash(made.title + ' is yours and private. Share sets who else can see it.', true);
+    return made;
+  }
+
+  // The buttons along the top act on the open stopwatch. With none open they
+  // make one first and then do what was asked, rather than doing nothing.
+  function withDoc(fn) {
+    return async (...args) => {
+      if (!doc) {
+        if (!docsIn) return;            // still listing; this wakes up in a moment
+        if (!await newDoc()) return;    // they cancelled the name
+      }
+      fn(...args);
+    };
+  }
+
+  // The private record from before this add-on could share anything, brought
+  // across whole rather than retyped. It is copied, not moved: the old record
+  // stays where it is.
+  async function adoptLegacy() {
+    if (!legacy || !legacy.shop) return;
+    await newDoc(legacy.shop, 'Shop floor');
+    legacy = null;
+  }
+
+  async function copyDoc() {
+    if (!doc) return;
+    try {
+      const made = await ctx.api('/docs/' + doc.id + '/copy', 'POST');
+      docs.mine.push(made.doc);
+      await openDoc(made.doc.id);
+      flash('Copied into your own stopwatches, private to you.', true);
+    } catch (err) { flash('Not copied (' + err.message + ').'); }
+  }
+
+  /* ---------------- sharing ----------------
+     Two separate questions, asked separately because they have different
+     answers: who may open this, and who may change it. A privacy tier is a
+     broadcast; an editor is an invitation, and it overrides the tier — that is
+     how you share a private stopwatch with the one person setting the job.
+  ---------------------------------------------------------------- */
+  let sharePanel = false;
+  let shareEditors = null;   // names, once fetched
+
+  async function openShare() {
+    sharePanel = !sharePanel;
+    if (sharePanel && doc && shareEditors === null) {
+      try {
+        const data = await ctx.api('/docs/' + doc.id + '/editors');
+        shareEditors = (data.editors || []).map(e => e.username);
+      } catch { shareEditors = []; }
+    }
+    renderShare();
+  }
+
+  function renderShare() {
+    const box = els.share;
+    box.innerHTML = '';
+    box.hidden = !(sharePanel && doc && doc.mine);
+    if (box.hidden) return;
+
+    box.appendChild(el('div', 'mf-section-title', 'Share ' + doc.title));
+
+    const name = el('label', 'mf-field mf-field-wide');
+    name.appendChild(el('span', 'mf-field-k', 'Name'));
+    const input = el('input', 'mf-input');
+    input.value = doc.title;
+    input.addEventListener('change', () => saveMeta({ title: input.value }));
+    name.appendChild(input);
+    box.appendChild(name);
+
+    box.appendChild(el('div', 'mf-field-k', 'Who can open it'));
+    for (const [value, label, blurb] of VISIBILITIES) {
+      const opt = el('label', 'mf-check');
+      const radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'mf-vis';
+      radio.checked = doc.visibility === value;
+      radio.addEventListener('change', () => saveMeta({ visibility: value }));
+      opt.appendChild(radio);
+      const text = el('span');
+      text.appendChild(el('b', null, label));
+      text.appendChild(document.createTextNode(' — ' + blurb));
+      opt.appendChild(text);
+      box.appendChild(opt);
+    }
+    if (doc.visibility !== 'private') {
+      box.appendChild(el('div', 'mf-note',
+        'It carries everything in it: the parts and their operations, the machines, ' +
+        'the crib, every setup and every cycle timed against them.'));
+    }
+
+    box.appendChild(el('div', 'mf-field-k mf-share-gap', 'Who can change it'));
+    const who = el('label', 'mf-field mf-field-wide');
+    const editors = el('input', 'mf-input');
+    editors.placeholder = 'usernames, separated by commas';
+    editors.value = (shareEditors || []).join(', ');
+    who.appendChild(editors);
+    who.appendChild(el('span', 'mf-field-hint',
+      'They can open it however it is set, time cycles in it and chat here — even when it is private.'));
+    box.appendChild(who);
+
+    const btns = el('div', 'mf-form-btns');
+    btns.appendChild(button('mf-btn mf-btn-go', 'Save editors', async () => {
+      const usernames = editors.value.split(',').map(x => x.trim().replace(/^@/, '')).filter(Boolean);
+      try {
+        const data = await ctx.api('/docs/' + doc.id + '/editors', 'PUT', { usernames });
+        shareEditors = (data.editors || []).map(e => e.username);
+        renderShare();
+        const missing = (data.missing || []).length;
+        flash(missing
+          ? 'Saved. No account called ' + data.missing.join(', ') + '.'
+          : 'Saved — ' + shareEditors.length + (shareEditors.length === 1 ? ' person' : ' people') + ' can change this.',
+        !missing);
+      } catch (err) { flash('Not saved (' + err.message + ').'); }
+    }));
+    btns.appendChild(button('mf-btn mf-btn-quiet', 'Copy link', () => {
+      const url = location.origin + '/#/p/' + ID + '/d/' + doc.id;
+      navigator.clipboard.writeText(url)
+        .then(() => flash('Link copied. Whoever opens it still has to be allowed to see it.', true))
+        .catch(() => flash(url));
+    }));
+    btns.appendChild(button('mf-btn mf-btn-quiet', 'Close', () => { sharePanel = false; renderShare(); }));
+    btns.appendChild(button('mf-btn mf-btn-danger', 'Delete stopwatch', deleteDoc));
+    box.appendChild(btns);
+    box.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function saveMeta(patch) {
+    if (!doc) return;
+    try {
+      const data = await ctx.api('/docs/' + doc.id + '/meta', 'PUT', patch);
+      doc = data.doc;
+      const i = docs.mine.findIndex(d => d.id === doc.id);
+      if (i >= 0) docs.mine[i] = doc;
+      renderDocBar();
+      renderShare();
+    } catch (err) { flash('Not saved (' + err.message + ').'); }
+  }
+
+  async function deleteDoc() {
+    if (!doc) return;
+    const cycles = shop ? shop.assignments.reduce((n, a) => n + a.runs.length, 0) : 0;
+    if (!confirm('Delete ' + doc.title + ' and everything in it' +
+      (cycles ? ', including the ' + cycles + (cycles === 1 ? ' cycle' : ' cycles') + ' timed in it' : '') +
+      '? Anyone you shared it with loses it too.')) return;
+    try {
+      await ctx.api('/docs/' + doc.id, 'DELETE');
+      docs.mine = docs.mine.filter(d => d.id !== doc.id);
+      sharePanel = false;
+      doc = null;
+      shop = null;
+      stopLive();
+      await loadDocs();
+      flash('Deleted.', true);
+    } catch (err) { flash('Not deleted (' + err.message + ').'); }
+  }
+
+  /* ---------------- the chat ---------------- */
+  function renderChat() {
+    const box = els.chat;
+    box.innerHTML = '';
+    box.hidden = !(chatOpen && doc);
+    if (box.hidden) return;
+
+    const head = el('div', 'mf-section-head');
+    head.appendChild(el('div', 'mf-section-title', 'Chat'));
+    if (here.length) {
+      head.appendChild(el('span', 'mf-fold-count',
+        here.length + (here.length === 1 ? ' here' : ' here')));
+    }
+    box.appendChild(head);
+
+    const list = el('div', 'mf-chat-list');
+    if (!chat.length) {
+      list.appendChild(el('div', 'mf-note',
+        'Nothing said yet. Whoever else has this stopwatch open sees what is typed here, ' +
+        'and what anybody changes is logged alongside it.'));
+    }
+    for (const entry of chat) {
+      const line = el('div', 'mf-chat-line' + (entry.kind === 'activity' ? ' mf-chat-act' : ''));
+      const who = (entry.actor && (entry.actor.name || '@' + entry.actor.username)) || 'someone';
+      line.appendChild(el('span', 'mf-chat-who', who));
+      line.appendChild(el('span', 'mf-chat-text', entry.text));
+      line.appendChild(el('span', 'mf-chat-at', fmtAgo(entry.ts)));
+      list.appendChild(line);
+    }
+    box.appendChild(list);
+    list.scrollTop = list.scrollHeight;
+
+    if (!canEdit()) {
+      box.appendChild(el('div', 'mf-note', 'Only people who can change this stopwatch can chat in it.'));
+      return;
+    }
+    const row = el('div', 'mf-addtime mf-chat-say');
+    const input = el('input', 'mf-input');
+    input.placeholder = 'Say something to whoever else is in here';
+    input.setAttribute('aria-label', 'Message');
+    const send = () => {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      sendChat(text);
+    };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+    row.appendChild(input);
+    row.appendChild(button('mf-btn mf-btn-sm', 'Send', send));
+    box.appendChild(row);
+  }
+
   /* ---------------- rendering ---------------- */
   function render() {
+    renderDocBar();
+    renderShare();
+    renderChat();
     renderImport();
     renderWatch();
     renderStats();
@@ -499,6 +933,17 @@
   function renderWatch() {
     const box = els.watch;
     box.innerHTML = '';
+    if (!shop && !doc) {
+      const empty = el('div', 'mf-empty');
+      empty.appendChild(el('div', 'mf-empty-title', 'Start a stopwatch'));
+      empty.appendChild(el('div', 'mf-empty-text',
+        'A stopwatch holds one floor: its parts and their operations, its machines, its tool crib, ' +
+        'and every cycle timed against them. It is yours and private until you say otherwise, and ' +
+        'it can be shared with the people running the job — to watch, or to work in alongside you.'));
+      empty.appendChild(button('mf-btn mf-btn-go', '+ New stopwatch', () => newDoc()));
+      box.appendChild(empty);
+      return;
+    }
     if (!shop) { box.appendChild(el('div', 'mf-loading', 'Loading your shop…')); return; }
     const a = activeJob();
 
@@ -1047,7 +1492,8 @@
             '. Nothing has been timed on it yet.'
           : name + ' is tooled like ' + from.name + ' — ' + copy.copied +
             (copy.copied === 1 ? ' tool' : ' tools') + ' copied' + tail +
-            '. Put each one on an operation to give it a cutting time.');
+            '. Put each one on an operation to give it a cutting time.',
+      !!copy.copied);
     }
     // A machine with nothing on it does nothing, so go straight on to setting a
     // tool up on it — with the machine already filled in. A clone that already
@@ -1171,7 +1617,7 @@
     // matter are the ones it gets on a machine.
     if (created) {
       if (shop.machines.length && shop.operations.length) openForm('assignment', '', { toolId: created.id });
-      else flash('Added to the crib. Set it up on a machine to give it a cutting time and a tool life.');
+      else flash('Added to the crib. Set it up on a machine to give it a cutting time and a tool life.', true);
     }
   }
 
@@ -2384,7 +2830,7 @@
       pendingImport = null;
       applyImport(job.plan);
       flash('Imported ' + job.name + ' — ' + job.plan.add.length + ' setups and ' +
-        job.plan.newRuns + ' cycles added.');
+        job.plan.newRuns + ' cycles added.', true);
     }, nothing ? 'There is nothing in this file to add' : ''));
     btns.appendChild(button('mf-btn mf-btn-quiet', 'Cancel', () => { pendingImport = null; renderImport(); }));
     if (nothing) btns.firstChild.disabled = true;
@@ -2393,7 +2839,7 @@
   }
 
   async function chooseImport(file) {
-    if (!file || !shop) return;
+    if (!file || !docsIn) return;
     if (file.size > MAX_IMPORT_BYTES) { flash('That file is larger than this will read (5 MB).'); return; }
     let text;
     try { text = await file.text(); }
@@ -2404,6 +2850,15 @@
       flash('No parts, machines or tools could be read out of that file.');
       return;
     }
+    // A file read with nothing open makes the stopwatch to read it into, named
+    // after the file. The plan below is against that record, so it is made
+    // first — but only once the file has proved to have something in it.
+    if (!doc) {
+      const named = (file.name || '').replace(/\.[A-Za-z0-9]+$/, '').replace(/[_-]+/g, ' ').trim();
+      if (!await createDoc(named || 'Shop floor')) return;
+      flash('Started ' + doc.title + ' to read that file into.', true);
+    }
+    if (!shop) return;
     pendingImport = { read, plan: planImport(read), name: file.name || 'the file' };
     renderImport();
   }
@@ -2517,10 +2972,10 @@
     heading.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, op by op'));
     top.appendChild(heading);
     const actions = el('div', 'mf-top-btns');
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Part', () => openForm('part')));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool')));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Setup', () => openForm('assignment'),
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Part', withDoc(() => openForm('part'))));
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Machine', withDoc(() => openForm('machine'))));
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', withDoc(() => openForm('tool'))));
+    actions.appendChild(button('mf-btn mf-btn-sm', '+ Setup', withDoc(() => openForm('assignment')),
       'Put a tool from the crib on a machine, for an operation'));
     // The file input is driven by the button beside it rather than shown raw,
     // and is reset after each pick so choosing the same file twice still fires.
@@ -2542,6 +2997,16 @@
     els.flash = el('div', 'mf-flash');
     els.flash.hidden = true;
     page.appendChild(els.flash);
+
+    els.docbar = el('div', 'mf-docbar');
+    els.docbar.hidden = true;
+    page.appendChild(els.docbar);
+    els.share = el('div', 'mf-share');
+    els.share.hidden = true;
+    page.appendChild(els.share);
+    els.chat = el('div', 'mf-chat');
+    els.chat.hidden = true;
+    page.appendChild(els.chat);
 
     els.import = el('div', 'mf-import');
     els.import.hidden = true;
@@ -2580,16 +3045,21 @@
   // #/p/manufacturing/t/<id> points the watch at a particular setup.
   function open(sub) {
     startTick();
-    const pick = String(sub || '').match(/^[ta]\/([A-Za-z0-9]{1,24})$/);
+    const path = String(sub || '');
+    const asDoc = path.match(/^d\/([A-Za-z0-9]{1,40})$/);
+    if (asDoc) wantDoc = asDoc[1];
+    const pick = path.match(/^[ta]\/([A-Za-z0-9]{1,24})$/);
     if (pick) pendingPick = pick[1];
     // An unsaved edit outranks a refetch — never pull the record out from under
     // a time somebody just measured.
-    if (shop && dirty) { render(); return; }
-    load();
+    if (shop && dirty && !wantDoc) { render(); return; }
+    if (wantDoc && doc && wantDoc === doc.id) { wantDoc = ''; startLive(); render(); return; }
+    loadDocs();
   }
 
   function leave() {
     stopTick(); // the watch keeps time off the clock; only the display stops
+    stopLive(); // and the stream closes rather than ticking on in the background
     flush();
   }
 

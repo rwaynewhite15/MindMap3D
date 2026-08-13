@@ -23,11 +23,24 @@ and turns on **AI generation** simply by setting environment variables.
   your toolbar, put it in the order you want, and leave the rest out of your way. Removing
   a feature takes it out of the toolbar and nothing more: nothing it holds is deleted,
   links to it keep working, and adding it back brings everything with it.
+- **Add-ons can be shared, not just kept.** An add-on that wants it now gets **documents**
+  from the host: an owner, a name, a privacy tier, invited editors, a live channel, a chat
+  and a feed card — the same machinery the mind maps use, with the permission checks on the
+  host's side of the line. The add-on says only what an empty document is and what a stored
+  one may contain. Shopwatch is the first to use it, so a floor can be handed to the people
+  running the job. See [Writing one](#writing-one).
+- **Stopwatches you can share.** Shopwatch keeps as many floors as an account needs rather
+  than one, each with its own name and privacy: **private** (only you and anyone you invite
+  to edit), **friends**, or **everyone**. An invited editor gets in whatever the tier says,
+  which is how a private floor reaches the one person setting the job; everybody else who
+  can open it gets it read only and can save a copy of their own. Two people in the same
+  stopwatch see each other's cycles as they are timed, the chat logs what changed, and a
+  shared one gets a feed card saying what is in it.
 - **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
   `plugins/` folder at startup and adds whatever is there: a screen of its own in the
-  feature library, its own API namespace, and private per-account storage. Nothing ships
-  enabled, and an install with an empty `plugins/` folder is exactly the app it was
-  before. See [Plugins](#plugins).
+  feature library, its own API namespace, private per-account storage, and — if it asks for
+  them — shareable documents. Nothing ships enabled, and an install with an empty
+  `plugins/` folder is exactly the app it was before. See [Plugins](#plugins).
 - **Shopwatch — a cycle-time stopwatch for the shop floor.** The first add-on. A cycle
   time is only ever true of **one tool, on one machine, doing one operation**, and that is
   the shape of the record: **parts** carry their **operations**, a **tool** carries its own
@@ -505,10 +518,12 @@ The choice lives on the account, so it follows you between devices, and it is pa
 
 Some things belong to one trade rather than to everybody. A plugin is how those get
 added: a folder you put in `plugins/`, read once at startup, that contributes **an entry
-in the feature library**, **its own API namespace**, and **private per-account storage** —
-and nothing else. It cannot reach the map editor, the desk, or another plugin's data.
-Installing one makes it available; each account still decides whether to put it in its own
-toolbar.
+in the feature library**, **its own API namespace**, **private per-account storage**, and —
+if it wants them — **shareable documents**, which get the same owner, privacy tiers,
+invited editors, live channel, chat and feed cards the mind maps have, without the plugin
+implementing any of that. And nothing else: it cannot reach the map editor, the desk, or
+another plugin's data. Installing one makes it available; each account still decides
+whether to put it in its own toolbar.
 
 Nothing ships enabled. With an empty `plugins/` folder — the default — the app is exactly
 what it is without the plugin system, and `/api/plugins` answers with an empty list.
@@ -545,6 +560,18 @@ at the end of each part — each press records the split since the last one, so 
 parts gives a run of cycle times without stopping the watch. A time measured elsewhere is
 typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>, <kbd>L</kbd> and
 <kbd>R</kbd> start/stop, mark a cycle and reset.
+
+**A stopwatch is one floor**, and an account keeps as many as it needs — one per cell, one
+per building, one to try something in — with a switcher at the top to move between them. A
+new one is private until its owner shares it, and sharing asks two questions separately:
+**who can open it** (private, friends, or everyone) and **who can change it** (named
+usernames, which override the tier — that is how a private stopwatch reaches the one person
+setting the job). Everybody else who can open it gets it read only, and can **save a copy**
+into a stopwatch of their own. Two people in the same one see each other's edits live, the
+💬 chat is shared by everyone who can open it and logs the edits as they happen — *timed
+80° CNMG rougher at 00:33.3 on HAAS ST-20* — and a shared stopwatch gets a feed card saying
+what is in it. None of that is implemented in the add-on: it is the host's document
+facility, the same one described under [Writing one](#writing-one).
 
 **A cycle time is only ever true of one tool, on one machine, doing one operation**, and
 the record is shaped that way. A **part** carries its **operations**, and an operation
@@ -637,7 +664,7 @@ A plugin is a folder with a `plugin.json`:
   "name": "Shopwatch",
   "version": "1.0.0",
   "description": "What it is, in a sentence.",
-  "hostVersion": 1,
+  "hostVersion": 2,
   "nav": { "label": "Shopwatch" },
   "client": "client.js",
   "styles": "client.css",
@@ -689,6 +716,55 @@ record — persistence without a storage backend of the plugin's own, on Postgre
 local JSON file alike. It rides along with **Export my data** and is deleted with the
 account, and it survives the plugin being removed and reinstalled.
 
+**Documents — sharing, without writing any of it.** One JSON value per account is enough
+for a private tool, and nothing more. A plugin whose thing is worth handing to somebody
+else exports a `docs` contract instead, and the host owns the envelope: who a document
+belongs to, its name, its privacy tier, who is invited to edit it, its chat, its live
+channel, its feed card, and every permission check on all of that.
+
+```js
+module.exports = ctx => ({
+  docs: {
+    empty: () => ({ rows: [] }),               // a new one
+    sanitize: body => rebuild(body),           // never trust what arrives
+    summary: body => body.rows.length + ' rows',   // one line, for the feed card
+    limits: { maxRows: 500 },                  // handed to the client as-is
+  },
+});
+```
+
+`sanitize` is the only guard the plugin has to write, and it is the one it cannot delegate:
+the host decides *who* may write, the plugin decides *what* a stored body may contain. It
+runs on every read and every write, so a body that arrives from an invited editor is
+rebuilt exactly like one from the owner. `handle` is still optional and still available
+alongside `docs`, for routes that are not about a document.
+
+In return the host mounts these under `/api/plugins/<id>/docs`, before the plugin's own
+`handle`:
+
+| Route | What it does |
+|---|---|
+| `GET /docs` | Every document this account owns, plus the ones shared with it |
+| `POST /docs` | Make one — `{ title, body? }`. It starts **private** |
+| `GET /docs/<id>` · `PUT /docs/<id>` | The body, sanitized both ways. `PUT` needs edit rights |
+| `PUT /docs/<id>/meta` | Name and privacy tier — owner only |
+| `GET` · `PUT /docs/<id>/editors` | Who may change it, by username. Anyone who can open it may see the list; only the owner may set it |
+| `GET` · `POST /docs/<id>/chat` | What has been said about it. Readable by anyone who can open it, writable by anyone who can edit it |
+| `GET /docs/<id>/live` | SSE: presence, edits, chat and meta changes as they happen |
+| `POST /docs/<id>/copy` | Take a private copy of one you can see |
+| `DELETE /docs/<id>` | Owner only, and it takes the chat with it |
+
+A document is visible to its owner, to anyone invited to edit it, and to whoever the tier
+allows — friends, or everyone. Anything else answers **404**, not 403: a private document
+does not admit to existing. Writes by somebody who may read but not edit answer **403**.
+Friends-and-public documents appear in the feed alongside maps, with `summary` as the card
+text, and the usual notifications go out. Caps are the host's: 40 documents per account per
+plugin, 20 editors and 400 chat messages each.
+
+This is `hostVersion: 2`. A plugin exporting `docs` needs a host that implements it, and
+says so in its manifest; an older server refuses to load it at startup rather than
+half-working. `GET /api/plugins` reports each plugin's `docs` flag and the host's version.
+
 Package one for distribution with `node tools/package-plugin.js <name>`, which writes
 `dist/mindmapshare-plugin-<id>-<version>.zip` — that file is the whole download.
 
@@ -696,7 +772,7 @@ Package one for distribution with `node tools/package-plugin.js <name>`, which w
 
 | Path | What it is |
 |---|---|
-| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, the plugin host, static files |
+| `server.js` | Node server: accounts, sessions, friends & follows, multi-map storage, the Standing Desk, likes, feed, comments, notifications + Web Push, live SSE + chat, AI map generation, the plugin host and its shared documents, static files |
 | `public/` | The web app (HTML/CSS/JS, no build step) |
 | `plugins/` | Where installed plugins go. Empty by default; contents are not committed |
 | `plugin-packages/` | Plugin source that ships with this repo, ready to install or package |
