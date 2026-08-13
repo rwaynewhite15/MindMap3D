@@ -29,16 +29,20 @@ and turns on **AI generation** simply by setting environment variables.
   enabled, and an install with an empty `plugins/` folder is exactly the app it was
   before. See [Plugins](#plugins).
 - **The Manufacturing plugin — a cycle-time stopwatch for the shop floor.** The first
-  add-on. Time a cycle and it is recorded against one **tool**: part, machine, op,
-  running order, station, insert, indexes per insert, inserts per op, and expected tool
-  life. Enough cycles and it answers what gets asked at the machine — how many parts an
-  edge lasts at the measured cycle time, how often to index, how many inserts a hundred
-  parts costs. Install it with `node tools/install-plugin.js manufacturing`.
+  add-on. A **tool crib and the machines it feeds**: a tool carries its part number,
+  description and cutting edges, and runs on **as many machines as it is assigned to**,
+  each assignment carrying its own cutting time, the edges indexed through there, and the
+  parts run between one index and the next. Cycles are timed against a tool *on a machine*,
+  and enough of them answer what gets asked at the machine — how much of the cycle is cut,
+  how long an edge lasts, how many tools a hundred parts costs. Install it with
+  `node tools/install-plugin.js manufacturing`.
 - **Tooling goes in and out as a spreadsheet.** **⤒ Import** reads a CSV in the same shape
   **⤓ Export** writes, so a file that came out goes back in unchanged and an existing tool
-  list can be brought in by putting the right headers on it. Columns are read by name, not
-  position. Nothing happens until you have seen what the file would do, an import never
-  deletes anything, and importing the same file twice adds nothing the second time.
+  list can be brought in by putting the right headers on it. One row makes whatever it
+  names — a machine, a tool, the assignment between them, a cycle timed against it — and
+  columns are read by name, not position. Nothing happens until you have seen what the file
+  would do, an import never deletes anything, and importing the same file twice adds
+  nothing the second time.
 - **The op's cycle, charted across its tools.** Tools carry a **sequence** — 1 cuts
   first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
   the op's total, with a stacked bar dividing it between the tools in the order they
@@ -521,26 +525,37 @@ from where you meant to get them.
 
 ### Manufacturing — the first plugin
 
-A cycle-time stopwatch, and the tool records the times belong to. **Start** when the tool
+A cycle-time stopwatch over a tool crib and the machines it feeds. **Start** when the tool
 goes in, **Cycle done** at the end of each part — each press records the split since the
 last one, so a run of parts gives a run of cycle times without stopping the watch. A time
 measured elsewhere is typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>,
 <kbd>L</kbd> and <kbd>R</kbd> start/stop, mark a cycle and reset.
 
-Each tool carries **part**, **machine**, **op**, **seq** (where it falls in the running
-order), **station**, tool description, **insert**, **indexes per insert**, **inserts per
-op**, expected **tool life** (cutting minutes per edge) and optionally insert cost. From
-the measured average, the screen derives:
+**Tools and machines are separate records, related many-to-many.** A tool runs on as many
+machines as it is assigned to, and a machine holds as many tools; neither owns the other.
+What is true of the tool wherever it runs is kept once, in the crib — its **part number**,
+**description** and **cutting edges**, plus an optional cost. What changes from machine to
+machine is kept on the **assignment** that puts the tool on the machine: the **cutting
+time**, the **indexable edges** used there, the **parts per index** it lasts, and the part,
+op, seq and station it is set up for — along with every cycle timed against it. So a
+rougher giving 250 parts an edge on one machine and 180 on another is one tool with two
+sets of numbers, not two tools. From those:
 
 ```
-parts per edge    = tool life minutes × 60 ÷ average cycle seconds
-parts per insert  = parts per edge × indexes per insert
-inserts / 100     = inserts per op × 100 ÷ parts per insert
-cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
+parts per tool     = parts per index × indexable edges
+minutes per edge   = parts per index × cutting time ÷ 60
+tools / 100 parts  = 100 ÷ parts per tool
+cost per part      = tool cost ÷ parts per tool
 ```
 
-Tools group by part, machine and op and run in **sequence order** — a new tool takes the
-next number in its op, ↑ / ↓ move it, and the op renumbers itself so the sequence is
+With both a cutting time and a measured average, the screen also says how much of the cycle
+is actually cut. **Machines** lists each machine with the tools on it, grouped by part and
+op and in the order they cut; **Tools** lists the crib, each tool with the machines it runs
+on as chips — the same relation read from either end, narrowed by one filter box. Deleting
+a machine leaves its tools in the crib; deleting a tool takes it off every machine.
+
+Assignments run in **sequence order** within a machine, part and op — a newly assigned tool
+takes the next number, ↑ / ↓ move it, and the op renumbers itself so the sequence is
 always 1..n. The **Op cycle** panel sums the tools' averages into the op's real cycle
 time and draws a stacked bar dividing it between them in the order they cut, each segment
 sized by its share. The table beneath the bar is the legend and the numbers at once, and
@@ -551,14 +566,24 @@ the order reads in the color rather than in eight unrelated hues. Tools with not
 yet are listed as **not timed**, with a line saying how many, because the total is what
 has been measured rather than a finished op.
 
-**⤓ Export** downloads every recorded cycle, one row each, carrying its tool and place in
-the op, ordered the way the job runs. **⤒ Import** reads one back in the same shape, so a
+**⤓ Export** downloads every recorded cycle, one row each, carrying the machine, the tool
+and the setup between them, ordered the way the floor runs — plus a row for any tool not on
+a machine and any machine with no tools. **⤒ Import** reads one back in the same shape, so a
 file that came out goes back in unchanged, and a tool list already kept in a spreadsheet
 comes in by putting those headers on it. Columns are read by name rather than position,
-common alternatives are understood, and the worked-out columns are ignored on the way in.
-An import never deletes anything: it shows what it would do first, matches tools already
-on the board by part/machine/op/station/description, and recognizes cycles by when they
-were recorded — so importing the same file twice adds nothing the second time.
+common alternatives are understood, files written by version 1 of the add-on still read,
+and the worked-out columns are ignored on the way in. An import never deletes anything: it
+shows what it would do first, matches machines by name, tools by part number and
+description, and assignments by the two they join plus part/op/station, and recognizes
+cycles by when they were recorded — so importing the same file twice adds nothing the
+second time.
+
+A record written by version 1 — one flat row per tool, with the machine as a field on it —
+is converted the first time it is read: each old record becomes a machine, a tool and the
+assignment between them, and the same tool met on two machines collapses into one crib
+entry with an assignment on each. Tool life given in minutes per edge becomes parts per
+index at the measured cycle; where nothing was timed there is nothing to divide by, so the
+old figure is carried into the notes rather than turned into a number nobody measured.
 
 The watch keeps time from the clock rather than counting up, so a phone that sleeps
 mid-cycle, a backgrounded tab and a page reload all come back reading correctly. Full

@@ -1,8 +1,8 @@
 {
   "id": "manufacturing",
   "name": "Manufacturing",
-  "version": "1.2.0",
-  "description": "A shop-floor cycle-time stopwatch, with the tool records behind each time: part, machine, op, running order, station, insert, indexes per insert, inserts per op and expected tool life — the op's total cycle charted across its tools, and CSV in as well as out.",
+  "version": "2.0.0",
+  "description": "A shop-floor cycle-time stopwatch over a tool crib and the machines it feeds: a tool carries its part number, description and cutting edges, and each machine it is assigned to carries the cutting time, the edges indexed there and the parts run between indexes — with the op's cycle charted across its tools, and CSV in as well as out.",
   "hostVersion": 1,
   "nav": {
     "label": "Shop"
