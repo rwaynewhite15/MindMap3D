@@ -343,3 +343,21 @@
   .mf-watch-btns .mf-btn { min-width: 96px; }
   .mf-run-n { width: 34px; }
 }
+
+/* ---------------- import preview ----------------
+   What a chosen file would do, shown before it does any of it. */
+.mf-file { display: none; }
+.mf-import {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.mf-import-sum {
+  font-family: var(--mf-mono);
+  font-size: 15px;
+  font-weight: 700;
+  margin: 6px 0 4px;
+}
+.mf-import .mf-note { margin-top: 6px; }

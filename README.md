@@ -34,6 +34,11 @@ and turns on **AI generation** simply by setting environment variables.
   life. Enough cycles and it answers what gets asked at the machine — how many parts an
   edge lasts at the measured cycle time, how often to index, how many inserts a hundred
   parts costs. Install it with `node tools/install-plugin.js manufacturing`.
+- **Tooling goes in and out as a spreadsheet.** **⤒ Import** reads a CSV in the same shape
+  **⤓ Export** writes, so a file that came out goes back in unchanged and an existing tool
+  list can be brought in by putting the right headers on it. Columns are read by name, not
+  position. Nothing happens until you have seen what the file would do, an import never
+  deletes anything, and importing the same file twice adds nothing the second time.
 - **The op's cycle, charted across its tools.** Tools carry a **sequence** — 1 cuts
   first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
   the op's total, with a stacked bar dividing it between the tools in the order they
@@ -546,8 +551,14 @@ the order reads in the color rather than in eight unrelated hues. Tools with not
 yet are listed as **not timed**, with a line saying how many, because the total is what
 has been measured rather than a finished op.
 
-**⤓ CSV** downloads every recorded cycle, one row each, carrying its tool and place in the
-op, ordered the way the job runs.
+**⤓ Export** downloads every recorded cycle, one row each, carrying its tool and place in
+the op, ordered the way the job runs. **⤒ Import** reads one back in the same shape, so a
+file that came out goes back in unchanged, and a tool list already kept in a spreadsheet
+comes in by putting those headers on it. Columns are read by name rather than position,
+common alternatives are understood, and the worked-out columns are ignored on the way in.
+An import never deletes anything: it shows what it would do first, matches tools already
+on the board by part/machine/op/station/description, and recognizes cycles by when they
+were recorded — so importing the same file twice adds nothing the second time.
 
 The watch keeps time from the clock rather than counting up, so a phone that sleeps
 mid-cycle, a backgrounded tab and a page reload all come back reading correctly. Full

@@ -102,9 +102,42 @@ Tools are grouped by part, machine and op, and each group heading also shows the
 total measured cycle across its timed tools, so every op on the board reads at a
 glance and not just the one being timed.
 
-**⤓ CSV** downloads every recorded cycle, one row each, carrying the tool it
-belongs to and its place in the op, ordered the way the job runs, for pivoting in
-a spreadsheet.
+## Spreadsheets, in and out
+
+**⤓ Export** downloads every recorded cycle, one row each, carrying the tool it
+belongs to and its place in the op, ordered the way the job runs.
+
+**⤒ Import** reads one back. It is the same shape the export writes, so a file
+that came out of here goes back in unchanged — and a tool list somebody already
+keeps in a spreadsheet can be brought in by putting these headers on it:
+
+```
+part, machine, op, seq, station, tool, insert, indexes_per_insert,
+inserts_per_op, tool_life_min_per_edge, insert_cost, notes,
+cycle_seconds, recorded_at
+```
+
+Columns are read **by name, not by position** — reorder them, leave out the ones
+that do not apply, or use a common alternative (`part number`, `operation`,
+`turret`, `description`, `indexes`, `inserts`, `tool life`, `seconds`, `date`)
+and it still reads. The three worked-out columns the export adds — cycles timed,
+average, parts per edge — are ignored on the way in: they come from the cycles,
+and a stale figure in a spreadsheet should not be able to contradict the times it
+was supposed to summarize. A file needs at least one of part, machine, op,
+station or tool; everything else is optional.
+
+Quoted fields, commas and newlines inside them, semicolon-separated files from
+non-English spreadsheets, comma decimals (`10,5`) and Excel's byte-order mark all
+read as you would expect.
+
+**An import never deletes anything.** Choosing a file shows what it would do —
+how many tools are new, how many are already on the board, how many cycles would
+be added — and nothing happens until you say Import. A tool already there is
+matched on what identifies it on the floor (part, machine, op, station,
+description); it gains the file's cycles and any field the file fills in, and
+keeps everything the file leaves blank. Cycles are recognized by when they were
+recorded and how long they took, so **importing the same file twice adds nothing
+the second time**.
 
 ## What it stores, and where
 

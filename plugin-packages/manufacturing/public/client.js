@@ -29,6 +29,7 @@
   let form = null;          // the tool being added or edited, as a draft
   let formError = '';
   let pendingTool = '';     // a tool named by the URL, waiting on the record to load
+  let pendingImport = null; // a read CSV and what importing it would do, awaiting a yes
   let tick = null;          // display interval while the watch runs
   const els = {};           // the panels render() refills
 
@@ -323,6 +324,7 @@
 
   /* ---------------- rendering ---------------- */
   function render() {
+    renderImport();
     renderWatch();
     renderStats();
     renderRuns();
@@ -955,6 +957,262 @@
     renderTools();
   }
 
+  /* ---------------- import ----------------
+     A spreadsheet of tooling goes back in the way it came out. The columns are
+     the ones the export writes, read by name rather than by position, so a file
+     with them reordered, renamed to a common alternative, or missing the ones
+     that do not apply still reads. The three worked-out columns the export adds
+     (cycles timed, average, parts per edge) are ignored on the way in — they are
+     derived from the cycles, and taking them as given would let a stale figure
+     in a spreadsheet contradict the times it was supposed to summarize.
+
+     An import never deletes anything. A tool already on the board is matched by
+     what identifies it on the floor — part, machine, op, station, description —
+     and gains the file's cycles and any field the file fills in; everything else
+     is added. Re-importing the same file changes nothing, because a cycle is
+     recognized by when it was recorded and how long it took.
+  ---------------------------------------------------------------- */
+  const IMPORT_COLUMNS = [
+    'part', 'machine', 'op', 'seq', 'station', 'tool', 'insert',
+    'indexes_per_insert', 'inserts_per_op', 'tool_life_min_per_edge', 'insert_cost',
+    'notes', 'cycle_seconds', 'recorded_at',
+  ];
+  // header name (normalized) → the field it fills. The export's own names plus
+  // the shorter ones a person is likely to type.
+  const COLUMN_ALIASES = {
+    part: 'part', part_number: 'part', partno: 'part',
+    machine: 'machine',
+    op: 'op', operation: 'op',
+    seq: 'seq', sequence: 'seq', order: 'seq',
+    station: 'station', turret: 'station', pocket: 'station',
+    tool: 'desc', tool_description: 'desc', description: 'desc',
+    insert: 'insert',
+    indexes_per_insert: 'indexes', indexes: 'indexes', edges: 'indexes',
+    inserts_per_op: 'insertsPerOp', inserts: 'insertsPerOp',
+    tool_life_min_per_edge: 'lifeMin', tool_life: 'lifeMin', life_min: 'lifeMin', tool_life_min: 'lifeMin',
+    insert_cost: 'insertCost', cost: 'insertCost',
+    notes: 'notes', note: 'notes',
+    cycle_seconds: 'sec', cycle_sec: 'sec', seconds: 'sec', cycle_time: 'sec',
+    recorded_at: 'at', at: 'at', date: 'at', timestamp: 'at',
+  };
+  const IDENTITY = ['part', 'machine', 'op', 'station', 'desc'];
+  const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
+  const normHeader = h => String(h || '')
+    .replace(/^﻿/, '')       // Excel writes a byte-order mark on the first cell
+    .trim().toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
+
+  // A CSV reader that handles what a spreadsheet actually writes: quoted fields,
+  // "" for a quote inside one, commas and newlines inside quotes, and CRLF.
+  function parseCsv(text, sep) {
+    const rows = [];
+    let row = [], field = '', quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c !== '"') { field += c; continue; }
+        if (text[i + 1] === '"') { field += '"'; i++; continue; } // an escaped quote
+        quoted = false;
+      } else if (c === '"' && field === '') {
+        quoted = true;
+      } else if (c === sep) {
+        row.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        rows.push(row); row = [];
+      } else {
+        field += c;
+      }
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(r => r.some(cell => cell.trim() !== '')); // drop blank lines
+  }
+
+  // Spreadsheets in some locales save with semicolons, and a pasted table with
+  // tabs. Whichever separator the header line holds most of is the one in use;
+  // a header with none of them is a single column, where the choice is moot.
+  function sniffSeparator(text) {
+    const line = text.split(/\r?\n/, 1)[0] || '';
+    const best = [',', ';', '\t']
+      .map(ch => [ch, line.split(ch).length - 1])
+      .sort((a, b) => b[1] - a[1])[0];
+    return best[1] > 0 ? best[0] : ',';
+  }
+
+  // Read a file into the tools and cycles it describes, with a note of anything
+  // that could not be used. Nothing is changed here — this only reads.
+  function readImport(text) {
+    const rows = parseCsv(text, sniffSeparator(text));
+    if (!rows.length) return { error: 'That file has nothing in it.' };
+    const header = rows[0].map(normHeader).map(h => COLUMN_ALIASES[h] || '');
+    if (!header.some(f => IDENTITY.includes(f))) {
+      return { error: 'That file has no column naming the tools. It needs at least one of ' +
+        'part, machine, op, station or tool — the columns the ⤓ Export button writes.' };
+    }
+    const numeric = new Set(['seq', 'indexes', 'insertsPerOp', 'lifeMin', 'insertCost']);
+    const byKey = new Map();
+    let dataRows = 0, skipped = 0, badTimes = 0, badSecs = 0;
+
+    for (const raw of rows.slice(1)) {
+      dataRows++;
+      const cell = {};
+      header.forEach((field, i) => { if (field) cell[field] = String(raw[i] == null ? '' : raw[i]).trim(); });
+      const fields = {};
+      for (const f of ['part', 'machine', 'op', 'station', 'desc', 'insert', 'notes']) {
+        if (cell[f]) fields[f] = cell[f];
+      }
+      for (const f of numeric) {
+        if (!cell[f]) continue;
+        // "9,40" from a comma-decimal locale, and a currency symbol, both read
+        const n = Number(String(cell[f]).replace(/[^0-9.,-]/g, '').replace(',', '.'));
+        if (Number.isFinite(n) && n > 0) fields[f] = f === 'insertCost' || f === 'lifeMin' ? n : Math.floor(n);
+      }
+      if (!IDENTITY.some(f => fields[f])) { skipped++; continue; }
+
+      const key = IDENTITY.map(f => (fields[f] || '').toLowerCase()).join(' ');
+      if (!byKey.has(key)) byKey.set(key, { key, fields: {}, runs: [] });
+      const tool = byKey.get(key);
+      Object.assign(tool.fields, fields); // later rows fill in what earlier ones left blank
+
+      if (cell.sec) {
+        const sec = parseTime(cell.sec) || Number(String(cell.sec).replace(',', '.'));
+        if (Number.isFinite(sec) && sec > 0) {
+          let at = cell.at ? Date.parse(cell.at) : NaN;
+          if (!Number.isFinite(at)) { if (cell.at) badTimes++; at = Date.now(); }
+          tool.runs.push({ sec: round(sec, 2), at: Math.min(at, Date.now()) });
+        } else badSecs++;
+      }
+    }
+    return { tools: [...byKey.values()], dataRows, skipped, badTimes, badSecs };
+  }
+
+  // Work out exactly what an import would do, before it does any of it. The
+  // preview and the import itself both read this, so what is shown is what runs.
+  function planImport(read) {
+    const plan = { add: [], update: [], newRuns: 0, dupeRuns: 0, overflowTools: 0, overflowRuns: 0 };
+    const existing = new Map(shop.tools.map(t => [
+      IDENTITY.map(f => String(t[f] || '').toLowerCase()).join(' '), t]));
+    let room = Math.max(0, limits.maxTools - shop.tools.length);
+
+    for (const incoming of read.tools) {
+      const match = existing.get(incoming.key);
+      // A cycle is the same cycle if it was recorded at the same moment and ran
+      // the same length, so the same file imported twice adds nothing the second
+      // time. Rows repeated inside one file collapse the same way.
+      const seen = new Set((match ? match.runs : []).map(r => r.at + ':' + r.sec));
+      const fresh = [];
+      for (const r of incoming.runs) {
+        const stamp = r.at + ':' + r.sec;
+        if (seen.has(stamp)) { plan.dupeRuns++; continue; }
+        seen.add(stamp);
+        fresh.push(r);
+      }
+      const keptRuns = (match ? match.runs.length : 0) + fresh.length;
+      if (keptRuns > limits.maxRuns) plan.overflowRuns += keptRuns - limits.maxRuns;
+      plan.newRuns += fresh.length;
+      if (match) {
+        plan.update.push({ tool: match, fields: incoming.fields, runs: fresh });
+      } else if (room > 0) {
+        room--;
+        plan.add.push({ fields: incoming.fields, runs: fresh });
+      } else {
+        plan.overflowTools++;
+        plan.newRuns -= fresh.length;
+      }
+    }
+    return plan;
+  }
+
+  function applyImport(read, plan) {
+    const touched = new Set();
+    for (const u of plan.update) {
+      Object.assign(u.tool, u.fields); // a blank cell leaves what is already there
+      u.tool.runs = [...u.runs, ...u.tool.runs].sort((a, b) => b.at - a.at).slice(0, limits.maxRuns);
+      touch(u.tool);
+      touched.add(opLabel(u.tool));
+    }
+    for (const a of plan.add) {
+      const tool = {
+        id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        part: '', machine: '', op: '', station: '', seq: 0, desc: '', insert: '',
+        indexes: 0, insertsPerOp: 0, lifeMin: 0, insertCost: 0, notes: '',
+        ...a.fields,
+        runs: a.runs.sort((x, y) => y.at - x.at).slice(0, limits.maxRuns),
+        createdAt: Date.now(), updatedAt: Date.now(),
+      };
+      shop.tools.push(tool);
+      touched.add(opLabel(tool));
+    }
+    for (const label of touched) renumberOp(label);
+    if (!shop.activeId && shop.tools.length) shop.activeId = shop.tools[0].id;
+    saveNow(); // a bulk import goes out at once rather than sitting in the debounce
+    render();
+  }
+
+  function renderImport() {
+    const box = els.import;
+    box.innerHTML = '';
+    box.hidden = !pendingImport;
+    if (!pendingImport) return;
+    const { read, plan, name } = pendingImport;
+
+    box.appendChild(el('div', 'mf-section-title', 'Import ' + name));
+    const lines = [];
+    if (plan.add.length) lines.push(plan.add.length + (plan.add.length === 1 ? ' new tool' : ' new tools'));
+    if (plan.update.length) lines.push(plan.update.length + ' already on the board' +
+      (plan.update.length === 1 ? '' : ''));
+    lines.push(plan.newRuns + (plan.newRuns === 1 ? ' new cycle' : ' new cycles'));
+    box.appendChild(el('div', 'mf-import-sum', lines.join(' · ')));
+
+    const notes = [];
+    if (plan.update.length) {
+      notes.push('Tools already on the board keep every field this file leaves blank, and keep every cycle they already have.');
+    }
+    if (plan.dupeRuns) notes.push(plan.dupeRuns + ' cycle' + (plan.dupeRuns === 1 ? ' is' : 's are') +
+      ' already recorded and will be left alone.');
+    if (read.skipped) notes.push(read.skipped + ' row' + (read.skipped === 1 ? '' : 's') +
+      ' named no tool and will be skipped.');
+    if (read.badSecs) notes.push(read.badSecs + ' cycle time' + (read.badSecs === 1 ? '' : 's') +
+      ' could not be read as a number.');
+    if (read.badTimes) notes.push(read.badTimes + ' date' + (read.badTimes === 1 ? '' : 's') +
+      ' could not be read; those cycles will be stamped now.');
+    if (plan.overflowTools) notes.push(plan.overflowTools + ' tool' + (plan.overflowTools === 1 ? '' : 's') +
+      ' will not fit — this account holds ' + limits.maxTools + '.');
+    if (plan.overflowRuns) notes.push('The oldest cycles on some tools will roll off at ' + limits.maxRuns + ' per tool.');
+    notes.push('Nothing is deleted by an import.');
+    for (const n of notes) box.appendChild(el('div', 'mf-note', n));
+
+    const btns = el('div', 'mf-form-btns');
+    const nothing = !plan.add.length && !plan.update.length;
+    btns.appendChild(button('mf-btn mf-btn-go', 'Import', () => {
+      const job = pendingImport;
+      pendingImport = null;
+      applyImport(job.read, job.plan);
+      flash('Imported ' + job.name + ' — ' + job.plan.add.length + ' new, ' +
+        job.plan.update.length + ' updated, ' + job.plan.newRuns + ' cycles added.');
+    }, nothing ? 'There is nothing in this file to add' : ''));
+    btns.appendChild(button('mf-btn mf-btn-quiet', 'Cancel', () => { pendingImport = null; renderImport(); }));
+    if (nothing) btns.firstChild.disabled = true;
+    box.appendChild(btns);
+    box.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function chooseImport(file) {
+    if (!file || !shop) return;
+    if (file.size > MAX_IMPORT_BYTES) { flash('That file is larger than this will read (5 MB).'); return; }
+    let text;
+    try { text = await file.text(); }
+    catch (err) { flash('That file could not be read. ' + err.message); return; }
+    const read = readImport(text);
+    if (read.error) { flash(read.error); return; }
+    if (!read.tools.length) { flash('No tools could be read out of that file.'); return; }
+    pendingImport = { read, plan: planImport(read), name: file.name || 'the file' };
+    renderImport();
+  }
+
   /* ---------------- export ---------------- */
   // One row per recorded cycle, carrying the tool it belongs to, so the file
   // can be pivoted in a spreadsheet without going back to the app.
@@ -965,16 +1223,15 @@
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
     const rows = [[
-      'part', 'machine', 'op', 'seq', 'station', 'tool', 'insert',
-      'indexes_per_insert', 'inserts_per_op', 'tool_life_min_per_edge', 'insert_cost',
-      'cycle_seconds', 'recorded_at', 'cycles_timed', 'average_seconds', 'parts_per_edge',
+      ...IMPORT_COLUMNS, // everything an import reads back, in the order it is written
+      'cycles_timed', 'average_seconds', 'parts_per_edge', // worked out from the rest
     ]];
     // in running order, op by op, so the file opens the way the job runs
     for (const t of [...shop.tools].sort((a, b) => opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b))) {
       const s = statsFor(t);
       const life = s ? lifeFor(t, s.avg) : null;
       const base = [t.part, t.machine, t.op, t.seq || '', t.station, t.desc, t.insert,
-        t.indexes || '', t.insertsPerOp || '', t.lifeMin || '', t.insertCost || ''];
+        t.indexes || '', t.insertsPerOp || '', t.lifeMin || '', t.insertCost || '', t.notes];
       const tail = [s ? s.count : 0, s ? round(s.avg, 2) : '', life ? life.partsPerEdge : ''];
       if (!t.runs.length) { rows.push(base.concat(['', '']).concat(tail)); continue; }
       for (const r of t.runs) {
@@ -1021,13 +1278,30 @@
     top.appendChild(heading);
     const actions = el('div', 'mf-top-btns');
     actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', () => openForm(null)));
-    actions.appendChild(button('mf-btn mf-btn-sm', '⤓ CSV', exportCsv, 'Download every recorded cycle as a spreadsheet'));
+    // The file input is driven by the button beside it rather than shown raw,
+    // and is reset after each pick so choosing the same file twice still fires.
+    const file = el('input', 'mf-file');
+    file.type = 'file';
+    file.accept = '.csv,text/csv,text/plain';
+    file.addEventListener('change', () => {
+      const chosen = file.files && file.files[0];
+      file.value = '';
+      chooseImport(chosen);
+    });
+    actions.appendChild(button('mf-btn mf-btn-sm', '⤒ Import', () => file.click(),
+      'Read a spreadsheet of tooling back in — the columns ⤓ Export writes'));
+    actions.appendChild(button('mf-btn mf-btn-sm', '⤓ Export', exportCsv, 'Download every recorded cycle as a spreadsheet'));
+    actions.appendChild(file);
     top.appendChild(actions);
     page.appendChild(top);
 
     els.flash = el('div', 'mf-flash');
     els.flash.hidden = true;
     page.appendChild(els.flash);
+
+    els.import = el('div', 'mf-import');
+    els.import.hidden = true;
+    page.appendChild(els.import);
 
     els.watch = el('div', 'mf-watch');
     els.stats = el('div', 'mf-stats');
