@@ -17,9 +17,15 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **You choose what MindMapShare is.** Every screen — Home, My Maps, Desk, Browse, Friends,
+  and any installed add-on — is optional, and an account **starts with none of them**. The
+  **Features** library lists everything this server can do; add what you actually use to
+  your toolbar, put it in the order you want, and leave the rest out of your way. Removing
+  a feature takes it out of the toolbar and nothing more: nothing it holds is deleted,
+  links to it keep working, and adding it back brings everything with it.
 - **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
-  `plugins/` folder at startup and adds whatever is there: a screen of its own in the top
-  navigation, its own API namespace, and private per-account storage. Nothing ships
+  `plugins/` folder at startup and adds whatever is there: a screen of its own in the
+  feature library, its own API namespace, and private per-account storage. Nothing ships
   enabled, and an install with an empty `plugins/` folder is exactly the app it was
   before. See [Plugins](#plugins).
 - **The Manufacturing plugin — a cycle-time stopwatch for the shop floor.** The first
@@ -448,12 +454,37 @@ drops or overwrites existing bubbles, and re-running it is a no-op. Notes, links
 likes, and chat/activity history all ride along inside the map JSON, so no schema change
 is required for them.
 
+## The toolbar and the feature library
+
+Every screen in this app is optional, and an account starts with none of them. What the
+top navigation holds is a list the account chose — in the order it chose — and the
+**Features** library is where that list is built.
+
+The library shows everything this server can offer: the built-in screens, and any
+installed plugin alongside them, marked as an add-on. **＋ Add** puts one in the toolbar,
+**↑ / ↓** order it, **Remove** takes it out.
+
+Two entries are always there and cannot be removed: **Features**, so the toolbar can
+always be changed back, and **Settings**, so an account can always be managed and signed
+out of. An account whose toolbar is empty opens on the library.
+
+**Removing a feature removes a shortcut, not access.** Its screen still opens from a link —
+a map someone shared, a desk sent by code, a bookmark — and nothing it holds is touched.
+Turn it back on and everything is where it was. That also means an add-on that gets
+uninstalled from the server keeps its place in the list: it simply isn't drawn until it
+is installed again.
+
+The choice lives on the account, so it follows you between devices, and it is part of
+**Export my data**.
+
 ## Plugins
 
 Some things belong to one trade rather than to everybody. A plugin is how those get
-added: a folder you put in `plugins/`, read once at startup, that contributes **a screen
-in the top navigation**, **its own API namespace**, and **private per-account storage** —
+added: a folder you put in `plugins/`, read once at startup, that contributes **an entry
+in the feature library**, **its own API namespace**, and **private per-account storage** —
 and nothing else. It cannot reach the map editor, the desk, or another plugin's data.
+Installing one makes it available; each account still decides whether to put it in its own
+toolbar.
 
 Nothing ships enabled. With an empty `plugins/` folder — the default — the app is exactly
 what it is without the plugin system, and `/api/plugins` answers with an empty list.
@@ -468,7 +499,8 @@ node tools/install-plugin.js --list                   # what is installed
 node tools/install-plugin.js --remove manufacturing   # take one back off
 ```
 
-Then **restart the server** — plugins are read at startup. Installing is only ever "put
+Then **restart the server** — plugins are read at startup. An installed plugin appears in
+the **Features** library; each account adds it to its own toolbar from there. Installing is only ever "put
 the folder in `plugins/`"; the installer adds the checks worth doing first: that the
 package really is a plugin, that its manifest names files it actually ships, and that a
 downloaded archive writes nothing outside the folder it claims.
@@ -542,7 +574,7 @@ A plugin is a folder with a `plugin.json`:
 | Field | What it does |
 |---|---|
 | `id` | Lowercase letters, numbers and dashes; must match the folder name. It is the URL prefix for both the plugin's assets and its API. |
-| `nav.label` | What the shell puts in the top navigation. The screen lives at `#/p/<id>`. |
+| `nav.label` | The name it carries in the feature library, and in the toolbar of any account that adds it. The screen lives at `#/p/<id>`. |
 | `client` / `styles` | Files inside the plugin's `public/`, served at `/plugins/<id>/…` and loaded by the shell on boot. |
 | `server` | Optional. A module mounted under `/api/plugins/<id>/…`. |
 | `hostVersion` | The plugin contract it was written against. A plugin needing a newer host than the server implements is refused at startup rather than half-working. |

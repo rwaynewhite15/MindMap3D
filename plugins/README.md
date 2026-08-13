@@ -28,6 +28,10 @@ node tools/install-plugin.js --remove manufacturing   # take one back off
 Then restart the server. Plugins are read once at startup, so a newly installed
 one appears on the next start and not before.
 
+Installing makes a plugin *available*: it shows up in the **Features** library
+next to the built-in screens. Each account decides whether to put it in its own
+toolbar, so installing one changes nothing for anybody who does not want it.
+
 Copying the folder in by hand works exactly as well — the installer only adds
 the checks: that the package really is a plugin, that its manifest names files
 it actually ships, and that a downloaded archive writes nothing outside the

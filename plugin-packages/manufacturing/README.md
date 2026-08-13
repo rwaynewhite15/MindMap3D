@@ -23,11 +23,13 @@ node tools/install-plugin.js manufacturing            # from a copy that ships i
 node tools/install-plugin.js ~/Downloads/plugin.zip   # from a download
 ```
 
-Restart the server. **Shop** appears in the top navigation. Without it installed,
+Restart the server. **Shop** then appears in the **Features** library, next to the
+built-in screens; add it there and it joins your toolbar. Without it installed,
 nothing about the app changes.
 
 To take it off again: `node tools/install-plugin.js --remove manufacturing`.
-Tool records stay on each account and come back if it is reinstalled.
+Tool records stay on each account and come back if it is reinstalled — as does
+its place in anyone's toolbar, which is kept rather than quietly dropped.
 
 ## Using it
 
