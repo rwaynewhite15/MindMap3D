@@ -203,6 +203,10 @@
     const seen = new Set();
     return jobsOfOperation(id).map(a => a.machineId).filter(m => (seen.has(m) ? false : seen.add(m)));
   };
+  // How a machine is tooled: one tool in one station, however many operations
+  // it cuts there. What a clone carries across.
+  const distinctTools = id =>
+    new Set(jobsOnMachine(id).map(a => a.toolId + ' ' + a.station.toLowerCase())).size;
 
   // The operations of one part, in the order they are run.
   const opsOfPart = id => (shop ? shop.operations.filter(o => o.partId === id).sort(byStep) : []);
@@ -981,16 +985,16 @@
       created = { id: newId('m'), name, notes, createdAt: Date.now(), updatedAt: Date.now() };
       shop.machines.push(created);
     }
-    const copy = created && draft.cloneOf ? copySetups(draft.cloneOf, created.id) : null;
+    const copy = created && draft.cloneOf ? copyTools(draft.cloneOf, created.id) : null;
     done();
     if (copy) {
       const from = machineById(draft.cloneOf);
       flash(copy.copied
-        ? name + ' is set up like ' + (from ? from.name : 'the original') + ' — ' + copy.copied +
+        ? name + ' is tooled like ' + (from ? from.name : 'the original') + ' — ' + copy.copied +
           (copy.copied === 1 ? ' tool' : ' tools') + ' copied' +
           (copy.skipped ? ', ' + copy.skipped + ' left out for want of room' : '') +
-          '. Nothing has been timed on it yet.'
-        : name + ' was added, but the machine it was copied from has no tools set up on it.');
+          '. Put each one on an operation to give it a cutting time.'
+        : name + ' was added, but the machine it was copied from has no tools on it.');
     }
     // A machine with nothing on it does nothing, so go straight on to setting a
     // tool up on it — with the machine already filled in. A clone that already
@@ -1001,32 +1005,45 @@
   }
 
   /* ---------------- cloning a machine ----------------
-     A second machine of the same kind runs the same tools on the same
-     operations, and typing that in again is the work the record exists to
-     avoid. Cloning copies every setup — the tool, the operation it is for, the
-     station, the running order, the cutting time, the edges and the tool life.
+     A second machine of the same kind is tooled the same way, and typing that
+     list in again is the work the record exists to avoid. Cloning copies the
+     tools, in the stations they sit in — one entry per tool per station,
+     however many operations it happens to cut there.
 
-     It does not copy the recorded cycles. A cycle time is a measurement taken
-     on one machine; carrying it onto another would be inventing data about a
-     machine nobody has stood in front of. The clone starts untimed, and its
-     numbers are what is expected of it until the watch says otherwise.
+     It copies nothing else, because nothing else is a fact about the machine.
+     Which operations it runs is the new machine's own business, and the
+     cutting time, the edges indexed and the parts between indexes are all
+     facts about the op being cut, so they are left for whoever sets it up.
+     Neither are the recorded cycles copied: a cycle time is a measurement
+     taken on one machine, and carrying it onto another would be inventing
+     data about a machine nobody has stood in front of.
   ---------------------------------------------------------------- */
-  function copySetups(fromId, toId) {
+  function copyTools(fromId, toId) {
     const now = Date.now();
-    let copied = 0, skipped = 0;
-    for (const a of jobsOnMachine(fromId)) {
+    let copied = 0, skipped = 0, seq = 0;
+    const seen = new Set();
+    for (const a of jobsOnMachine(fromId).sort(bySeq)) {
+      const key = a.toolId + ' ' + a.station.toLowerCase();
+      if (seen.has(key)) continue; // the same tool in the same pocket, on another op
+      seen.add(key);
       if (shop.assignments.length >= limits.maxAssignments) { skipped++; continue; }
       shop.assignments.push({
-        ...a,
         id: newId('a'),
+        toolId: a.toolId,
         machineId: toId,
+        operationId: '',
+        station: a.station,
+        seq: ++seq,
+        cutSec: 0,
+        indexEdges: 0,
+        partsPerIndex: 0,
+        notes: '',
         runs: [],
         createdAt: now,
         updatedAt: now,
       });
       copied++;
     }
-    for (const key of new Set(jobsOnMachine(toId).map(opKey))) renumberOp(key);
     return { copied, skipped };
   }
 
@@ -1312,13 +1329,14 @@
     box.appendChild(el('div', 'mf-section-title',
       cloneOf ? 'Clone ' + cloneOf.name : FORM_TITLES[kind][draft.id ? 1 : 0]));
     if (cloneOf) {
-      const jobs = jobsOnMachine(cloneOf.id);
-      box.appendChild(el('div', 'mf-note', jobs.length
-        ? 'Saving this makes a second machine with the ' + jobs.length +
-          (jobs.length === 1 ? ' tool' : ' tools') + ' set up on ' + cloneOf.name +
-          ' copied onto it — the same operations, stations, cutting times and tool life. The cycles ' +
-          'timed on ' + cloneOf.name + ' stay with it: they were measured on that machine.'
-        : 'There are no tools set up on ' + cloneOf.name + ' yet, so this is a new machine and nothing more.'));
+      const tools = distinctTools(cloneOf.id);
+      box.appendChild(el('div', 'mf-note', tools
+        ? 'Saving this makes a second machine with the ' + tools +
+          (tools === 1 ? ' tool' : ' tools') + ' on ' + cloneOf.name +
+          ' copied onto it, in the same stations — the tools and nothing else. Which operations they ' +
+          'cut, and the cutting times and tool life that go with them, belong to the op, and the ' +
+          'cycles timed on ' + cloneOf.name + ' were measured on that machine.'
+        : 'There are no tools on ' + cloneOf.name + ' yet, so this is a new machine and nothing more.'));
     }
     const grid = el('div', 'mf-grid');
 
@@ -1593,10 +1611,11 @@
       const mb = el('div', 'mf-machine-btns');
       mb.appendChild(button('mf-btn mf-btn-sm', '+ Tool here', () => openForm('assignment', '', { machineId: m.id }),
         'Set a tool from the crib up on this machine'));
+      const tooled = distinctTools(m.id);
       mb.appendChild(button('mf-link', 'Clone', () => cloneMachine(m.id),
-        all.length
-          ? 'A second machine of the same kind, with these ' + all.length +
-            (all.length === 1 ? ' tool' : ' tools') + ' set up on it the same way'
+        tooled
+          ? 'A second machine of the same kind, carrying these ' + tooled +
+            (tooled === 1 ? ' tool' : ' tools') + ' in the same stations'
           : 'A second machine of the same kind'));
       mb.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id)));
       mh.appendChild(mb);

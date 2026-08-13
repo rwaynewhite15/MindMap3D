@@ -167,17 +167,22 @@ say exactly what will go before they do it.
 **Clone a machine** when a second one of the same kind arrives. **Clone** on a
 machine opens a new machine already carrying its number's successor — `MC-101`
 suggests `MC-102`, `Lathe 3` suggests `Lathe 4`, and a name ending in anything
-else gets a number put on the end — and saving copies every setup across: the
-same tools, on the same operations, in the same stations and running order, with
-the same cutting times, indexable edges and tool life. The suggested number is
-only a suggestion; type over it before saving if the machine is called something
-else.
+else gets a number put on the end — and saving copies **the tools** across, in the
+stations they sit in. The suggested number is only a suggestion; type over it
+before saving if the machine is called something else.
 
-Two things it does not do. It does not copy the **recorded cycles**: a cycle time
-is a measurement taken on one machine, and carrying it onto another would be
-inventing data about a machine nobody has stood in front of. And it does not
-duplicate the **operations** — an operation belongs to a part, not to a machine,
-so the clone runs the same ops, which then simply list both machines.
+It copies the tooling and nothing else, because nothing else is a fact about the
+machine. A tool that cuts three operations on the original comes across once, as
+one tool in one station; **which operations the new machine runs is its own
+business**, and the cutting time, the indexable edges and the parts between
+indexes are all facts about the op being cut, so they are left for whoever sets it
+up. The **recorded cycles** stay with the original too: a cycle time is a
+measurement taken on one machine, and carrying it onto another would be inventing
+data about a machine nobody has stood in front of.
+
+The clone therefore lists its tools under **No operation set** until each is put
+on one — which is a setup like any other, and the point at which it gets a
+cutting time.
 
 ## Spreadsheets, in and out
 
@@ -255,6 +260,125 @@ tool of the job. They become records: a part, and the operations belonging to it
 with each setup naming the operation it is for. A setup that named neither gets
 no operation rather than an invented one, and says so on screen until one is
 chosen; an op named with no part gathers under a part called **Unassigned**.
+
+## The record, as a relational schema
+
+The record is stored as one JSON document per account (see below), but it is
+relational in shape and worth reading that way. Six entities, and one junction
+doing most of the work:
+
+```mermaid
+erDiagram
+    PART     ||--o{ OPERATION : "is made by"
+    OPERATION |o--o{ SETUP    : "is cut by"
+    MACHINE  ||--o{ SETUP     : "holds"
+    TOOL     ||--o{ SETUP     : "is used in"
+    SETUP    ||--o{ CYCLE     : "was timed as"
+```
+
+```sql
+CREATE TABLE machine (              -- what is on the floor
+  id          text PRIMARY KEY,
+  account_id  text NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  name        text NOT NULL CHECK (length(name) <= 60),
+  notes       text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
+  created_at  timestamptz NOT NULL,
+  updated_at  timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX ON machine (account_id, lower(name));
+
+CREATE TABLE tool (                 -- the crib: true wherever the tool runs
+  id            text PRIMARY KEY,
+  account_id    text NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  part_number   text NOT NULL DEFAULT '' CHECK (length(part_number) <= 60),
+  description   text NOT NULL DEFAULT '' CHECK (length(description) <= 80),
+  cutting_edges int  NOT NULL DEFAULT 0 CHECK (cutting_edges BETWEEN 0 AND 64),
+  cost          numeric NOT NULL DEFAULT 0 CHECK (cost BETWEEN 0 AND 100000),
+  notes         text NOT NULL DEFAULT '',
+  created_at    timestamptz NOT NULL,
+  updated_at    timestamptz NOT NULL,
+  CHECK (part_number <> '' OR description <> '')   -- something to know it by
+);
+
+CREATE TABLE part (                 -- what is being made
+  id          text PRIMARY KEY,
+  account_id  text NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  number      text NOT NULL DEFAULT '' CHECK (length(number) <= 60),
+  description text NOT NULL DEFAULT '' CHECK (length(description) <= 80),
+  notes       text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL,
+  updated_at  timestamptz NOT NULL,
+  CHECK (number <> '' OR description <> '')
+);
+CREATE UNIQUE INDEX ON part (account_id, lower(number)) WHERE number <> '';
+
+CREATE TABLE operation (            -- a step in making one part
+  id         text PRIMARY KEY,
+  part_id    text NOT NULL REFERENCES part(id) ON DELETE CASCADE,
+  name       text NOT NULL CHECK (length(name) <= 40),
+  seq        int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),
+  notes      text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX ON operation (part_id, lower(name));
+
+CREATE TABLE setup (                -- one tool, on one machine, doing one op
+  id              text PRIMARY KEY,
+  tool_id         text NOT NULL REFERENCES tool(id)      ON DELETE CASCADE,
+  machine_id      text NOT NULL REFERENCES machine(id)   ON DELETE CASCADE,
+  operation_id    text     NULL REFERENCES operation(id) ON DELETE SET NULL,
+  station         text NOT NULL DEFAULT '' CHECK (length(station) <= 20),
+  seq             int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),
+  cut_sec         numeric NOT NULL DEFAULT 0 CHECK (cut_sec BETWEEN 0 AND 86400),
+  index_edges     int  NOT NULL DEFAULT 0 CHECK (index_edges BETWEEN 0 AND 64),
+  parts_per_index int  NOT NULL DEFAULT 0 CHECK (parts_per_index BETWEEN 0 AND 100000),
+  notes           text NOT NULL DEFAULT '',
+  created_at      timestamptz NOT NULL,
+  updated_at      timestamptz NOT NULL
+);
+CREATE INDEX ON setup (machine_id, operation_id, seq);   -- the running order
+
+CREATE TABLE cycle (                -- one part, timed
+  id       text PRIMARY KEY,
+  setup_id text NOT NULL REFERENCES setup(id) ON DELETE CASCADE,
+  sec      numeric NOT NULL CHECK (sec > 0 AND sec <= 86400),
+  at       timestamptz NOT NULL,
+  note     text NOT NULL DEFAULT '' CHECK (length(note) <= 80)
+);
+CREATE INDEX ON cycle (setup_id, at DESC);
+
+CREATE TABLE shop (                 -- one row per account: what the watch is on
+  account_id     text PRIMARY KEY REFERENCES account(id) ON DELETE CASCADE,
+  active_setup_id text NULL REFERENCES setup(id) ON DELETE SET NULL,
+  version        int NOT NULL,
+  updated_at     timestamptz NOT NULL
+);
+```
+
+**`setup` is the whole point.** Tools and machines are many-to-many, and so are
+tools and operations, and machines and operations; all three relations are the
+same junction read from a different side. It is a *ternary* junction with
+attributes: `cut_sec`, `index_edges` and `parts_per_index` are true of that
+combination and of nothing narrower, which is why a tool cutting two operations
+in the same machine is two rows with two cutting times. `cycle` hangs off
+`setup` for the same reason — a measurement belongs to the exact combination it
+was measured on.
+
+`operation_id` is the one nullable foreign key: a tool can be in a machine before
+anybody has said what it is cutting, and a cloned machine arrives in exactly that
+state. Nothing derived is stored — averages, spread, parts per tool, minutes per
+edge, tools per hundred and cost per part are all computed from these columns, so
+no stale figure can contradict the cycles it came from.
+
+Natural keys, used to match records when a spreadsheet is imported: machine by
+`lower(name)`; tool by `(lower(part_number), lower(description))`; part by
+`lower(number)`; operation by `(part_id, lower(name))`; setup by
+`(machine_id, tool_id, operation_id, lower(station))`; cycle by
+`(setup_id, at, sec)`, which is what makes importing the same file twice a no-op.
+
+Row caps per account, enforced on every write: 60 machines, 200 tools, 120 parts,
+300 operations, 200 setups, 300 cycles per setup.
 
 ## What it stores, and where
 
