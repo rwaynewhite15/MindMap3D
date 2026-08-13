@@ -12,8 +12,16 @@
 
 .mf-root {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* A part number, a machine name and a tool number are each up to sixty
+     characters and none of them has to contain a space. Inherited by
+     everything on the screen, this breaks such a word rather than letting it
+     set the width of the page it is on — which on a phone is the difference
+     between a column that fits and one that scrolls sideways. It only ever
+     acts on a word that would not fit anyway. */
+  overflow-wrap: anywhere;
   --mf-run: #F0B84A;
   --mf-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -305,6 +313,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   padding: 5px 6px;
   border-radius: 6px;
   font-size: 12.5px;
@@ -314,7 +323,7 @@
 .mf-legend-off { opacity: 0.55; }
 .mf-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--line); flex: none; }
 .mf-legend-n { font-family: var(--mf-mono); font-size: 11px; color: var(--dim); width: 14px; flex: none; }
-.mf-legend-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.mf-legend-name { flex: 1; min-width: 6em; display: flex; align-items: center; gap: 6px; }
 .mf-legend-v { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; }
 .mf-legend-p { font-size: 11.5px; color: var(--dim); width: 62px; text-align: right; flex: none; }
 
@@ -345,6 +354,7 @@
   padding: 3px 9px;
   font-size: 11.5px;
 }
+.mf-tag { max-width: 100%; }
 .mf-tag:hover { border-color: var(--accent); }
 .mf-tag-on { color: var(--accent); border-color: var(--accent); }
 .mf-tag-off { color: var(--dim); background: none; border: 1px dashed var(--line); }
@@ -360,7 +370,8 @@
   border-top: 1px solid var(--line);
 }
 .mf-op-on .mf-op-name { color: var(--accent); }
-.mf-op-k { display: flex; align-items: center; gap: 7px; flex: none; }
+/* holds its width against the summary beside it, but not against the screen */
+.mf-op-k { display: flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; }
 .mf-op-name { font-family: var(--mf-mono); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
 .mf-op-v { font-size: 12px; color: var(--dim); flex: 1; min-width: 120px; }
 .mf-op-btns { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -380,7 +391,9 @@
   flex: none;
 }
 .mf-card-on .mf-seq, .mf-watch-title .mf-seq { color: var(--accent); }
-.mf-moves { display: flex; gap: 2px; flex: none; }
+/* margin-left: auto does nothing on a full row — the name has already taken
+   the slack — and pulls the arrows to the right edge when the row wraps. */
+.mf-moves { display: flex; gap: 2px; flex: none; margin-left: auto; }
 .mf-move {
   background: none;
   border: 1px solid var(--line);
@@ -395,6 +408,7 @@
 .mf-move:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 .mf-move:disabled { opacity: 0.3; cursor: default; }
 .mf-chip-sm { font-size: 10.5px; padding: 1px 5px; }
+.mf-card-crib .mf-chip { white-space: normal; max-width: 100%; }
 
 .mf-group { display: flex; align-items: baseline; gap: 10px; margin: 16px 0 6px; }
 .mf-group-k {
@@ -418,10 +432,16 @@
 .mf-card:hover { border-color: var(--dim); }
 .mf-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mf-card-on { border-left-color: var(--accent); border-color: rgba(79, 209, 224, 0.4); }
-.mf-card-top { display: flex; align-items: center; gap: 8px; }
+/* Wrapping costs nothing where there is room, and is the difference between
+   readable and clipped where there is not: a small phone cannot hold a seq, a
+   station, a name, an average and two move buttons on one line. */
+.mf-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* the name takes the slack, so the average and the move buttons sit at the
    right edge whether or not the tool has been timed yet */
-.mf-card-name { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; }
+/* A floor rather than nothing: given min-width 0 the name is squeezed to a
+   couple of characters a line while the average and the arrows keep their
+   width. With a floor it is the row that wraps instead, and the name reads. */
+.mf-card-name { font-weight: 600; font-size: 14px; flex: 1; min-width: 7em; }
 .mf-card-avg {
   font-family: var(--mf-mono);
   font-size: 13.5px;
