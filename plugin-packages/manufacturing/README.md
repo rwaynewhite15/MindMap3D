@@ -11,6 +11,7 @@ questions that are actually asked at the machine:
 - how many parts one cutting edge lasts, at the cycle time you just measured
 - how often to index, and how many parts a whole insert covers
 - how many inserts a hundred parts consumes, and what they cost per part
+- and, across the op's tools in the order they cut, **where the cycle actually goes**
 
 ## Installing
 
@@ -22,11 +23,13 @@ node tools/install-plugin.js manufacturing            # from a copy that ships i
 node tools/install-plugin.js ~/Downloads/plugin.zip   # from a download
 ```
 
-Restart the server. **Shop** appears in the top navigation. Without it installed,
+Restart the server. **Shop** then appears in the **Features** library, next to the
+built-in screens; add it there and it joins your toolbar. Without it installed,
 nothing about the app changes.
 
 To take it off again: `node tools/install-plugin.js --remove manufacturing`.
-Tool records stay on each account and come back if it is reinstalled.
+Tool records stay on each account and come back if it is reinstalled — as does
+its place in anyone's toolbar, which is kept rather than quietly dropped.
 
 ## Using it
 
@@ -37,6 +40,7 @@ Tool records stay on each account and come back if it is reinstalled.
 | Part | The part number the op belongs to |
 | Machine | Which machine it runs on |
 | Op | The operation — Op 20, or whatever the traveller calls it |
+| Seq | Where the tool falls in the op's running order — 1 cuts first |
 | Station | Turret position or pocket: `T0303` |
 | Tool | What it is: "80° CNMG rougher" |
 | Insert | The insert designation: `CNMG432-MP` |
@@ -68,12 +72,72 @@ inserts / 100     = inserts per op × 100 ÷ parts per insert
 cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
 ```
 
-Tools are grouped by part, machine and op, and each group shows the total
-measured cycle across its timed tools — the op's real cycle time, built from the
-tools that make it up.
+**Put the tools in running order.** Each tool carries a **Seq** — 1 cuts first.
+A new tool takes the next number in its op automatically, so entering tools in
+the order they run needs no thought; the ↑ / ↓ buttons on a tool card move it a
+place either way afterwards, and the op renumbers itself so the sequence is
+always 1..n with no gaps. The tool list, the chart and the CSV all follow that
+order, and the watch says which tool of how many you are timing.
 
-**⤓ CSV** downloads every recorded cycle, one row each, carrying the tool it
-belongs to, for pivoting in a spreadsheet.
+**See where the cycle goes.** The **Op cycle** panel is the op's whole measured
+cycle — the sum of every tool's average — with a stacked bar underneath dividing
+it between the tools in the order they cut. Each segment is one tool, sized by
+its share; the table below the bar names them, gives each average and its
+percentage, and doubles as the legend. Hovering (or tabbing to) either the bar
+or a row lights up the other, so a two-percent segment is still reachable.
+
+The segment fills come from a single cyan ramp stepped light→dark along the
+running order, so the order is legible in the color itself rather than needing
+eight unrelated hues. The ramp is checked against the dark chart surface for
+monotone lightness, a visible gap between adjacent steps, one hue, and a darkest
+step that still clears the surface.
+
+A tool with nothing timed against it yet cannot contribute to the total, so it is
+listed as **not timed** and a line under the chart says how many of the op's
+tools are in that state — the total is what has been measured, not a finished op.
+An op with only one timed tool gets the figure without a bar; one segment is not
+a part-to-whole story.
+
+Tools are grouped by part, machine and op, and each group heading also shows the
+total measured cycle across its timed tools, so every op on the board reads at a
+glance and not just the one being timed.
+
+## Spreadsheets, in and out
+
+**⤓ Export** downloads every recorded cycle, one row each, carrying the tool it
+belongs to and its place in the op, ordered the way the job runs.
+
+**⤒ Import** reads one back. It is the same shape the export writes, so a file
+that came out of here goes back in unchanged — and a tool list somebody already
+keeps in a spreadsheet can be brought in by putting these headers on it:
+
+```
+part, machine, op, seq, station, tool, insert, indexes_per_insert,
+inserts_per_op, tool_life_min_per_edge, insert_cost, notes,
+cycle_seconds, recorded_at
+```
+
+Columns are read **by name, not by position** — reorder them, leave out the ones
+that do not apply, or use a common alternative (`part number`, `operation`,
+`turret`, `description`, `indexes`, `inserts`, `tool life`, `seconds`, `date`)
+and it still reads. The three worked-out columns the export adds — cycles timed,
+average, parts per edge — are ignored on the way in: they come from the cycles,
+and a stale figure in a spreadsheet should not be able to contradict the times it
+was supposed to summarize. A file needs at least one of part, machine, op,
+station or tool; everything else is optional.
+
+Quoted fields, commas and newlines inside them, semicolon-separated files from
+non-English spreadsheets, comma decimals (`10,5`) and Excel's byte-order mark all
+read as you would expect.
+
+**An import never deletes anything.** Choosing a file shows what it would do —
+how many tools are new, how many are already on the board, how many cycles would
+be added — and nothing happens until you say Import. A tool already there is
+matched on what identifies it on the floor (part, machine, op, station,
+description); it gains the file's cycles and any field the file fills in, and
+keeps everything the file leaves blank. Cycles are recognized by when they were
+recorded and how long they took, so **importing the same file twice adds nothing
+the second time**.
 
 ## What it stores, and where
 

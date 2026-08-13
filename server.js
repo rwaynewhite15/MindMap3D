@@ -306,6 +306,7 @@ function pgStore() {
     maps: r.maps,
     desk: r.desk,
     pluginData: r.plugin_data,
+    toolbar: r.toolbar,
   });
 
   return {
@@ -340,6 +341,8 @@ function pgStore() {
       // per-account storage for installed plugins, keyed by plugin id; empty
       // unless an add-on is installed and the account has used it
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plugin_data JSONB NOT NULL DEFAULT '{}'`);
+      // the screens this account keeps in its navigation; empty is the default
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS toolbar JSONB NOT NULL DEFAULT '[]'`);
       // migrate legacy single-map rows into the multi-map shape
       await pool.query(`
         UPDATE users SET maps = jsonb_build_array(jsonb_build_object(
@@ -391,15 +394,16 @@ function pgStore() {
       await pool.query(
         `INSERT INTO users (id, username, salt, pass_hash, display_name, show_display_name,
                             visibility, bio, created_at, friends, requests_in, requests_out, maps,
-                            following, followers, notifications, push_subs, desk, plugin_data)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb)`,
+                            following, followers, notifications, push_subs, desk, plugin_data, toolbar)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb)`,
         [u.id, u.username, u.salt, u.passHash, u.displayName, u.showDisplayName,
          u.visibility, u.bio, u.createdAt,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
-         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {})]);
+         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {}),
+         JSON.stringify(u.toolbar || [])]);
     },
     async saveUser(u) {
       await pool.query(
@@ -407,14 +411,15 @@ function pgStore() {
                           friends=$6::jsonb, requests_in=$7::jsonb, requests_out=$8::jsonb, maps=$9::jsonb,
                           following=$10::jsonb, followers=$11::jsonb,
                           notifications=$12::jsonb, push_subs=$13::jsonb, desk=$14::jsonb,
-                          plugin_data=$15::jsonb
+                          plugin_data=$15::jsonb, toolbar=$16::jsonb
          WHERE id=$1`,
         [u.id, u.displayName, u.showDisplayName, u.visibility, u.bio,
          JSON.stringify(u.friends), JSON.stringify(u.requestsIn),
          JSON.stringify(u.requestsOut), JSON.stringify(u.maps),
          JSON.stringify(u.following || []), JSON.stringify(u.followers || []),
          JSON.stringify(u.notifications || []), JSON.stringify(u.pushSubs || []),
-         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {})]);
+         JSON.stringify(u.desk || makeDesk()), JSON.stringify(u.pluginData || {}),
+         JSON.stringify(u.toolbar || [])]);
     },
     async getUserByMapId(mapId) {
       const { rows } = await pool.query(
@@ -599,6 +604,66 @@ const DECOY_HASH = hashPassword('\0invalid-login-decoy\0', DECOY_SALT);
 const MAX_MAPS = 20;
 const MAX_EDITORS = 20;
 
+/* ----------------------------------------------------------------
+   The feature library — what an account can put in its toolbar
+
+   Every screen the app has is optional. An account holds an ordered list
+   of the ones it wants in the top navigation and starts with none of
+   them: the toolbar is built up from the library rather than trimmed
+   down from everything. Installed plugins join the same list, so an
+   add-on is just another feature once it is there.
+
+   Turning a feature off takes it out of the toolbar and nothing more.
+   The screen still opens from a link — a shared map, a desk someone sent,
+   a bookmark — because a toolbar is a set of shortcuts, not a set of
+   permissions, and nothing about the account's data changes either way.
+---------------------------------------------------------------- */
+const MAX_TOOLBAR = 40;
+const TOOLBAR_ID_RE = /^[a-z0-9][a-z0-9:-]{1,39}$/;
+const FEATURES = [
+  { id: 'home', label: 'Home', hash: '#/home',
+    blurb: 'A feed of new maps from the people you follow.' },
+  { id: 'map', label: 'My Maps', hash: '#/map',
+    blurb: 'The map editor, and every map you own or have been given edit access to.' },
+  { id: 'desk', label: 'Desk', hash: '#/desk',
+    blurb: 'Your Standing Desk — what is on you now, what you are waiting on, and your working notes.' },
+  { id: 'browse', label: 'Browse', hash: '#/browse',
+    blurb: 'Find people, and the public maps they have shared.' },
+  { id: 'friends', label: 'Friends', hash: '#/friends',
+    blurb: 'Friend requests, your friends, and the people you follow.' },
+];
+
+// The library as this server can offer it: the built-in screens, plus a
+// entry for each installed plugin. Nothing here is per-account — what an
+// account has chosen from it is its `toolbar`.
+function featureCatalog() {
+  return [
+    ...FEATURES,
+    ...[...plugins.values()].map(p => ({
+      id: 'plugin:' + p.id,
+      label: p.navLabel,
+      hash: '#/p/' + p.id,
+      blurb: p.description,
+      addOn: p.name + ' ' + p.version, // marks it as installed rather than built in
+    })),
+  ];
+}
+
+// An account's chosen toolbar. Ids are shape-checked and deduplicated rather
+// than matched against the catalog, so an entry for a plugin that happens to be
+// uninstalled today survives and comes back with it; the navigation only draws
+// the ids it can still resolve.
+function sanitizeToolbar(input) {
+  const out = [];
+  for (const raw of Array.isArray(input) ? input : []) {
+    const id = String(raw || '');
+    if (!TOOLBAR_ID_RE.test(id) || out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= MAX_TOOLBAR) break;
+  }
+  return out;
+}
+
 function makeMap(name, visibility, seedLabel) {
   const now = Date.now();
   return {
@@ -632,6 +697,9 @@ function normalizeUser(u) {
   // Per-plugin storage. Each installed add-on owns one key and validates its
   // own shape; the core only guarantees there is an object here to write into.
   if (!u.pluginData || typeof u.pluginData !== 'object' || Array.isArray(u.pluginData)) u.pluginData = {};
+  // The chosen toolbar. An account that has never picked has an empty one —
+  // that is the default, not a missing value to fill in with everything.
+  u.toolbar = sanitizeToolbar(u.toolbar);
   if (!Array.isArray(u.maps)) u.maps = [];
   if (!u.maps.length) {
     const m = makeMap('My Map', u.visibility, u.displayName || u.username);
@@ -771,6 +839,7 @@ function meUser(u) {
     visibility: u.visibility,
     bio: u.bio || '',
     aiEnabled: aiConfigured(), // whether AI map generation is available
+    toolbar: u.toolbar || [],  // the screens this account keeps in its navigation
   };
 }
 
@@ -1781,6 +1850,7 @@ async function handleApi(req, res, pathname) {
       maps: [makeMap('My Map', body.visibility, displayName || username)],
       desk: makeDesk(),
       pluginData: {},
+      toolbar: [], // nothing in the navigation until it is chosen from the library
     };
     try {
       await store.createUser(u);
@@ -2063,6 +2133,7 @@ async function handleApi(req, res, pathname) {
         defaultVisibility: user.visibility,
         bio: user.bio || '',
         createdAt: new Date(user.createdAt).toISOString(),
+        toolbar: user.toolbar || [],
       },
       social: {
         friends: unames(user.friends),
@@ -2129,6 +2200,24 @@ async function handleApi(req, res, pathname) {
     await store.deleteUser(user.id);
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (isSecure(req) ? '; Secure' : ''));
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // --- the feature library, and the toolbar chosen from it ---
+  // What this server can offer: the built-in screens plus whatever plugins are
+  // installed. The account's own choice rides along on /api/me.
+  if (route === 'GET /api/features') {
+    return sendJSON(res, 200, { features: featureCatalog(), maxToolbar: MAX_TOOLBAR });
+  }
+
+  // Replace the whole toolbar, in the order it should appear. A body without an
+  // items array is rejected rather than read as "empty", so a malformed request
+  // cannot silently clear somebody's navigation.
+  if (route === 'PUT /api/me/toolbar') {
+    const body = await readBody(req);
+    if (!body || !Array.isArray(body.items)) return sendJSON(res, 400, { error: 'Invalid toolbar.' });
+    user.toolbar = sanitizeToolbar(body.items);
+    await store.saveUser(user);
+    return sendJSON(res, 200, { toolbar: user.toolbar });
   }
 
   // --- an installed plugin's own API: /api/plugins/<id>/… is its to answer ---

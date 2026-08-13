@@ -17,17 +17,33 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **You choose what MindMapShare is.** Every screen — Home, My Maps, Desk, Browse, Friends,
+  and any installed add-on — is optional, and an account **starts with none of them**. The
+  **Features** library lists everything this server can do; add what you actually use to
+  your toolbar, put it in the order you want, and leave the rest out of your way. Removing
+  a feature takes it out of the toolbar and nothing more: nothing it holds is deleted,
+  links to it keep working, and adding it back brings everything with it.
 - **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
-  `plugins/` folder at startup and adds whatever is there: a screen of its own in the top
-  navigation, its own API namespace, and private per-account storage. Nothing ships
+  `plugins/` folder at startup and adds whatever is there: a screen of its own in the
+  feature library, its own API namespace, and private per-account storage. Nothing ships
   enabled, and an install with an empty `plugins/` folder is exactly the app it was
   before. See [Plugins](#plugins).
 - **The Manufacturing plugin — a cycle-time stopwatch for the shop floor.** The first
   add-on. Time a cycle and it is recorded against one **tool**: part, machine, op,
-  station, insert, indexes per insert, inserts per op, and expected tool life. Enough
-  cycles and it answers what gets asked at the machine — how many parts an edge lasts at
-  the measured cycle time, how often to index, how many inserts a hundred parts costs.
-  Install it with `node tools/install-plugin.js manufacturing`.
+  running order, station, insert, indexes per insert, inserts per op, and expected tool
+  life. Enough cycles and it answers what gets asked at the machine — how many parts an
+  edge lasts at the measured cycle time, how often to index, how many inserts a hundred
+  parts costs. Install it with `node tools/install-plugin.js manufacturing`.
+- **Tooling goes in and out as a spreadsheet.** **⤒ Import** reads a CSV in the same shape
+  **⤓ Export** writes, so a file that came out goes back in unchanged and an existing tool
+  list can be brought in by putting the right headers on it. Columns are read by name, not
+  position. Nothing happens until you have seen what the file would do, an import never
+  deletes anything, and importing the same file twice adds nothing the second time.
+- **The op's cycle, charted across its tools.** Tools carry a **sequence** — 1 cuts
+  first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
+  the op's total, with a stacked bar dividing it between the tools in the order they
+  run. The segments step along one cyan ramp light→dark so the running order reads in
+  the color, and the table beneath is both the legend and the numbers.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
@@ -443,12 +459,37 @@ drops or overwrites existing bubbles, and re-running it is a no-op. Notes, links
 likes, and chat/activity history all ride along inside the map JSON, so no schema change
 is required for them.
 
+## The toolbar and the feature library
+
+Every screen in this app is optional, and an account starts with none of them. What the
+top navigation holds is a list the account chose — in the order it chose — and the
+**Features** library is where that list is built.
+
+The library shows everything this server can offer: the built-in screens, and any
+installed plugin alongside them, marked as an add-on. **＋ Add** puts one in the toolbar,
+**↑ / ↓** order it, **Remove** takes it out.
+
+Two entries are always there and cannot be removed: **Features**, so the toolbar can
+always be changed back, and **Settings**, so an account can always be managed and signed
+out of. An account whose toolbar is empty opens on the library.
+
+**Removing a feature removes a shortcut, not access.** Its screen still opens from a link —
+a map someone shared, a desk sent by code, a bookmark — and nothing it holds is touched.
+Turn it back on and everything is where it was. That also means an add-on that gets
+uninstalled from the server keeps its place in the list: it simply isn't drawn until it
+is installed again.
+
+The choice lives on the account, so it follows you between devices, and it is part of
+**Export my data**.
+
 ## Plugins
 
 Some things belong to one trade rather than to everybody. A plugin is how those get
-added: a folder you put in `plugins/`, read once at startup, that contributes **a screen
-in the top navigation**, **its own API namespace**, and **private per-account storage** —
+added: a folder you put in `plugins/`, read once at startup, that contributes **an entry
+in the feature library**, **its own API namespace**, and **private per-account storage** —
 and nothing else. It cannot reach the map editor, the desk, or another plugin's data.
+Installing one makes it available; each account still decides whether to put it in its own
+toolbar.
 
 Nothing ships enabled. With an empty `plugins/` folder — the default — the app is exactly
 what it is without the plugin system, and `/api/plugins` answers with an empty list.
@@ -463,7 +504,8 @@ node tools/install-plugin.js --list                   # what is installed
 node tools/install-plugin.js --remove manufacturing   # take one back off
 ```
 
-Then **restart the server** — plugins are read at startup. Installing is only ever "put
+Then **restart the server** — plugins are read at startup. An installed plugin appears in
+the **Features** library; each account adds it to its own toolbar from there. Installing is only ever "put
 the folder in `plugins/`"; the installer adds the checks worth doing first: that the
 package really is a plugin, that its manifest names files it actually ships, and that a
 downloaded archive writes nothing outside the folder it claims.
@@ -485,9 +527,10 @@ last one, so a run of parts gives a run of cycle times without stopping the watc
 measured elsewhere is typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>,
 <kbd>L</kbd> and <kbd>R</kbd> start/stop, mark a cycle and reset.
 
-Each tool carries **part**, **machine**, **op**, **station**, tool description, **insert**,
-**indexes per insert**, **inserts per op**, expected **tool life** (cutting minutes per
-edge) and optionally insert cost. From the measured average, the screen derives:
+Each tool carries **part**, **machine**, **op**, **seq** (where it falls in the running
+order), **station**, tool description, **insert**, **indexes per insert**, **inserts per
+op**, expected **tool life** (cutting minutes per edge) and optionally insert cost. From
+the measured average, the screen derives:
 
 ```
 parts per edge    = tool life minutes × 60 ÷ average cycle seconds
@@ -496,9 +539,26 @@ inserts / 100     = inserts per op × 100 ÷ parts per insert
 cost per part     = inserts per op × (insert cost ÷ indexes) ÷ parts per edge
 ```
 
-Tools group by part, machine and op, and each group totals the measured cycle across its
-timed tools — the op's real cycle time, built from the tools that make it up. **⤓ CSV**
-downloads every recorded cycle, one row each, for a spreadsheet.
+Tools group by part, machine and op and run in **sequence order** — a new tool takes the
+next number in its op, ↑ / ↓ move it, and the op renumbers itself so the sequence is
+always 1..n. The **Op cycle** panel sums the tools' averages into the op's real cycle
+time and draws a stacked bar dividing it between them in the order they cut, each segment
+sized by its share. The table beneath the bar is the legend and the numbers at once, and
+hovering or tabbing to either half lights up the other. Segment fills step along one cyan
+ramp light→dark with the running order — validated for monotone lightness, adjacent step
+separation, single hue, and a darkest step that still clears the dark chart surface — so
+the order reads in the color rather than in eight unrelated hues. Tools with nothing timed
+yet are listed as **not timed**, with a line saying how many, because the total is what
+has been measured rather than a finished op.
+
+**⤓ Export** downloads every recorded cycle, one row each, carrying its tool and place in
+the op, ordered the way the job runs. **⤒ Import** reads one back in the same shape, so a
+file that came out goes back in unchanged, and a tool list already kept in a spreadsheet
+comes in by putting those headers on it. Columns are read by name rather than position,
+common alternatives are understood, and the worked-out columns are ignored on the way in.
+An import never deletes anything: it shows what it would do first, matches tools already
+on the board by part/machine/op/station/description, and recognizes cycles by when they
+were recorded — so importing the same file twice adds nothing the second time.
 
 The watch keeps time from the clock rather than counting up, so a phone that sleeps
 mid-cycle, a backgrounded tab and a page reload all come back reading correctly. Full
@@ -525,7 +585,7 @@ A plugin is a folder with a `plugin.json`:
 | Field | What it does |
 |---|---|
 | `id` | Lowercase letters, numbers and dashes; must match the folder name. It is the URL prefix for both the plugin's assets and its API. |
-| `nav.label` | What the shell puts in the top navigation. The screen lives at `#/p/<id>`. |
+| `nav.label` | The name it carries in the feature library, and in the toolbar of any account that adds it. The screen lives at `#/p/<id>`. |
 | `client` / `styles` | Files inside the plugin's `public/`, served at `/plugins/<id>/…` and loaded by the shell on boot. |
 | `server` | Optional. A module mounted under `/api/plugins/<id>/…`. |
 | `hostVersion` | The plugin contract it was written against. A plugin needing a newer host than the server implements is refused at startup rather than half-working. |

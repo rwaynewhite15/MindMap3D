@@ -1508,11 +1508,16 @@ let chatUnread = 0;
 
 // Add-ons this server has installed, keyed by plugin id. Empty on an install
 // with no plugins, which is the default — see the plugin host section below.
-const pluginViews = new Map(); // id → { meta, section, link, def, ctx, mounted }
+const pluginViews = new Map(); // id → { meta, section, def, ctx, mounted }
 let activePluginId = null;     // the add-on screen currently on show, if any
 const pluginViewName = id => 'plugin:' + id;
 
-const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'privacy', 'terms', 'soul'];
+// The feature library this server offers, and which screen is on show. What
+// this account has chosen from the library lives on me.toolbar.
+let features = [];        // the catalog, from /api/features
+let currentView = '';     // the name show() was last called with
+
+const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'features', 'privacy', 'terms', 'soul'];
 
 function show(name) {
   if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
@@ -1529,13 +1534,9 @@ function show(name) {
   // hide the top bar (and its hamburger) only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
   $('#navToggle').hidden = name === 'auth';
-  // auth-only nav links are hidden for anonymous visitors; show a Sign in link instead
-  for (const a of document.querySelectorAll('#mainNav a[data-auth]')) a.hidden = !me;
   $('#notifWrap').hidden = !me; // the bell lives outside the nav; toggle it too
-  $('#navSignIn').hidden = !!me;
-  for (const a of document.querySelectorAll('#mainNav a')) {
-    a.classList.toggle('active', a.dataset.nav === name);
-  }
+  currentView = name;
+  markActiveNav(name);
   if (myMap) { name === 'map' ? myMap.start() : myMap.stop(); }
   if (profileMap) { name === 'profile' ? profileMap.start() : profileMap.stop(); }
   if (name !== 'profile') closeComments(); // the comment panel belongs to the profile viewer
@@ -1545,7 +1546,7 @@ function route() {
   closeSheets();
   hidePickMenu();
   closeNavMenu(); // any navigation closes the mobile hamburger menu
-  const h = location.hash.replace(/^#\/?/, '') || (me ? 'home' : 'browse');
+  const h = location.hash.replace(/^#\/?/, '') || defaultHash().replace(/^#\/?/, '');
 
   // legal pages are public — reachable signed in or not (soul = the joke draft)
   if (h === 'privacy' || h === 'terms' || h === 'soul') { show(h); window.scrollTo(0, 0); return; }
@@ -1575,9 +1576,216 @@ function route() {
   if (h === 'browse') { show('browse'); loadBrowse(); return; }
   if (h === 'friends') { show('friends'); loadFriends(); return; }
   if (h === 'settings') { show('settings'); fillSettings(); return; }
-  show('map');
+  if (h === 'features') { show('features'); renderLibrary(); return; }
+  if (h === 'map') { show('map'); return; }
+  // An address this account has nothing for — a stale bookmark, or #/signin
+  // while already signed in. Open whatever this account opens on.
+  const fallback = defaultHash();
+  if (fallback.replace(/^#\/?/, '') !== h) { location.hash = fallback; return; }
+  show('features');
+  renderLibrary();
 }
 window.addEventListener('hashchange', route);
+
+/* ================================================================
+   The toolbar, and the feature library it is built from
+
+   Every screen in this app is optional. An account holds an ordered list of
+   the ones it wants in the top navigation and starts with none of them: the
+   toolbar is built up from the library rather than trimmed down from
+   everything. Installed add-ons sit in the same list — once installed, a
+   plugin is just another feature to switch on.
+
+   Taking a feature out of the toolbar removes the shortcut and nothing else.
+   Its screen still opens from a link — a map someone shared, a bookmark, a
+   desk sent by code — because this is a set of shortcuts, not a set of
+   permissions, and no data changes either way.
+================================================================ */
+const featureById = id => features.find(f => f.id === id) || null;
+// Only the ids this server can still resolve: an entry for an add-on that is
+// not installed here stays in the account's list but is not drawn.
+const toolbarFeatures = () => (me && me.toolbar ? me.toolbar.map(featureById).filter(Boolean) : []);
+
+// Where this account lands with no address given: the first thing in its
+// toolbar, or the library itself when the toolbar is empty — which is the
+// default for a new account, and the one place from which it can be filled.
+function defaultHash() {
+  if (!me) return '#/browse';
+  const first = toolbarFeatures()[0];
+  return first ? first.hash : '#/features';
+}
+
+function markActiveNav(name) {
+  for (const a of document.querySelectorAll('#mainNav a')) {
+    a.classList.toggle('active', a.dataset.nav === name);
+  }
+}
+
+// The top navigation is drawn from the account's chosen features. Two entries
+// are always there and cannot be removed: the library, so the toolbar can
+// always be changed back, and Settings, so an account can always be managed
+// and signed out of.
+function renderToolbar() {
+  const nav = $('#mainNav');
+  nav.innerHTML = '';
+  const link = (hash, navName, label) => {
+    const a = document.createElement('a');
+    a.href = hash;
+    a.dataset.nav = navName;
+    a.textContent = label;
+    nav.appendChild(a);
+    return a;
+  };
+  if (!me) {
+    link('#/browse', 'browse', 'Browse');
+    link('#/signin', 'signin', 'Sign in');
+    markActiveNav(currentView);
+    return;
+  }
+  for (const f of toolbarFeatures()) {
+    const a = link(f.hash, f.id, f.label);
+    if (f.id === 'friends') {
+      const badge = document.createElement('span');
+      badge.id = 'friendBadge';
+      badge.className = 'badge';
+      badge.hidden = true;
+      a.appendChild(badge);
+    }
+  }
+  link('#/features', 'features', '＋ Features');
+  link('#/settings', 'settings', 'Settings');
+  markActiveNav(currentView);
+  updateBadge(friendPending); // the badge element is new; put its count back on it
+}
+
+async function loadFeatures() {
+  try { features = (await api('/api/features')).features || []; }
+  catch { features = []; }
+}
+
+async function saveToolbar(items) {
+  const before = me.toolbar;
+  me.toolbar = items;      // draw the change straight away; the request follows
+  renderToolbar();
+  renderLibrary();
+  try {
+    const data = await api('/api/me/toolbar', 'PUT', { items });
+    me.toolbar = data.toolbar;
+  } catch (err) {
+    me.toolbar = before;   // put it back rather than show a toolbar that isn't saved
+    renderToolbar();
+    renderLibrary();
+    alert('That change could not be saved. ' + err.message);
+  }
+}
+
+const inToolbar = id => !!(me && me.toolbar && me.toolbar.includes(id));
+const addFeature = id => saveToolbar([...me.toolbar, id]);
+const removeFeature = id => saveToolbar(me.toolbar.filter(x => x !== id));
+
+function moveFeature(id, delta) {
+  const items = [...me.toolbar];
+  const from = items.indexOf(id);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= items.length) return;
+  items.splice(to, 0, ...items.splice(from, 1));
+  saveToolbar(items);
+}
+
+function featureRow(f, pos, total) {
+  const row = document.createElement('div');
+  row.className = 'lib-row';
+  const text = document.createElement('div');
+  text.className = 'lib-text';
+  const name = document.createElement('div');
+  name.className = 'lib-name';
+  name.textContent = f.label;
+  if (f.addOn) {
+    const tag = document.createElement('span');
+    tag.className = 'lib-tag';
+    tag.textContent = 'add-on';
+    tag.title = f.addOn + ' — installed on this server';
+    name.appendChild(tag);
+  }
+  text.appendChild(name);
+  const blurb = document.createElement('div');
+  blurb.className = 'lib-blurb';
+  blurb.textContent = f.blurb || '';
+  text.appendChild(blurb);
+  row.appendChild(text);
+
+  const btns = document.createElement('div');
+  btns.className = 'lib-btns';
+  const button = (cls, label, title, onClick, disabled) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    if (title) b.title = title;
+    b.disabled = !!disabled;
+    b.addEventListener('click', onClick);
+    btns.appendChild(b);
+  };
+  if (pos != null) {
+    button('lib-move', '↑', 'Move it earlier in the toolbar', () => moveFeature(f.id, -1), pos === 0);
+    button('lib-move', '↓', 'Move it later in the toolbar', () => moveFeature(f.id, 1), pos === total - 1);
+    button('tb', 'Remove', 'Take it out of the toolbar — nothing on it is deleted',
+      () => removeFeature(f.id));
+  } else {
+    button('tb primary-tb', '＋ Add', 'Put it in the toolbar', () => addFeature(f.id));
+  }
+  row.appendChild(btns);
+  return row;
+}
+
+function renderLibrary() {
+  const box = $('#libContent');
+  if (!box || !me) return;
+  box.innerHTML = '';
+  if (!features.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'The feature list could not be loaded. Reload the page to try again.';
+    box.appendChild(empty);
+    return;
+  }
+
+  const heading = (title, note) => {
+    const h = document.createElement('div');
+    h.className = 'section-title';
+    h.textContent = title;
+    box.appendChild(h);
+    if (note) {
+      const n = document.createElement('div');
+      n.className = 'muted lib-note';
+      n.textContent = note;
+      box.appendChild(n);
+    }
+  };
+
+  const chosen = toolbarFeatures();
+  heading('In your toolbar', chosen.length
+    ? 'They appear in this order, before ＋ Features and Settings.'
+    : null);
+  if (!chosen.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lib-empty';
+    empty.textContent = 'Nothing yet — your toolbar is empty. Add whatever you actually use from the list below; you can change it whenever you like.';
+    box.appendChild(empty);
+  }
+  chosen.forEach((f, i) => box.appendChild(featureRow(f, i, chosen.length)));
+
+  const rest = features.filter(f => !inToolbar(f.id));
+  if (rest.length) {
+    heading(chosen.length ? 'Available' : 'Everything available');
+    for (const f of rest) box.appendChild(featureRow(f, null));
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'muted lib-foot';
+  foot.textContent = 'Removing a feature only takes it out of your toolbar. Nothing it holds is deleted, links to it keep working, and adding it back brings everything with it.';
+  box.appendChild(foot);
+}
 
 /* ================================================================
    Plugin host — screens contributed by separately installed add-ons
@@ -1639,18 +1847,9 @@ function installPluginClient(meta) {
   section.hidden = true;
   main.appendChild(section);
 
-  // Nav link, next to the other personal screens rather than after Settings.
-  const link = document.createElement('a');
-  link.href = '#/p/' + meta.id;
-  link.dataset.nav = pluginViewName(meta.id);
-  link.dataset.auth = '';        // add-on screens are for signed-in accounts
-  link.hidden = !me;
-  link.textContent = meta.navLabel || meta.name || meta.id;
-  link.title = meta.description || '';
-  const nav = $('#mainNav');
-  nav.insertBefore(link, nav.querySelector('a[data-nav="browse"]'));
-
-  pluginViews.set(meta.id, { meta, section, link, def: null, ctx: pluginCtx(meta.id), mounted: false });
+  // No nav link is made here: an add-on appears in the feature library like
+  // everything else, and reaches the toolbar only if the account puts it there.
+  pluginViews.set(meta.id, { meta, section, def: null, ctx: pluginCtx(meta.id), mounted: false });
 
   if (meta.styles) {
     const css = document.createElement('link');
@@ -1669,13 +1868,13 @@ function installPluginClient(meta) {
 }
 
 // Take an add-on back off the shell when it fails to load or to register, so a
-// broken add-on leaves a nav link that goes nowhere rather than a dead screen.
+// broken add-on cannot be opened from the library into a dead screen.
 function removePluginClient(id) {
   const entry = pluginViews.get(id);
   if (!entry) return;
-  entry.link.remove();
   entry.section.remove();
   pluginViews.delete(id);
+  features = features.filter(f => f.id !== pluginViewName(id));
 }
 
 async function loadInstalledPlugins() {
@@ -3916,10 +4115,17 @@ async function loadFriends() {
   }
 }
 
+// The count of incoming friend requests. Kept in a variable as well as on the
+// element, because the toolbar is rebuilt whenever it changes and the badge
+// element goes with it — and there is no badge at all unless this account keeps
+// Friends in its toolbar.
+let friendPending = 0;
 function updateBadge(n) {
+  friendPending = n || 0;
   const b = $('#friendBadge');
-  b.hidden = !n;
-  b.textContent = n;
+  if (!b) return;
+  b.hidden = !friendPending;
+  b.textContent = friendPending;
 }
 
 /* ================================================================
@@ -5855,6 +6061,7 @@ $('#btnLogout').addEventListener('click', async () => {
   currentMapId = null;
   currentMapInfo = null;
   desk = null; // the next account to sign in here gets its own board
+  renderToolbar(); // back to the signed-out navigation, not the last account's
   location.hash = '';
   show('auth');
 });
@@ -5896,6 +6103,7 @@ $('#deleteAcctConfirm').addEventListener('click', async () => {
     clearTimeout(deskSaveTimer); deskDirty = false; desk = null;
     me = null; mapsMine = []; mapsShared = [];
     currentMapId = null; currentMapInfo = null;
+    renderToolbar(); // the deleted account's toolbar goes with it
     location.hash = '';
     show('auth');
   } catch (err) {
@@ -5926,7 +6134,13 @@ async function afterSignIn() {
   await loadMaps();
   refreshBadge();
   startNotifications();
-  location.hash = '#/home';
+  // The library is only fetched for a signed-in account, so a visitor who has
+  // just signed in or registered needs it now — the toolbar is drawn from it.
+  await loadFeatures();
+  renderToolbar(); // this account's chosen features, not the last one's
+  // A new account has an empty toolbar, so this opens the library; an account
+  // that has chosen opens on the first thing it chose.
+  location.hash = defaultHash();
   route();
 }
 
@@ -5983,5 +6197,7 @@ $('#formRegister').addEventListener('submit', async e => {
     startNotifications();
   } catch { me = null; }
   await loadInstalledPlugins(); // add-ons, if this server has any installed
+  if (me) await loadFeatures(); // the library, which the add-ons above join
+  renderToolbar();
   route();
 })();

@@ -12,7 +12,7 @@
 
 <header id="topbar" hidden>
   <div id="logo">MindMap<span>Share</span> <em>Social Mind Maps</em></div>
-  <div id="notifWrap" data-auth hidden>
+  <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
       🔔<span id="notifBadge" class="badge" hidden></span>
     </button>
@@ -31,15 +31,9 @@
   <button id="navToggle" class="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mainNav" hidden>
     <span></span><span></span><span></span>
   </button>
-  <nav id="mainNav">
-    <a href="#/home" data-nav="home" data-auth>Home</a>
-    <a href="#/map" data-nav="map" data-auth>My Maps</a>
-    <a href="#/desk" data-nav="desk" data-auth>Desk</a>
-    <a href="#/browse" data-nav="browse">Browse</a>
-    <a href="#/friends" data-nav="friends" data-auth>Friends<span id="friendBadge" class="badge" hidden></span></a>
-    <a href="#/settings" data-nav="settings" data-auth>Settings</a>
-    <a href="#/signin" data-nav="signin" id="navSignIn" hidden>Sign in</a>
-  </nav>
+  <!-- Built by renderToolbar() from the account's chosen features: every screen
+       here is one the account put in, and it starts out empty. -->
+  <nav id="mainNav"></nav>
 </header>
 
 <main>
@@ -250,6 +244,17 @@
   </aside>
 
   <!-- ============ SETTINGS ============ -->
+  <!-- ============ FEATURE LIBRARY ============ -->
+  <section id="view-features" hidden>
+    <div class="page">
+      <div class="lib-head">
+        <h1>Features</h1>
+        <div class="muted">Everything MindMapShare can do. Add what you want to your toolbar; leave the rest out of your way.</div>
+      </div>
+      <div id="libContent"></div>
+    </div>
+  </section>
+
   <section id="view-settings" hidden>
     <div class="page narrow">
       <h1>Settings</h1>
