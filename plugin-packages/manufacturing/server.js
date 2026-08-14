@@ -56,7 +56,7 @@ const MAX_SEQ = 999;              // position in the op's running order
 const MAX_COST = 100000;          // currency units for one tool
 
 module.exports = function (ctx) {
-  const { sendJSON, readBody, newId, data } = ctx;
+  const { newId } = ctx;   // documents are the host's; nothing here answers a request
 
   const text = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
   const list = v => (Array.isArray(v) ? v : []);
@@ -463,73 +463,16 @@ module.exports = function (ctx) {
   return {
     /* A shopwatch is a document the host owns the envelope of: who it belongs
        to, who may see it, who may edit it, what is said about it. All this
-       side has to do is say what an empty one is and what a body may contain —
-       the same rebuilding that has always guarded the private record, now
-       guarding one that other accounts can be handed. */
+       side has to do is say what an empty one is and what a body may contain.
+
+       That is the whole of this add-on's server: it mounts no routes of its
+       own. Every floor lives in a document, so the private per-account store
+       this add-on once used is neither read nor written here any more. */
     docs: {
       empty: emptyShop,
       sanitize: sanitizeShop,
       summary,
       limits,
-    },
-
-    async handle(req, res, sub, user) {
-      const route = req.method + ' ' + sub;
-
-      // What this account's private record holds, if it still has one. The
-      // screen offers it as the first shopwatch to bring across; once it has
-      // been brought across it is left alone rather than deleted, so a rolled
-      // back install still finds it.
-      if (route === 'GET /legacy') {
-        const raw = data.get(user);
-        const shop = raw ? sanitizeShop(raw) : null;
-        const has = !!shop && !!(shop.machines.length || shop.tools.length || shop.parts.length);
-        sendJSON(res, 200, { has, shop: has ? shop : null, limits });
-        return true;
-      }
-
-      if (route === 'GET /') {
-        sendJSON(res, 200, { shop: sanitizeShop(data.get(user) || emptyShop()), limits });
-        return true;
-      }
-
-      // A body without a shop object is rejected rather than read as an empty
-      // one, so a malformed request can never wipe an account's tool history.
-      if (route === 'PUT /') {
-        const body = await readBody(req);
-        if (!body || typeof body.shop !== 'object' || body.shop === null) {
-          sendJSON(res, 400, { error: 'Invalid shop record.' });
-          return true;
-        }
-        const shop = sanitizeShop(body.shop);
-        shop.updatedAt = Date.now();
-        try {
-          await data.save(user, shop);
-        } catch (err) {
-          // The host caps what one add-on keeps per account. Say so plainly:
-          // the client retries a failed save forever, and this one will never
-          // succeed until something is taken out of the record.
-          if (err && err.code === 'PLUGIN_DATA_TOO_LARGE') {
-            sendJSON(res, 413, {
-              error: 'This shop record is larger than one account may keep. Export it, then delete some recorded cycles.',
-            });
-            return true;
-          }
-          throw err;
-        }
-        sendJSON(res, 200, {
-          ok: true,
-          updatedAt: shop.updatedAt,
-          machines: shop.machines.length,
-          tools: shop.tools.length,
-          parts: shop.parts.length,
-          operations: shop.operations.length,
-          assignments: shop.assignments.length,
-        });
-        return true;
-      }
-
-      return false; // not ours: the host answers 404
     },
   };
 };

@@ -56,7 +56,6 @@
   let here = [];            // who else has it open
   let chat = [];            // what has been said about it
   let chatOpen = false;
-  let legacy = null;        // the private record from before shopwatches were shared
   let tick = null;          // display interval while the watch runs
   const els = {};           // the panels render() refills
 
@@ -373,11 +372,6 @@
       docs = { mine: [], shared: [] };
     }
     docsIn = true;
-    // an account that has used this add-on before shopwatches could be shared
-    // has a private record sitting there; offer to bring it across
-    if (!docs.mine.length && !legacy) {
-      try { legacy = await ctx.api('/legacy'); } catch { legacy = { has: false }; }
-    }
     const all = docs.mine.concat(docs.shared);
     // A shopwatch named in the address is opened whether or not it is in the
     // list: the list is what this account owns or was invited into, and a
@@ -628,33 +622,12 @@
     ['public', 'Everyone', 'Anyone can open it, and it can be discovered'],
   ];
 
-  // What is in the record this account kept before shopwatches, in counts, so
-  // the offer to bring it in says what is actually in there.
-  function legacyBlurb() {
-    const s = legacy && legacy.shop;
-    if (!s) return 'a floor';
-    const timed = s.assignments.reduce((n, a) => n + a.runs.length, 0);
-    const bits = [];
-    const say = (n, one, many) => { if (n) bits.push(n + ' ' + (n === 1 ? one : many)); };
-    say(s.parts.length, 'part', 'parts');
-    say(s.machines.length, 'machine', 'machines');
-    say(s.tools.length, 'tool', 'tools');
-    say(timed, 'cycle timed', 'cycles timed');
-    return bits.join(', ') || 'nothing in it';
-  }
-
   function renderDocBar() {
     const box = els.docbar;
     box.innerHTML = '';
-    // With nothing open there is no bar to draw. An account upgrading from the
-    // old private record is in exactly that state, and the offer to bring the
-    // record in is made by the empty screen itself, where it is the only thing
-    // being read — so it is not repeated here.
+    // With nothing open there is no bar to draw.
     if (!shop && !doc) { box.hidden = true; return; }
     box.hidden = false;
-    // Somebody else's shopwatch open, and a record of your own never brought
-    // across: the empty screen never appears, so the offer belongs here.
-    const offerLegacy = !!(legacy && legacy.has && !docs.mine.length);
 
     const row = el('div', 'mf-docbar-row');
     const all = docs.mine.concat(docs.shared);
@@ -707,14 +680,6 @@
     row.appendChild(btns);
     box.appendChild(row);
 
-    if (offerLegacy) {
-      const note = el('div', 'mf-note');
-      note.appendChild(document.createTextNode(
-        'The shop record this account kept before shopwatches could be shared is still here — ' +
-        legacyBlurb() + '. '));
-      note.appendChild(button('mf-link', 'Bring it in as a shopwatch', adoptLegacy));
-      box.appendChild(note);
-    }
   }
 
   // Made and opened without asking anything: the caller already has the name.
@@ -747,17 +712,6 @@
       }
       fn(...args);
     };
-  }
-
-  // The private record from before this add-on could share anything, brought
-  // across whole rather than retyped. It is copied, not moved: the old record
-  // stays where it is.
-  async function adoptLegacy() {
-    if (!legacy || !legacy.shop) return;
-    const made = await newDoc(legacy.shop, 'Shop floor');
-    // Only once it is safely in. Cancelling the name must not take the offer
-    // away — it is the only thing on screen pointing at that record.
-    if (made) legacy = null;
   }
 
   async function copyDoc() {
@@ -972,24 +926,6 @@
     box.innerHTML = '';
     if (!shop && !doc) {
       const empty = el('div', 'mf-empty');
-      // An account that used this add-on before shopwatches existed has a shop
-      // record and no shopwatch, so this screen is the first thing it sees.
-      // Telling it to start one, with no word of the floor already saved, would
-      // read as having lost the lot — so the record leads, and starting an
-      // empty one is the other option rather than the only one.
-      if (legacy && legacy.has) {
-        empty.appendChild(el('div', 'mf-empty-title', 'Your shop record is still here'));
-        empty.appendChild(el('div', 'mf-empty-text',
-          'This account kept a floor before shopwatches could be shared — ' + legacyBlurb() +
-          '. Bring it in and it becomes your first shopwatch, yours and private, exactly as it ' +
-          'was. It is copied rather than moved: the old record stays where it is either way.'));
-        const row = el('div', 'mf-form-btns');
-        row.appendChild(button('mf-btn mf-btn-go', 'Bring in my shop record', adoptLegacy));
-        row.appendChild(button('mf-btn', '+ Start an empty one instead', () => newDoc()));
-        empty.appendChild(row);
-        box.appendChild(empty);
-        return;
-      }
       empty.appendChild(el('div', 'mf-empty-title', 'Start a shopwatch'));
       empty.appendChild(el('div', 'mf-empty-text',
         'A shopwatch holds one floor: its parts and their operations, its machines, its tool crib, ' +

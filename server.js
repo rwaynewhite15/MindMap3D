@@ -2638,7 +2638,10 @@ async function handleApi(req, res, pathname) {
   const pluginApi = pathname.match(/^\/api\/plugins\/([a-z0-9-]{2,32})(\/.*)?$/);
   if (pluginApi) {
     const p = plugins.get(pluginApi[1]);
-    if (!p || !p.handle) return sendJSON(res, 404, { error: 'No such plugin.' });
+    if (!p) return sendJSON(res, 404, { error: 'No such plugin.' });
+    // An add-on that keeps documents and nothing else mounts no routes of its
+    // own — the document routes above are the whole of its API.
+    if (!p.handle) return sendJSON(res, 404, { error: 'Not found.' });
     let handled;
     try {
       handled = await p.handle(req, res, pluginApi[2] || '/', user);

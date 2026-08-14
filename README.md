@@ -694,6 +694,10 @@ A plugin is a folder with a `plugin.json`:
 | `server` | Optional. A module mounted under `/api/plugins/<id>/…`. |
 | `hostVersion` | The plugin contract it was written against. A plugin needing a newer host than the server implements is refused at startup rather than half-working. |
 
+An add-on that keeps only documents needs no routes at all: return `docs` without a `handle`
+and the host serves everything — Shopwatch does exactly that, and
+`/api/plugins/manufacturing/…` answers 404 for anything outside the document routes.
+
 The client script registers a screen as it loads:
 
 ```js

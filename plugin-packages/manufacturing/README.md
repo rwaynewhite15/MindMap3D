@@ -310,13 +310,6 @@ spreadsheet instead: **⤓ Export** the first, open the second, **⤒ Import** t
 file. That merges rather than replaces — the preview says what is new before
 anything happens, and matching records are filled in rather than duplicated.
 
-### Coming from a private record
-
-An account that used Shopwatch before any of this could be shared has one private
-record sitting there. The screen offers to **bring it across** into a shopwatch
-of its own — copied, not moved: the old record is left where it is, so a rolled
-back install still finds it.
-
 ## Spreadsheets, in and out
 
 **⤓ Export** downloads every recorded cycle, one row each, carrying the part, the
@@ -571,6 +564,7 @@ deleted with the account — including for the people they were shared with.
 ```
 plugin.json          the manifest the app reads at startup
 server.js            what an empty floor is, and what a stored one may contain
+                     (no routes — the host serves every document itself)
 public/client.js     the Shopwatch screen
 public/client.css    its styles, scoped under .mf-root
 ```
@@ -581,8 +575,13 @@ and the host owns the envelope around it: who a shopwatch belongs to, who may
 open it, who may change it, its live channel, its chat and its feed card. So this
 add-on has no permission code of its own to get wrong, and the routes under
 `/api/plugins/manufacturing/docs/...` are the host's, the same ones any add-on
-gets. What is left here is `GET /legacy`, which offers up the private record from
-before shopwatches could be shared.
+gets.
+
+**It mounts no routes of its own at all.** `server.js` returns `docs` and nothing
+else — no `handle` — so `/api/plugins/manufacturing/…` answers 404 for anything
+that is not a document route. Every floor lives in a shopwatch, and the private
+per-account store this add-on used before shopwatches existed is neither read
+nor written.
 
 `sanitize` rebuilds every field of what a client sends before it is stored, drops
 any operation whose part is gone and any setup whose tool or machine is gone, and
