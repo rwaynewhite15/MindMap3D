@@ -23,6 +23,10 @@
      acts on a word that would not fit anyway. */
   overflow-wrap: anywhere;
   --mf-run: #F0B84A;
+  /* In cut gets its own hue rather than borrowing the running amber: the watch
+     running and the tool cutting are different states, and Stop is already
+     amber. Warm, and loud enough to read across a machine. */
+  --mf-cut: #E8734A;
   --mf-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -132,6 +136,32 @@
 .mf-watch-btns { display: flex; gap: 8px; margin-top: 14px; }
 .mf-watch-btns .mf-btn { flex: 1; padding: 14px 8px; font-size: 15px; }
 .mf-watch-btns .mf-btn-quiet { flex: 0 0 auto; padding-left: 16px; padding-right: 16px; }
+
+/* In the cut: its own state, distinct from the amber "running" accent, because
+   a tool can be cutting or not inside a cycle that is running either way. */
+.mf-cut-row { margin-top: 12px; }
+.mf-cut-row .mf-btn { width: 100%; padding: 12px 10px; font-size: 14.5px; }
+.mf-btn-cut { background: transparent; border-color: var(--line); color: var(--dim); }
+.mf-btn-cut:hover { border-color: var(--accent); }
+.mf-btn-cutting {
+  background: var(--mf-cut);
+  border-color: var(--mf-cut);
+  color: #2A1206;
+}
+.mf-cutline {
+  font-family: var(--mf-mono);
+  font-size: 12.5px;
+  color: var(--dim);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.mf-cutline.mf-cutting { color: var(--mf-cut); font-weight: 700; }
+.mf-run-cut {
+  font-family: var(--mf-mono);
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 
 .mf-pick {
   width: 100%;

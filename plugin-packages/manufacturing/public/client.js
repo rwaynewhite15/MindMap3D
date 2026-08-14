@@ -62,7 +62,12 @@
   // The stopwatch. Elapsed time is derived from wall-clock stamps rather than
   // counted up by the interval, so a phone that sleeps mid-cycle, a throttled
   // background tab, and a page reload all come back with the right time.
-  let watch = { running: false, since: 0, accum: 0, lastLap: 0, laps: 0 };
+  // inCut / cutAccum / cutSince measure how much of the cycle the tool spends
+  // actually cutting: the accumulated in-cut time this cycle, plus the stretch
+  // running now. Marked by hand at the machine, because only the person
+  // watching the spindle knows when the tool is in the material.
+  let watch = { running: false, since: 0, accum: 0, lastLap: 0, laps: 0,
+                inCut: false, cutAccum: 0, cutSince: 0 };
 
   const watchKey = () => {
     const who = ctx && ctx.me() ? ctx.me().username : '';
@@ -82,7 +87,11 @@
           accum: Math.max(0, Number(raw.accum) || 0),
           lastLap: Math.max(0, Number(raw.lastLap) || 0),
           laps: Math.max(0, Number(raw.laps) || 0),
+          inCut: !!raw.inCut,
+          cutAccum: Math.max(0, Number(raw.cutAccum) || 0),
+          cutSince: Number(raw.cutSince) || 0,
         };
+        if (watch.inCut && watch.cutSince > Date.now()) watch.cutSince = Date.now();
         // a stamp from the future (clock change) would read as negative elapsed
         if (watch.running && watch.since > Date.now()) watch.since = Date.now();
       }
@@ -90,6 +99,10 @@
   }
 
   const elapsed = () => watch.accum + (watch.running ? Date.now() - watch.since : 0);
+  // Time in cut so far this cycle. Only accrues while the watch runs: a paused
+  // watch is a paused cycle, and nothing is cutting through the pause.
+  const cutElapsed = () =>
+    watch.cutAccum + (watch.inCut && watch.running ? Date.now() - watch.cutSince : 0);
 
   /* ---------------- what is folded away ----------------
      Which lists are collapsed is a view preference, not a shop record: it is
@@ -310,10 +323,14 @@
     const runs = (a && a.runs) || [];
     if (!runs.length) return null;
     let sum = 0, best = Infinity, worst = 0;
+    let cutSum = 0, cutCount = 0;
     for (const r of runs) {
       sum += r.sec;
       if (r.sec < best) best = r.sec;
       if (r.sec > worst) worst = r.sec;
+      // Only cycles somebody actually marked in and out of cut count towards
+      // the average: an unmarked cycle is no information, not zero seconds.
+      if (r.cut > 0) { cutSum += r.cut; cutCount += 1; }
     }
     return {
       count: runs.length,
@@ -322,6 +339,8 @@
       worst,
       spread: worst - best,
       last: runs[0].sec, // runs are kept newest first
+      cutCount,
+      avgCut: cutCount ? cutSum / cutCount : 0,
     };
   }
 
@@ -333,20 +352,25 @@
   // there is a tool life to work from; `cut` is the cutting time if it is
   // filled in and the measured average otherwise, so the minutes are honest
   // about which.
-  function lifeFor(a, avgSec) {
+  function lifeFor(a, avgSec, avgCut) {
     const parts = a.partsPerIndex || 0;
     if (!parts) return null;
     const tool = jobTool(a);
     const edges = a.indexEdges || (tool ? tool.cuttingEdges : 0) || 0;
     const partsPerTool = edges ? parts * edges : 0;
-    const cut = a.cutSec || avgSec || 0;
+    // Best available answer to "how long is this tool in cut on one part":
+    // what somebody set, then what was marked in and out at the machine, then
+    // the whole measured cycle — which is an overestimate, and says so.
+    const cut = a.cutSec || avgCut || avgSec || 0;
+    const from = a.cutSec ? 'set' : (avgCut ? 'incut' : (avgSec ? 'cycle' : ''));
     return {
       parts,
       edges,
       edgesFromTool: !a.indexEdges && !!edges,
       partsPerTool,
       edgeMin: cut ? (parts * cut) / 60 : 0,   // cutting minutes one edge lasts
-      measured: !a.cutSec && !!cut,            // the minutes came off the stopwatch
+      from,
+      measured: from === 'cycle',              // the minutes came off the whole cycle
       per100: partsPerTool ? 100 / partsPerTool : 0,
       costPart: partsPerTool && tool && tool.cost ? tool.cost / partsPerTool : 0,
     };
@@ -574,11 +598,15 @@
   function startStop() {
     if (!activeJob()) { flash('Pick a tool at a machine first — a cycle time belongs to one.'); return; }
     if (watch.running) {
+      // bank whatever was cutting when the watch stopped, so the pause is not
+      // counted as cutting time
+      if (watch.inCut) { watch.cutAccum = cutElapsed(); watch.cutSince = 0; }
       watch.accum = elapsed();
       watch.running = false;
     } else {
       watch.since = Date.now();
       watch.running = true;
+      if (watch.inCut) watch.cutSince = Date.now();   // still in cut: carry on counting
     }
     saveWatch();
     renderWatch();
@@ -586,6 +614,36 @@
   }
 
   // One part done: record the split since the last cycle and keep running.
+  /* ---------------- in the cut, out of the cut ----------------
+     The cycle a stopwatch measures is everything: rapids, the tool change,
+     the bar feed, and the part of it that is actually cutting metal. Only the
+     last one is the cutting time the tool life is worked out from, and nobody
+     can read it off a cycle time afterwards — so it is marked as it happens,
+     by whoever is watching the spindle.
+
+     Marked in and out as many times as the tool enters and leaves within one
+     cycle; the stretches add up. What accumulates goes onto the cycle when it
+     is recorded, and the count starts again for the next one.
+  ---------------------------------------------------------------- */
+  function toggleCut() {
+    if (!canEdit()) return;
+    if (!activeJob()) { flash('Pick a tool at a machine first — time in cut belongs to one.'); return; }
+    if (!watch.running) {
+      flash('Start the watch first — time in cut is measured inside a cycle.');
+      return;
+    }
+    if (watch.inCut) {
+      watch.cutAccum = cutElapsed();
+      watch.cutSince = 0;
+      watch.inCut = false;
+    } else {
+      watch.cutSince = Date.now();
+      watch.inCut = true;
+    }
+    saveWatch();
+    renderWatch();
+  }
+
   // Records the split since the last press. Says whether it recorded, because
   // the caller below only moves on when something was actually timed.
   function lap() {
@@ -595,10 +653,15 @@
     const now = elapsed();
     const cycle = (now - watch.lastLap) / 1000;
     if (cycle < 0.2) return false; // a double-tap is not a cycle
+    const cut = cutElapsed() / 1000;
     watch.lastLap = now;
     watch.laps += 1;
+    // This cycle's cut is spent; the next one starts from nothing. A tool still
+    // in the cut as the cycle turns over keeps counting into the new one.
+    watch.cutAccum = 0;
+    if (watch.inCut) watch.cutSince = Date.now();
     saveWatch();
-    addRun(a, round(cycle, 2));
+    addRun(a, round(cycle, 2), 0, round(Math.min(cut, cycle), 2));
     renderWatch();
     return true;
   }
@@ -628,15 +691,18 @@
   }
 
   function reset() {
-    watch = { running: false, since: 0, accum: 0, lastLap: 0, laps: 0 };
+    watch = { running: false, since: 0, accum: 0, lastLap: 0, laps: 0,
+      inCut: false, cutAccum: 0, cutSince: 0 };
     saveWatch();
     stopTick();
     renderWatch();
   }
 
-  function addRun(a, sec, at) {
+  function addRun(a, sec, at, cut) {
     if (!sec) return;
-    a.runs.unshift({ id: newId('r'), sec, at: at || Date.now(), note: '' });
+    // Time in cut is part of the cycle, so it can never be more than one.
+    const inCut = cut && cut > 0 ? Math.min(cut, sec) : 0;
+    a.runs.unshift({ id: newId('r'), sec, cut: inCut, at: at || Date.now(), note: '' });
     if (a.runs.length > limits.maxRuns) a.runs.length = limits.maxRuns;
     touch(a);
     // what the others in this shopwatch see happen, in their chat
@@ -654,7 +720,13 @@
     if (!watch.running) return;
     // A tenth on the display; the interval only reads the clock, so a slow or
     // throttled tick shows a stale number rather than a wrong one.
-    tick = setInterval(() => { if (els.time) els.time.textContent = fmtClock(elapsed()); }, 100);
+    tick = setInterval(() => {
+      if (els.time) els.time.textContent = fmtClock(elapsed());
+      if (els.cutline) {
+        els.cutline.textContent =
+          (watch.inCut ? 'In cut · ' : 'Out of cut · ') + fmtClock(cutElapsed()) + ' this cycle';
+      }
+    }, 100);
   }
   function stopTick() {
     clearInterval(tick);
@@ -1055,10 +1127,32 @@
       : (last ? 'Last recorded cycle ' + fmtSec(last.sec) : 'No cycles recorded yet');
     box.appendChild(line);
 
+    // What has been marked as cutting so far in the cycle running now. Its own
+    // line, updating with the clock, so the person at the machine can see the
+    // toggle is doing something without waiting for the cycle to end.
+    if (watch.inCut || watch.cutAccum) {
+      els.cutline = el('div', 'mf-cutline' + (watch.inCut ? ' mf-cutting' : ''),
+        (watch.inCut ? 'In cut · ' : 'Out of cut · ') + fmtClock(cutElapsed()) + ' this cycle');
+      box.appendChild(els.cutline);
+    } else {
+      els.cutline = null;
+    }
+
     // The watch records against this setup, so it is only drawn for somebody
     // who may record. A reader gets the numbers without controls that would
     // look live and do nothing.
     if (canEdit()) {
+      // Its own row, full width, above the rest: inside one cycle this is the
+      // press that happens most, it is a state rather than an action, and at
+      // the machine it has to be hit without looking.
+      const cutRow = el('div', 'mf-cut-row');
+      cutRow.appendChild(button('mf-btn mf-btn-cut' + (watch.inCut ? ' mf-btn-cutting' : ''),
+        watch.inCut ? '◼ In cut — press when it comes out' : '◻ Mark in cut', toggleCut,
+        watch.inCut
+          ? 'The tool is in the material — press as it comes out (C)'
+          : 'Press as the tool enters the material; the stretches add up over the cycle (C)'));
+      box.appendChild(cutRow);
+
       const btns = el('div', 'mf-watch-btns');
       btns.appendChild(button('mf-btn mf-btn-go' + (watch.running ? ' mf-btn-stop' : ''),
         watch.running ? 'Stop' : (watch.accum ? 'Resume' : 'Start'), startStop,
@@ -1113,11 +1207,31 @@
       timing.appendChild(tile('average', fmtSec(s.avg)));
       timing.appendChild(tile('best', fmtSec(s.best)));
       timing.appendChild(tile('spread', fmtSec(s.spread), 'Slowest cycle minus fastest — how repeatable the op is'));
+      if (s.avgCut) {
+        timing.appendChild(tile('time in cut', fmtSec(s.avgCut),
+          'Measured at the machine, averaged over the ' + s.cutCount +
+          (s.cutCount === 1 ? ' cycle' : ' cycles') + ' marked in and out of cut'));
+      }
       if (a.cutSec) {
         timing.appendChild(tile('cutting time', fmtSec(a.cutSec),
           'What this tool is set to spend in cut on this machine, on ' + jobLabel(a)));
       }
       box.appendChild(timing);
+      // What was actually marked, against what the setup says it should be.
+      if (s.avgCut && s.avg) {
+        const share = Math.round((s.avgCut / s.avg) * 100);
+        let line = 'Measured in cut for ' + fmtSec(s.avgCut) + ' of the ' + fmtSec(s.avg) +
+          ' cycle — ' + share + '% of it is cut, over ' + s.cutCount +
+          (s.cutCount === 1 ? ' marked cycle' : ' marked cycles') + '.';
+        if (a.cutSec) {
+          const off = Math.round(((s.avgCut - a.cutSec) / a.cutSec) * 100);
+          line += Math.abs(off) < 5
+            ? ' That matches the cutting time on the setup.'
+            : ' The setup says ' + fmtSec(a.cutSec) + ' — ' +
+              Math.abs(off) + '% ' + (off > 0 ? 'more' : 'less') + ' in cut than it expects.';
+        }
+        box.appendChild(el('div', 'mf-note', line));
+      }
       if (a.cutSec && s.avg) {
         const share = Math.round((a.cutSec / s.avg) * 100);
         box.appendChild(el('div', 'mf-note',
@@ -1133,7 +1247,7 @@
         'Time a few cycles and the averages, and how much of the cycle is cut, fall out of them.'));
     }
 
-    const life = lifeFor(a, s ? s.avg : 0);
+    const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
     if (!life) {
       const note = el('div', 'mf-note');
       note.appendChild(document.createTextNode(
@@ -1153,8 +1267,11 @@
     }
     if (life.edgeMin) {
       derived.appendChild(tile('min / edge', String(round(life.edgeMin, 1)),
-        'Cutting minutes one edge lasts, at ' + fmtSec(a.cutSec || (s ? s.avg : 0)) +
-        (life.measured ? ' measured cycle' : ' of cut')));
+        'Cutting minutes one edge lasts, at ' +
+        fmtSec(a.cutSec || (s ? s.avgCut : 0) || (s ? s.avg : 0)) +
+        (life.from === 'set' ? ' of cut, from the setup'
+          : life.from === 'incut' ? ' measured in cut'
+            : ' measured cycle — mark the tool in and out of cut for a truer figure')));
     }
     if (life.per100) {
       derived.appendChild(tile('tools / 100 parts', String(round(life.per100, 2)),
@@ -1339,6 +1456,11 @@
       const row = el('div', 'mf-run');
       row.appendChild(el('div', 'mf-run-n', '#' + (a.runs.length - i)));
       row.appendChild(el('div', 'mf-run-t', fmtSec(r.sec)));
+      if (r.cut > 0) {
+        const cutCell = el('div', 'mf-run-cut', fmtSec(r.cut) + ' cut');
+        cutCell.title = Math.round((r.cut / r.sec) * 100) + '% of this cycle was in cut';
+        row.appendChild(cutCell);
+      }
       row.appendChild(el('div', 'mf-run-at', fmtAgo(r.at)));
       if (canEdit()) row.appendChild(button('mf-x', '✕', () => {
         a.runs = a.runs.filter(x => x.id !== r.id);
@@ -2476,7 +2598,7 @@
     if (meta.length) card.appendChild(el('div', 'mf-card-meta', meta.join(' · ')));
 
     const foot = el('div', 'mf-card-foot');
-    const life = lifeFor(a, s ? s.avg : 0);
+    const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
     foot.appendChild(el('span', null,
       (s ? s.count + (s.count === 1 ? ' cycle' : ' cycles') : 'not timed yet') +
       (life ? ' · index every ' + life.parts + ' parts' : '')));
@@ -2596,7 +2718,7 @@
     'seq', 'station',
     'tool_part_number', 'tool_description', 'cutting_edges', 'tool_cost', 'tool_notes',
     'cutting_time_sec', 'indexable_edges', 'parts_per_index',
-    'notes', 'cycle_seconds', 'recorded_at',
+    'notes', 'cycle_seconds', 'cycle_cut_seconds', 'recorded_at',
   ];
   const DERIVED_COLUMNS = ['cycles_timed', 'average_seconds', 'parts_per_tool'];
   // header name (normalized) → the field it fills. The export's own names, the
@@ -2627,6 +2749,7 @@
     tool_cost: 'cost', insert_cost: 'cost', cost: 'cost',
     notes: 'notes', note: 'notes',
     cycle_seconds: 'sec', cycle_sec: 'sec', seconds: 'sec', cycle_time: 'sec',
+    cycle_cut_seconds: 'cut', cut_seconds: 'cut', in_cut_seconds: 'cut', time_in_cut: 'cut',
     recorded_at: 'at', at: 'at', date: 'at', timestamp: 'at',
   };
   const TOOL_NUMERIC = ['cuttingEdges', 'cost'];
@@ -2783,7 +2906,11 @@
         if (sec > 0) {
           let at = cell.at ? Date.parse(cell.at) : NaN;
           if (!Number.isFinite(at)) { if (cell.at) badTimes++; at = Date.now(); }
-          link.runs.push({ sec: round(sec, 2), at: Math.min(at, Date.now()) });
+          // Time in cut is optional, and part of the cycle it belongs to: a
+          // figure longer than the cycle is a bad column, not a measurement.
+          const rawCut = cell.cut ? (parseTime(cell.cut) || readNumber(cell.cut)) : 0;
+          const cut = rawCut > 0 && rawCut <= sec ? round(rawCut, 2) : 0;
+          link.runs.push({ sec: round(sec, 2), cut, at: Math.min(at, Date.now()) });
         } else badSecs++;
       }
     }
@@ -3134,7 +3261,7 @@
       opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b));
     for (const a of jobs) {
       const s = statsFor(a);
-      const life = lifeFor(a, s ? s.avg : 0);
+      const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
       const base = {
         ...machineCells(a.machineId),
         ...opCells(jobOperation(a)),
@@ -3148,7 +3275,10 @@
       };
       if (!a.runs.length) { push(base); continue; }
       for (const r of a.runs) {
-        push({ ...base, cycle_seconds: round(r.sec, 2), recorded_at: new Date(r.at).toISOString() });
+        push({ ...base,
+          cycle_seconds: round(r.sec, 2),
+          cycle_cut_seconds: r.cut ? round(r.cut, 2) : '',
+          recorded_at: new Date(r.at).toISOString() });
       }
     }
     // the whole floor, not only the timed part of it: an operation nothing is
@@ -3190,6 +3320,7 @@
     if (e.key === ' ') { e.preventDefault(); startStop(); return; }
     if (e.key === 'l' || e.key === 'L') { e.preventDefault(); lap(); return; }
     if (e.key === 'n' || e.key === 'N') { e.preventDefault(); lapNext(); return; }
+    if (e.key === 'c' || e.key === 'C') { e.preventDefault(); toggleCut(); return; }
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); reset(); }
   }
 

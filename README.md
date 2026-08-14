@@ -42,6 +42,12 @@ and turns on **AI generation** simply by setting environment variables.
   disabled: the watch, the forms, the add/delete and reorder controls are simply absent, so
   nothing on screen looks live and does nothing. That fixed the same gap for signed-in readers
   of somebody else's shopwatch, who used to see a full set of buttons that quietly did nothing.
+- **Measure actual time in cut.** A cycle time is rapids, tool changes and bar feed as well as
+  cutting, and only the cutting part sets tool life. **Mark in cut** on the watch records it as it
+  happens — press as the tool enters the material and again as it leaves, as often as it does so
+  within a cycle, and the stretches add up. Each recorded cycle then carries its own time in cut
+  and what share of the cycle that was, and the tool-life numbers use the measured figure instead
+  of guessing from the whole cycle — saying which of the two they used.
 - **Measure a whole operation in one pass.** **Tool done →** on the watch records the tool that
   has just finished cutting and moves straight to the next tool in the running order without
   stopping, so a run down the op gives every tool its own cycle time and fills in the op-cycle
@@ -573,7 +579,10 @@ from where you meant to get them.
 A cycle-time stopwatch for the shop floor. **Start** when the tool goes in, **Cycle done**
 at the end of each part — each press records the split since the last one, so a run of
 parts gives a run of cycle times without stopping the watch. A time measured elsewhere is
-typed straight in as `42.6` or `1:23.4`. **Tool done →** records against the tool that just
+typed straight in as `42.6` or `1:23.4`. **Mark in cut** records how much of a cycle the tool
+actually spends in the material — pressed as it enters and again as it leaves, as many times as it
+does so — which is the cutting time the tool life is worked out from and the one thing a cycle time
+cannot tell you afterwards. **Tool done →** records against the tool that just
 finished cutting and moves the watch straight to the next tool in the op without stopping, so one
 pass down an operation measures every tool in it — past the last it comes back to the first, which
 is one part. At a laptop, <kbd>Space</kbd>, <kbd>L</kbd>, <kbd>N</kbd> and <kbd>R</kbd> start/stop,

@@ -81,15 +81,22 @@ module.exports = function (ctx) {
     return out;
   }
 
-  // One recorded cycle: how long the part took, and when it was timed.
+  // One recorded cycle: how long the part took, when it was timed, and — where
+  // somebody marked the tool in and out of cut while it ran — how much of that
+  // was spent cutting.
   function sanitizeRun(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const sec = num(raw.sec, MAX_RUN_SEC, false);
     if (!sec) return null; // a cycle of no length is not a measurement
     const at = Number(raw.at);
+    // Time in cut is part of the cycle it was measured in, so it cannot exceed
+    // it. A longer figure is a mis-click, not a measurement, and is dropped
+    // rather than stored as a cycle that is more than 100% cut.
+    const cut = num(raw.cut, MAX_RUN_SEC, false);
     return {
       id: text(raw.id, 24) || newId(),
       sec,
+      cut: cut && cut <= sec ? cut : 0,   // 0 = nobody marked it
       at: Number.isFinite(at) && at > 0 ? Math.min(at, Date.now()) : Date.now(),
       note: text(raw.note, 80),
     };

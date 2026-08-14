@@ -116,6 +116,30 @@ part. Each press records the split since the last one, so a run of parts gives a
 run of cycle times without stopping the watch. **Reset** zeroes the display and
 keeps every recorded cycle.
 
+**Mark it in and out of the cut.** A cycle time is everything — rapids, the
+tool change, the bar feed, and the part of it actually cutting metal. Only the
+last is the **cutting time** the tool life is worked out from, and it cannot be
+read off a cycle time afterwards. So it is marked as it happens: press
+**◻ Mark in cut** as the tool enters the material and again as it comes out.
+
+Press it as many times as the tool enters and leaves within one cycle — the
+stretches add up. What has accumulated shows under the clock while the cycle
+runs, goes onto the cycle when it is recorded, and starts again from nothing for
+the next one. A **paused watch is not cutting**: time through a pause is not
+counted, and a tool still in the cut when you resume carries on from where it
+was.
+
+The measured figure then appears as **time in cut**, with what share of the
+cycle it is, and each recorded cycle shows its own. Where a setup also has a
+cutting time typed in, the screen says how far the two are apart — which is
+usually the interesting number.
+
+**Cutting time comes from the best thing available**, in this order: what the
+setup says, then what was marked in and out at the machine, then the whole
+measured cycle. The **min / edge** tile says which of the three it used, so a
+tool life worked out from a whole cycle is never mistaken for one worked out
+from real time in cut.
+
 **Time the op tool by tool.** An operation is a run of tools cutting one after
 another, and **Tool done →** is the press for measuring each one's share of it:
 it records the split against the tool that has just finished cutting and moves
@@ -133,7 +157,8 @@ A few passes down the op and the **Op cycle** chart fills in on its own — each
 tool's average, its share of the total, and where the cycle actually goes.
 
 At a laptop, <kbd>Space</kbd> starts and stops, <kbd>L</kbd> marks a cycle,
-<kbd>N</kbd> is **Tool done →**, and <kbd>R</kbd> resets. A time measured
+<kbd>N</kbd> is **Tool done →**, <kbd>C</kbd> marks in and out of cut, and
+<kbd>R</kbd> resets. A time measured
 somewhere else is typed straight in as `42.6` or `1:23.4`.
 
 The watch keeps time from the clock rather than counting up, so a phone that
@@ -360,7 +385,7 @@ keeps in a spreadsheet can be brought in by putting these headers on it:
 machine, machine_notes, part, part_description, part_notes, op, op_notes,
 seq, station, tool_part_number, tool_description, cutting_edges, tool_cost,
 tool_notes, cutting_time_sec, indexable_edges, parts_per_index, notes,
-cycle_seconds, recorded_at
+cycle_seconds, cycle_cut_seconds, recorded_at
 ```
 
 Columns are read **by name, not by position** — reorder them, leave out the ones
