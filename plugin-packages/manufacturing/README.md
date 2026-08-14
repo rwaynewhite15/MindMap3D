@@ -216,6 +216,30 @@ The **recorded cycles** stay with the original either way: a cycle time is a
 measurement taken on one machine, and carrying it onto another would be inventing
 data about a machine nobody has stood in front of.
 
+**Clone a part number** when a revision comes through, or a second number is made
+the same way. **Clone** on a part opens a new part number already carrying its
+successor — a revision letter takes the next letter, so `12345-A` suggests
+`12345-B` and `778-C` suggests `778-D`; a number ending in digits takes the next
+number the way a machine does; anything else gets a number put on the end. As
+with a machine, the suggestion is only a suggestion.
+
+Saving copies **the whole route**: every operation of the part, and every setup on
+each of them — the same tools, on the same machines, in the same stations, with
+the cutting times, the indexable edges and the parts between indexes worked out
+for them. So `12345-B` arrives running Op 10 and Op 20 on the same machines with
+the same tooling, and the work left is whatever is actually different about it.
+
+Unlike a cloned machine, none of that is optional, because the two cases are not
+alike. Which operations a machine runs is a decision about the machine — so it is
+asked. The operations that make a part *are* the part; a part number cloned
+without them would be a new part number and nothing else, which **+ Part**
+already does.
+
+The **recorded cycles** stay with the original here too: they were measured making
+that part, on parts that were actually cut, and a number nobody has run yet has
+nothing to show. So the clone reads as ops and tools with no measured time
+against them, which is exactly what it is until somebody stands at the machine.
+
 ## Sharing a stopwatch
 
 A cycle time is worth more to the people who did not take it. **Share** on the

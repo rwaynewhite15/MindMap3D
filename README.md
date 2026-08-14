@@ -36,6 +36,11 @@ and turns on **AI generation** simply by setting environment variables.
   can open it gets it read only and can save a copy of their own. Two people in the same
   stopwatch see each other's cycles as they are timed, the chat logs what changed, and a
   shared one gets a feed card saying what is in it.
+- **Clone a part number, not just a machine.** A revision runs the route the number before
+  it ran, so **Clone** on a part copies the whole route across: every operation, and every
+  setup on them — the same tools, on the same machines, in the same stations, with the
+  cutting times and tool life worked out for them. A revision letter takes the next letter,
+  `12345-A` to `12345-B`. The recorded cycles stay with the number that was actually cut.
 - **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
   `plugins/` folder at startup and adds whatever is there: a screen of its own in the
   feature library, its own API namespace, private per-account storage, and — if it asks for
@@ -612,6 +617,14 @@ no operation, because which ops the new machine runs is its own business and the
 time and tool life belong to the op being cut. **Bring the operations too**, on the clone
 form, copies each setup whole instead: same op, same cutting time, same tool life, with the
 op then listing both machines. The recorded cycles stay with the original either way.
+
+**Clone** on a part number does the same for a revision, and copies the whole route: every
+operation of the part and every setup on them — the same tools, on the same machines, in
+the same stations, with the cutting times and tool life worked out for them. A revision
+letter takes the next letter (`12345-A` suggests `12345-B`), a trailing number takes the
+next number. None of it is optional the way a machine's operations are: which ops a machine
+runs is a decision about the machine, but the ops that make a part are what the part is.
+The cycles stay with the original, which was the one actually cut.
 
 Every heading folds. The three lists close, and so does each part and each machine inside
 them, with the counts and the **+** buttons staying on the closed heading — which is what

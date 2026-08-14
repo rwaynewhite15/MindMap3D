@@ -1376,7 +1376,7 @@
     } else if (kind === 'tool') {
       draft = { id: '', partNumber: '', desc: '', cuttingEdges: '', cost: '', notes: '' };
     } else if (kind === 'part') {
-      draft = { id: '', number: '', desc: '', notes: '' };
+      draft = { id: '', number: '', desc: '', notes: '', ...(preset || {}) };
     } else if (kind === 'operation') {
       draft = { id: '', partId: '', name: '', seq: '', notes: '', ...(preset || {}) };
       if (!draft.partId) {
@@ -1589,6 +1589,126 @@
     openForm('machine', '', { name: nextMachineName(m.name), notes: m.notes, cloneOf: m.id });
   }
 
+  /* ---------------- cloning a part number ----------------
+     A revision of a part, or a second number made the same way, runs the same
+     route: the same operations, on the same machines, with the same tools in
+     the same stations. That whole route is what a clone carries — every
+     operation of the part, and every setup on each of them, with the cutting
+     time, the indexable edges and the parts between indexes worked out for it.
+
+     Unlike a cloned machine, none of that is optional. Which operations a
+     machine runs is a decision about the machine; the operations that make a
+     part are what the part *is*, and a part number cloned without them would
+     be a new part number and nothing else — which the New part button already
+     does.
+
+     The recorded cycles stay with the original, for the same reason they stay
+     with a cloned machine: a cycle time is a measurement of parts that were
+     actually made, and carrying it onto a number nobody has run yet would be
+     inventing it.
+  ---------------------------------------------------------------- */
+  function copyRoute(fromId, toId) {
+    const now = Date.now();
+    let ops = 0, setups = 0, skipped = 0;
+    const keys = new Set();
+    for (const o of opsOfPart(fromId)) {
+      const jobs = jobsOfOperation(o.id).sort(bySeq);
+      if (shop.operations.length >= limits.maxOperations) {
+        // its setups cannot come across without it, so they count as left out too
+        skipped += 1 + jobs.length;
+        continue;
+      }
+      const op = {
+        id: newId('o'),
+        partId: toId,
+        name: o.name,
+        seq: o.seq,
+        notes: o.notes,
+        createdAt: now,
+        updatedAt: now,
+      };
+      shop.operations.push(op);
+      ops++;
+      for (const a of jobs) {
+        if (shop.assignments.length >= limits.maxAssignments) { skipped++; continue; }
+        shop.assignments.push({
+          id: newId('a'),
+          toolId: a.toolId,
+          machineId: a.machineId,
+          operationId: op.id,
+          station: a.station,
+          seq: a.seq,
+          cutSec: a.cutSec,
+          indexEdges: a.indexEdges,
+          partsPerIndex: a.partsPerIndex,
+          notes: a.notes,
+          runs: [],
+          createdAt: now,
+          updatedAt: now,
+        });
+        keys.add(a.machineId + '\u0000' + op.id);
+        setups++;
+      }
+    }
+    // The copies keep the numbering they came with; these close up any gap an
+    // operation or a setup left out for want of room would otherwise leave.
+    renumberPart(toId);
+    for (const key of keys) renumberOp(key);
+    return { ops, setups, skipped };
+  }
+
+  // The number a cloned part starts on. Parts are revised more often than they
+  // are replaced, so a trailing revision letter takes the next letter —
+  // 12345-A becomes 12345-B — a number ending in digits takes the next number
+  // the way a machine does, and anything else gets a number put on the end.
+  // Only a suggestion: the form opens on it so it can be typed over.
+  function nextPartNumber(number) {
+    const taken = new Set(shop.parts.map(p => (p.number || '').toLowerCase()).filter(Boolean));
+    const free = candidate => candidate.length <= 60 && !taken.has(candidate.toLowerCase());
+    const onTheEnd = () => {
+      for (let n = 2; n <= 999; n++) {
+        const next = number + ' ' + n;
+        if (free(next)) return next;
+      }
+      return '';
+    };
+    if (!number) return '';
+
+    // A revision is one letter after something that is not a letter: 12345-A,
+    // 778 C. A number simply ending in a word — "Housing" — is not a revision.
+    const rev = number.match(/^(.*[^A-Za-z])([A-Za-z])$/);
+    if (rev) {
+      const [, head, letter] = rev;
+      const upper = letter === letter.toUpperCase();
+      const last = upper ? 'Z' : 'z';
+      for (let c = letter.charCodeAt(0) + 1; c <= last.charCodeAt(0); c++) {
+        const next = head + String.fromCharCode(c);
+        if (free(next)) return next;
+      }
+      return onTheEnd();   // past Z: a suffix says less than a wrong revision
+    }
+
+    const digits = number.match(/^(.*?)(\d+)(\D*)$/);
+    if (digits) {
+      const [, head, num, tail] = digits;
+      for (let n = Number(num) + 1; n <= Number(num) + 999; n++) {
+        const next = head + String(n).padStart(num.length, '0') + tail;
+        if (free(next)) return next;
+      }
+    }
+    return onTheEnd();
+  }
+
+  function clonePart(id) {
+    const p = partById(id);
+    if (!p) return;
+    if (shop.parts.length >= limits.maxParts) {
+      flash('That is as many parts as one account keeps (' + limits.maxParts + ').');
+      return;
+    }
+    openForm('part', '', { number: nextPartNumber(p.number), desc: p.desc, notes: p.notes, cloneOf: p.id });
+  }
+
   function saveTool(draft) {
     const partNumber = cleanText(draft.partNumber);
     const desc = cleanText(draft.desc);
@@ -1640,10 +1760,22 @@
       created = { id: newId('p'), ...part, createdAt: Date.now(), updatedAt: Date.now() };
       shop.parts.push(created);
     }
+    const from = created && draft.cloneOf ? partById(draft.cloneOf) : null;
+    const copy = from ? copyRoute(draft.cloneOf, created.id) : null;
     done();
+    if (copy) {
+      const tail = copy.skipped ? ', ' + copy.skipped + ' left out for want of room' : '';
+      flash(!copy.ops
+        ? partName(created) + ' was added, but the part it was copied from has no operations on it.'
+        : partName(created) + ' runs like ' + partName(from) + ' — ' + copy.ops +
+          (copy.ops === 1 ? ' operation' : ' operations') + ' and ' + copy.setups +
+          (copy.setups === 1 ? ' setup' : ' setups') + ' copied' + tail +
+          '. Nothing has been timed on it yet.',
+      !!copy.ops);
+    }
     // A part is made by its operations; without one there is nothing to set a
-    // tool up for.
-    if (created) openForm('operation', '', { partId: created.id });
+    // tool up for. A clone that arrived with them needs no such prompt.
+    if (created && !(copy && copy.ops)) openForm('operation', '', { partId: created.id });
   }
 
   function saveOperation(draft) {
@@ -1835,9 +1967,29 @@
     if (!form) return;
     const { kind, draft } = form;
 
-    const cloneOf = draft.cloneOf ? machineById(draft.cloneOf) : null;
+    // A clone is the same form as a new one, opened on what it is copying.
+    const clonePartOf = kind === 'part' && draft.cloneOf ? partById(draft.cloneOf) : null;
+    const cloneOf = kind === 'machine' && draft.cloneOf ? machineById(draft.cloneOf) : null;
     box.appendChild(el('div', 'mf-section-title',
-      cloneOf ? 'Clone ' + cloneOf.name : FORM_TITLES[kind][draft.id ? 1 : 0]));
+      clonePartOf ? 'Clone ' + partName(clonePartOf)
+        : cloneOf ? 'Clone ' + cloneOf.name
+          : FORM_TITLES[kind][draft.id ? 1 : 0]));
+    if (clonePartOf) {
+      const ops = opsOfPart(clonePartOf.id);
+      const setups = ops.reduce((n, o) => n + jobsOfOperation(o.id).length, 0);
+      box.appendChild(el('div', 'mf-note', !ops.length
+        ? 'There are no operations on ' + partName(clonePartOf) +
+          ' yet, so this is a new part number and nothing more.'
+        : 'Saving this makes a part number that runs like ' + partName(clonePartOf) + ': all ' +
+          ops.length + (ops.length === 1 ? ' operation' : ' operations') +
+          (setups
+            ? ' copied, and the ' + setups + (setups === 1 ? ' setup' : ' setups') +
+              ' on them — the same tools, on the same machines, in the same stations, with the ' +
+              'cutting times, indexable edges and tool life worked out for them'
+            : ' copied — no tools are set up for them yet') +
+          '. The cycles timed on ' + partName(clonePartOf) + ' stay with it: they were measured ' +
+          'making that part.'));
+    }
     if (cloneOf) {
       const tools = distinctTools(cloneOf.id);
       const setups = jobsOnMachine(cloneOf.id).length;
@@ -2070,6 +2222,13 @@
       const pb = el('div', 'mf-machine-btns');
       pb.appendChild(button('mf-btn mf-btn-sm', '+ Operation', () => openForm('operation', '', { partId: p.id }),
         'Another step in making this part'));
+      const routed = ops.reduce((n, o) => n + jobsOfOperation(o.id).length, 0);
+      pb.appendChild(button('mf-link', 'Clone', () => clonePart(p.id),
+        ops.length
+          ? 'A second part number running the same route: these ' + ops.length +
+            (ops.length === 1 ? ' operation' : ' operations') +
+            (routed ? ' and the ' + routed + (routed === 1 ? ' setup' : ' setups') + ' on them' : '')
+          : 'A second part number like this one'));
       pb.appendChild(button('mf-link', 'Edit', () => openForm('part', p.id)));
       ph.appendChild(pb);
       block.appendChild(ph);
