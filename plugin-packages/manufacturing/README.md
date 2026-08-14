@@ -292,6 +292,24 @@ to somebody shows them nothing until you invite them.
 **Delete shopwatch** takes it and everything in it, and says how many cycles that
 is before it does. Anyone you shared it with loses it too.
 
+### Moving a floor into another shopwatch
+
+**Duplicate**, on the doc bar, stands a second shopwatch up beside the open one
+holding everything it holds — the parts and their operations, the machines, the
+tool crib and every cycle timed. It is private to you whatever the original was,
+and the two are separate from that moment: changing one leaves the other alone.
+Useful for a second bay set up like the first, a what-if you do not want in the
+real record, or a copy to hand to somebody.
+
+On a shopwatch somebody else shared with you, the same button reads **Save a
+copy** — the same move, and the only way to work in a floor you can open but not
+change.
+
+To bring a floor into a shopwatch that already has one, go through a
+spreadsheet instead: **⤓ Export** the first, open the second, **⤒ Import** the
+file. That merges rather than replaces — the preview says what is new before
+anything happens, and matching records are filled in rather than duplicated.
+
 ### Coming from a private record
 
 An account that used Shopwatch before any of this could be shared has one private

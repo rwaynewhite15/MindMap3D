@@ -686,9 +686,16 @@
       btns.appendChild(button('mf-btn mf-btn-sm', 'Share', () => openShare(),
         'Who can see this shopwatch, and who can change it'));
     }
-    if (doc && !doc.mine) {
-      btns.appendChild(button('mf-btn mf-btn-sm', 'Save a copy', copyDoc,
-        'Take a copy of this into your own shopwatches'));
+    // The same move under two names: taking somebody else's floor into your
+    // own shopwatches, and standing a second one up beside your own — a new
+    // bay, a what-if, a copy to hand over. The second used to need a round
+    // trip through a spreadsheet for want of a button.
+    if (doc) {
+      btns.appendChild(doc.mine
+        ? button('mf-btn mf-btn-sm', 'Duplicate', copyDoc,
+          'A second shopwatch holding everything this one holds, private to you')
+        : button('mf-btn mf-btn-sm', 'Save a copy', copyDoc,
+          'Take a copy of this into your own shopwatches'));
     }
     if (doc) {
       const label = '💬' + (chat.length ? ' ' + chat.length : '') +
@@ -755,11 +762,16 @@
 
   async function copyDoc() {
     if (!doc) return;
+    // openDoc replaces `doc`, so what it was has to be read first
+    const wasMine = doc.mine, from = doc.title;
     try {
       const made = await ctx.api('/docs/' + doc.id + '/copy', 'POST');
       docs.mine.push(made.doc);
       await openDoc(made.doc.id);
-      flash('Copied into your own shopwatches, private to you.', true);
+      flash(wasMine
+        ? made.doc.title + ' holds everything ' + from + ' holds — the parts, the machines, ' +
+          'the tool crib and every cycle timed. Changing one leaves the other alone.'
+        : 'Copied into your own shopwatches, private to you.', true);
     } catch (err) { flash('Not copied (' + err.message + ').'); }
   }
 

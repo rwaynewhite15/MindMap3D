@@ -572,7 +572,8 @@ new one is private until its owner shares it, and sharing asks two questions sep
 **who can open it** (private, friends, or everyone) and **who can change it** (named
 usernames, which override the tier — that is how a private shopwatch reaches the one person
 setting the job). Everybody else who can open it gets it read only, and can **save a copy**
-into a shopwatch of their own. Two people in the same one see each other's edits live, the
+into a shopwatch of their own — and **Duplicate** does the same for one of your own, standing a
+second shopwatch up with the whole floor in it. Two people in the same one see each other's edits live, the
 💬 chat is shared by everyone who can open it and logs the edits as they happen — *timed
 80° CNMG rougher at 00:33.3 on HAAS ST-20* — and a shared shopwatch gets a feed card saying
 what is in it. None of that is implemented in the add-on: it is the host's document
