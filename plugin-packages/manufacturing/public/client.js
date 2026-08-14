@@ -356,6 +356,15 @@
   const emptyShop = () =>
     ({ machines: [], tools: [], parts: [], operations: [], assignments: [], activeId: '' });
   const canEdit = () => !!(doc && doc.canEdit);
+  // Somebody following a shared link with no account at all. The host serves
+  // them one public shopwatch and nothing else, so the screen asks for nothing
+  // else: no list, no live channel, no chat, and nothing that writes.
+  const signedIn = () => !!(ctx && ctx.me());
+  // A control that changes the floor. On a read-only screen it is not drawn at
+  // all rather than drawn dead: a button that looks live and does nothing reads
+  // as a broken app, not as a permission.
+  const wBtn = (...args) => (canEdit() ? button(...args) : null);
+  const put = (parent, node) => { if (node) parent.appendChild(node); };
 
   /* ---------------- the shopwatches ----------------
      A shopwatch is a document the app owns the sharing of: it belongs to an
@@ -364,6 +373,19 @@
      record — that record is now the document's body.
   ---------------------------------------------------------------- */
   async function loadDocs() {
+    // With no account there is no list to fetch — only the one shopwatch the
+    // address names, which the host will serve if it is public.
+    if (!signedIn()) {
+      docs = { mine: [], shared: [] };
+      docsIn = true;
+      const id = wantDoc;
+      wantDoc = '';
+      if (id) return openDoc(id);
+      doc = null;
+      shop = null;
+      render();
+      return;
+    }
     try {
       const data = await ctx.api('/docs');
       docs = { mine: data.docs || [], shared: data.shared || [] };
@@ -472,7 +494,7 @@
   ---------------------------------------------------------------- */
   function startLive() {
     stopLive();
-    if (!doc) return;
+    if (!doc || !signedIn()) return;
     try {
       live = new EventSource('/api/plugins/' + ID + '/docs/' + doc.id + '/live');
     } catch { return; } // no stream is a working screen, just not a live one
@@ -516,7 +538,7 @@
   }
 
   async function loadChat() {
-    if (!doc) return;
+    if (!doc || !signedIn()) return;
     try {
       const data = await ctx.api('/docs/' + doc.id + '/chat');
       chat = data.chat || [];
@@ -654,6 +676,17 @@
     }
 
     const btns = el('div', 'mf-docbar-btns');
+    if (!signedIn()) {
+      // Shared by a link, read by somebody with no account: say whose floor it
+      // is and what could be done with one of their own, and stop there.
+      const join = el('a', 'mf-link');
+      join.href = '#/signin';
+      join.textContent = 'Sign in to keep your own';
+      btns.appendChild(join);
+      row.appendChild(btns);
+      box.appendChild(row);
+      return;
+    }
     btns.appendChild(button('mf-btn mf-btn-sm', '+ Shopwatch', newDoc, 'Start another one, empty'));
     if (doc && doc.mine) {
       btns.appendChild(button('mf-btn mf-btn-sm', 'Share', () => openShare(),
@@ -706,6 +739,7 @@
   // make one first and then do what was asked, rather than doing nothing.
   function withDoc(fn) {
     return async (...args) => {
+      if (!signedIn()) return;          // a reader with no account writes nothing
       if (!doc) {
         if (!docsIn) return;            // still listing; this wakes up in a moment
         if (!await newDoc()) return;    // they cancelled the name
@@ -977,8 +1011,10 @@
     if (a.seq && order.length > 1) where.textContent += ' · tool ' + a.seq + ' of ' + order.length;
     who.appendChild(where);
     head.appendChild(who);
-    head.appendChild(button('mf-btn mf-btn-sm', 'Edit setup', () => openForm('assignment', a.id),
-      'The operation, cutting time, edges and tool life of this tool on this machine'));
+    if (canEdit()) {
+      head.appendChild(button('mf-btn mf-btn-sm', 'Edit setup', () => openForm('assignment', a.id),
+        'The operation, cutting time, edges and tool life of this tool on this machine'));
+    }
     box.appendChild(head);
 
     els.time = el('div', 'mf-time', fmtClock(elapsed()));
@@ -992,14 +1028,19 @@
       : (last ? 'Last recorded cycle ' + fmtSec(last.sec) : 'No cycles recorded yet');
     box.appendChild(line);
 
-    const btns = el('div', 'mf-watch-btns');
-    btns.appendChild(button('mf-btn mf-btn-go' + (watch.running ? ' mf-btn-stop' : ''),
-      watch.running ? 'Stop' : (watch.accum ? 'Resume' : 'Start'), startStop,
-      'Space starts and stops the watch'));
-    btns.appendChild(button('mf-btn mf-btn-lap', 'Cycle done', lap,
-      'Records the time since the last cycle and keeps the watch running (L)'));
-    btns.appendChild(button('mf-btn mf-btn-quiet', 'Reset', reset, 'Back to zero, keeping every recorded cycle (R)'));
-    box.appendChild(btns);
+    // The watch records against this setup, so it is only drawn for somebody
+    // who may record. A reader gets the numbers without controls that would
+    // look live and do nothing.
+    if (canEdit()) {
+      const btns = el('div', 'mf-watch-btns');
+      btns.appendChild(button('mf-btn mf-btn-go' + (watch.running ? ' mf-btn-stop' : ''),
+        watch.running ? 'Stop' : (watch.accum ? 'Resume' : 'Start'), startStop,
+        'Space starts and stops the watch'));
+      btns.appendChild(button('mf-btn mf-btn-lap', 'Cycle done', lap,
+        'Records the time since the last cycle and keeps the watch running (L)'));
+      btns.appendChild(button('mf-btn mf-btn-quiet', 'Reset', reset, 'Back to zero, keeping every recorded cycle (R)'));
+      box.appendChild(btns);
+    }
 
     if (shop.assignments.length > 1) {
       box.appendChild(dropdown('mf-pick',
@@ -1250,7 +1291,7 @@
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
     add.appendChild(input);
     add.appendChild(button('mf-btn mf-btn-sm', 'Add', commit, 'Record a time measured somewhere else'));
-    head.appendChild(add);
+    if (canEdit()) head.appendChild(add);
     box.appendChild(head);
 
     if (!a.runs.length) {
@@ -1264,7 +1305,7 @@
       row.appendChild(el('div', 'mf-run-n', '#' + (a.runs.length - i)));
       row.appendChild(el('div', 'mf-run-t', fmtSec(r.sec)));
       row.appendChild(el('div', 'mf-run-at', fmtAgo(r.at)));
-      row.appendChild(button('mf-x', '✕', () => {
+      if (canEdit()) row.appendChild(button('mf-x', '✕', () => {
         a.runs = a.runs.filter(x => x.id !== r.id);
         touch(a);
         save();
@@ -2184,7 +2225,7 @@
     if (!shop) return;
 
     box.appendChild(sectionHead('sec:parts', 'Parts and operations', shop.parts.length, renderParts,
-      button('mf-btn mf-btn-sm', '+ Part', () => openForm('part'))));
+      wBtn('mf-btn mf-btn-sm', '+ Part', () => openForm('part'))));
     if (isFolded('sec:parts')) return;
 
     if (!shop.parts.length) {
@@ -2211,16 +2252,16 @@
         ops.length ? ops.length + (ops.length === 1 ? ' op' : ' ops') : 'no ops yet',
       ].filter(Boolean).join(' · ')));
       const pb = el('div', 'mf-machine-btns');
-      pb.appendChild(button('mf-btn mf-btn-sm', '+ Operation', () => openForm('operation', '', { partId: p.id }),
+      put(pb, wBtn('mf-btn mf-btn-sm', '+ Operation', () => openForm('operation', '', { partId: p.id }),
         'Another step in making this part'));
       const routed = ops.reduce((n, o) => n + jobsOfOperation(o.id).length, 0);
-      pb.appendChild(button('mf-link', 'Clone', () => clonePart(p.id),
+      put(pb, wBtn('mf-link', 'Clone', () => clonePart(p.id),
         ops.length
           ? 'A second part number running the same route: these ' + ops.length +
             (ops.length === 1 ? ' operation' : ' operations') +
             (routed ? ' and the ' + routed + (routed === 1 ? ' setup' : ' setups') + ' on them' : '')
           : 'A second part number like this one'));
-      pb.appendChild(button('mf-link', 'Edit', () => openForm('part', p.id)));
+      put(pb, wBtn('mf-link', 'Edit', () => openForm('part', p.id)));
       ph.appendChild(pb);
       block.appendChild(ph);
 
@@ -2256,12 +2297,14 @@
 
         const acts = el('div', 'mf-op-btns');
         if (jobs.length) {
-          acts.appendChild(button('mf-link', 'Time it', () => selectJob(jobs[0].id),
-            'Point the watch at the first tool of this op'));
+          acts.appendChild(button('mf-link', canEdit() ? 'Time it' : 'Show',
+            () => selectJob(jobs[0].id),
+            canEdit() ? 'Point the watch at the first tool of this op'
+              : 'Show this op\'s first tool and its numbers'));
         } else {
-          acts.appendChild(button('mf-link', 'Set up a tool', () => openForm('assignment', '', { operationId: o.id })));
+          put(acts, wBtn('mf-link', 'Set up a tool', () => openForm('assignment', '', { operationId: o.id })));
         }
-        acts.appendChild(button('mf-link', 'Edit', () => openForm('operation', o.id)));
+        put(acts, wBtn('mf-link', 'Edit', () => openForm('operation', o.id)));
         row.appendChild(acts);
         block.appendChild(row);
       }
@@ -2276,7 +2319,7 @@
     if (!shop) return;
 
     box.appendChild(sectionHead('sec:machines', 'Machines', shop.machines.length, renderMachines,
-      button('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
+      wBtn('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
     if (isFolded('sec:machines')) return;
 
     if (!shop.machines.length) {
@@ -2307,15 +2350,15 @@
         ? all.length + (all.length === 1 ? ' tool' : ' tools') + (timed ? ' · ' + fmtSec(total) + ' timed' : '')
         : 'no tools yet'));
       const mb = el('div', 'mf-machine-btns');
-      mb.appendChild(button('mf-btn mf-btn-sm', '+ Tool here', () => openForm('assignment', '', { machineId: m.id }),
+      put(mb, wBtn('mf-btn mf-btn-sm', '+ Tool here', () => openForm('assignment', '', { machineId: m.id }),
         'Set a tool from the crib up on this machine'));
       const tooled = distinctTools(m.id);
-      mb.appendChild(button('mf-link', 'Clone', () => cloneMachine(m.id),
+      put(mb, wBtn('mf-link', 'Clone', () => cloneMachine(m.id),
         tooled
           ? 'A second machine of the same kind, carrying these ' + tooled +
             (tooled === 1 ? ' tool' : ' tools') + ' in the same stations'
           : 'A second machine of the same kind'));
-      mb.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id)));
+      put(mb, wBtn('mf-link', 'Edit', () => openForm('machine', m.id)));
       mh.appendChild(mb);
       block.appendChild(mh);
 
@@ -2371,7 +2414,7 @@
     top.appendChild(el('span', 'mf-card-name', jobName(a)));
     const s = statsFor(a);
     if (s) top.appendChild(el('span', 'mf-card-avg', fmtSec(s.avg)));
-    if (canMove && group.length > 1) {
+    if (canMove && group.length > 1 && canEdit()) {
       const moves = el('span', 'mf-moves');
       const move = (label, to, enabled, title) => {
         const b = button('mf-move', label, e => { e.stopPropagation(); moveJob(a.id, to); }, title);
@@ -2430,7 +2473,7 @@
     if (!shop) return;
 
     box.appendChild(sectionHead('sec:tools', 'Tools', shop.tools.length, renderTools,
-      button('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool'))));
+      wBtn('mf-btn mf-btn-sm', '+ Tool', () => openForm('tool'))));
     if (isFolded('sec:tools')) return;
 
     if (!shop.tools.length) {
@@ -2481,7 +2524,7 @@
       foot.appendChild(el('span', null, bits.join(' · ')));
       foot.appendChild(button('mf-link', 'Set up', () => openForm('assignment', '', { toolId: t.id }),
         'Put this tool on a machine, for an operation'));
-      foot.appendChild(button('mf-link', 'Edit', () => openForm('tool', t.id)));
+      put(foot, wBtn('mf-link', 'Edit', () => openForm('tool', t.id)));
       card.appendChild(foot);
       box.appendChild(card);
     }
@@ -2989,7 +3032,7 @@
   }
 
   async function chooseImport(file) {
-    if (!file || !docsIn) return;
+    if (!file || !docsIn || !signedIn()) return;
     if (file.size > MAX_IMPORT_BYTES) { flash('That file is larger than this will read (5 MB).'); return; }
     let text;
     try { text = await file.text(); }
@@ -3100,6 +3143,7 @@
   // this screen is not the one on show.
   function onKey(e) {
     if (!host || host.hidden || form) return;
+    if (!canEdit()) return;   // the watch belongs to whoever may record with it
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
@@ -3122,11 +3166,15 @@
     heading.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, op by op'));
     top.appendChild(heading);
     const actions = el('div', 'mf-top-btns');
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Part', withDoc(() => openForm('part'))));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Machine', withDoc(() => openForm('machine'))));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', withDoc(() => openForm('tool'))));
-    actions.appendChild(button('mf-btn mf-btn-sm', '+ Setup', withDoc(() => openForm('assignment')),
-      'Put a tool from the crib on a machine, for an operation'));
+    // Everything that adds to a floor is left off a screen that cannot write to
+    // one. Export stays: reading it and downloading it are the same permission.
+    if (signedIn()) {
+      actions.appendChild(button('mf-btn mf-btn-sm', '+ Part', withDoc(() => openForm('part'))));
+      actions.appendChild(button('mf-btn mf-btn-sm', '+ Machine', withDoc(() => openForm('machine'))));
+      actions.appendChild(button('mf-btn mf-btn-sm', '+ Tool', withDoc(() => openForm('tool'))));
+      actions.appendChild(button('mf-btn mf-btn-sm', '+ Setup', withDoc(() => openForm('assignment')),
+        'Put a tool from the crib on a machine, for an operation'));
+    }
     // The file input is driven by the button beside it rather than shown raw,
     // and is reset after each pick so choosing the same file twice still fires.
     const file = el('input', 'mf-file');
@@ -3137,10 +3185,12 @@
       file.value = '';
       chooseImport(chosen);
     });
-    actions.appendChild(button('mf-btn mf-btn-sm', '⤒ Import', () => file.click(),
-      'Read a spreadsheet of tooling back in — the columns ⤓ Export writes'));
+    if (signedIn()) {
+      actions.appendChild(button('mf-btn mf-btn-sm', '⤒ Import', () => file.click(),
+        'Read a spreadsheet of tooling back in — the columns ⤓ Export writes'));
+    }
     actions.appendChild(button('mf-btn mf-btn-sm', '⤓ Export', exportCsv, 'Download the whole shop record as a spreadsheet'));
-    actions.appendChild(file);
+    if (signedIn()) actions.appendChild(file);
     top.appendChild(actions);
     page.appendChild(top);
 

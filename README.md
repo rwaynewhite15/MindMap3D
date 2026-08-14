@@ -36,6 +36,12 @@ and turns on **AI generation** simply by setting environment variables.
   can open it gets it read only and can save a copy of their own. Two people in the same
   shopwatch see each other's cycles as they are timed, the chat logs what changed, and a
   shared one gets a feed card saying what is in it.
+- **Share a read-only link with people who have no account.** A shopwatch set to **Everyone**
+  now opens for a signed-out visitor by its own address, the way a public map already did — the
+  whole floor, and none of the controls that would change it. Read-only is drawn rather than
+  disabled: the watch, the forms, the add/delete and reorder controls are simply absent, so
+  nothing on screen looks live and does nothing. That fixed the same gap for signed-in readers
+  of somebody else's shopwatch, who used to see a full set of buttons that quietly did nothing.
 - **Clone a part number, not just a machine.** A revision runs the route the number before
   it ran, so **Clone** on a part copies the whole route across: every operation, and every
   setup on them — the same tools, on the same machines, in the same stations, with the
@@ -573,7 +579,9 @@ new one is private until its owner shares it, and sharing asks two questions sep
 usernames, which override the tier — that is how a private shopwatch reaches the one person
 setting the job). Everybody else who can open it gets it read only, and can **save a copy**
 into a shopwatch of their own — and **Duplicate** does the same for one of your own, standing a
-second shopwatch up with the whole floor in it. Two people in the same one see each other's edits live, the
+second shopwatch up with the whole floor in it. A link to an **Everyone** shopwatch opens for
+somebody with **no account at all**, read-only, the same courtesy a public map gets: they see the
+whole floor and none of the controls that would change it. Two people in the same one see each other's edits live, the
 💬 chat is shared by everyone who can open it and logs the edits as they happen — *timed
 80° CNMG rougher at 00:33.3 on HAAS ST-20* — and a shared shopwatch gets a feed card saying
 what is in it. None of that is implemented in the add-on: it is the host's document

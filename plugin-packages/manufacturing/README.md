@@ -289,6 +289,23 @@ usual notification.
 opens it still has to be allowed to see it, so sending a private shopwatch's link
 to somebody shows them nothing until you invite them.
 
+**A link to an *Everyone* shopwatch needs no account at all.** Send it to a
+customer, an auditor, a machine builder — anyone — and it opens for them signed
+out: the parts and their operations, the machines, the tool crib, the recorded
+cycles and the op-cycle chart, exactly as you see them. It is genuinely read
+only, and not by disabling things — the watch, the setup forms, the add and
+delete controls and the reorder arrows are simply not drawn, so nothing on the
+screen looks live and does nothing. All they get besides the floor is **⤓ Export**
+(reading it and downloading it are the same permission) and a way to sign in and
+start one of their own.
+
+Friends-only and private shopwatches stay shut to signed-out visitors, and no
+part of the add-on other than that one address opens without an account — not
+the list of shopwatches, not the chat, not the live channel. Remember what
+*Everyone* means in full, though: **anyone with the link, and discoverable** —
+it also puts a card in Discover. Use *Friends* or an invited editor for a floor
+that should reach particular people and nobody else.
+
 **Delete shopwatch** takes it and everything in it, and says how many cycles that
 is before it does. Anyone you shared it with loses it too.
 

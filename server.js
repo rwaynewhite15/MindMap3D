@@ -2325,6 +2325,30 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 404, { error: 'Not found.' });
   }
 
+  // Read one add-on document, signed out. The same courtesy a public map gets:
+  // "Everyone" on the share panel says anyone can open it, and a link that only
+  // works for people who already have an account does not mean that.
+  //
+  // Only the bare GET, and only for a visitor with no account — a signed-in one
+  // falls through to the block further down, which knows about editors, chat,
+  // presence and the live channel. canViewDoc with no viewer admits nothing but
+  // a public document, and a document this visitor may not see is answered the
+  // same way as one that does not exist.
+  const anonDoc = pathname.match(/^\/api\/plugins\/([a-z0-9-]{2,32})\/docs\/([A-Za-z0-9]{1,40})$/);
+  if (req.method === 'GET' && anonDoc && !user) {
+    const p = plugins.get(anonDoc[1]);
+    if (!p || !p.docs) return sendJSON(res, 404, { error: 'No such document.' });
+    const owner = await store.getUserByPluginDocId(anonDoc[2]);
+    const doc = owner && (owner.pluginDocs || []).find(d => d.id === anonDoc[2]);
+    if (!doc || doc.plugin !== p.id || !canViewDoc(doc, owner, null)) {
+      return sendJSON(res, 404, { error: 'No such document.' });
+    }
+    return sendJSON(res, 200, {
+      doc: docMeta(doc, null, ownerRef(owner, null), false),
+      body: doc.body,
+    });
+  }
+
   // --- everything below requires sign-in ---
   if (!user) return sendJSON(res, 401, { error: 'Not signed in.' });
 

@@ -1561,6 +1561,11 @@ function route() {
     // everything else prompts them to sign in
     if (h.startsWith('u/')) { openProfile(h.slice(2)); return; }
     if (h === 'browse') { show('browse'); loadBrowse(); return; }
+    // One add-on document, by its own address, read-only — the same courtesy a
+    // public map gets. Only this address: an add-on's other screens are for
+    // people with an account, and the server serves nothing else without one.
+    const anonDoc = h.match(/^p\/([a-z0-9-]{2,32})\/(d\/[A-Za-z0-9]{1,40})$/);
+    if (anonDoc) { openPlugin(anonDoc[1], anonDoc[2]); return; }
     show('auth'); // #/signin, #/map, #/friends, #/settings all land here
     return;
   }
