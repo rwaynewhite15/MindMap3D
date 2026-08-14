@@ -446,7 +446,7 @@ module.exports = function (ctx) {
     maxPartsPerIndex: MAX_PARTS_PER_INDEX,
   };
 
-  // One line about a stopwatch, for its card in the feed. Counts rather than
+  // One line about a shopwatch, for its card in the feed. Counts rather than
   // adjectives: somebody scrolling past should be able to tell whether there is
   // a shop in here or an empty one.
   function summary(body) {
@@ -461,7 +461,7 @@ module.exports = function (ctx) {
   }
 
   return {
-    /* A stopwatch is a document the host owns the envelope of: who it belongs
+    /* A shopwatch is a document the host owns the envelope of: who it belongs
        to, who may see it, who may edit it, what is said about it. All this
        side has to do is say what an empty one is and what a body may contain —
        the same rebuilding that has always guarded the private record, now
@@ -477,7 +477,7 @@ module.exports = function (ctx) {
       const route = req.method + ' ' + sub;
 
       // What this account's private record holds, if it still has one. The
-      // screen offers it as the first stopwatch to bring across; once it has
+      // screen offers it as the first shopwatch to bring across; once it has
       // been brought across it is left alone rather than deleted, so a rolled
       // back install still finds it.
       if (route === 'GET /legacy') {

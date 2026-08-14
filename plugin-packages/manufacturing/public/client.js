@@ -48,15 +48,15 @@
   let formError = '';
   let pendingPick = '';     // a record named by the URL, waiting on the shop to load
   let pendingImport = null; // a read CSV and what importing it would do, awaiting a yes
-  let docs = { mine: [], shared: [] }; // every stopwatch this account can open
+  let docs = { mine: [], shared: [] }; // every shopwatch this account can open
   let docsIn = false;       // the list has been fetched at least once
   let doc = null;           // the one open: title, visibility, owner, canEdit
-  let wantDoc = '';         // a stopwatch named by the URL, before the list is in
-  let live = null;          // EventSource for the open stopwatch
+  let wantDoc = '';         // a shopwatch named by the URL, before the list is in
+  let live = null;          // EventSource for the open shopwatch
   let here = [];            // who else has it open
   let chat = [];            // what has been said about it
   let chatOpen = false;
-  let legacy = null;        // the private record from before stopwatches were shared
+  let legacy = null;        // the private record from before shopwatches were shared
   let tick = null;          // display interval while the watch runs
   const els = {};           // the panels render() refills
 
@@ -358,8 +358,8 @@
     ({ machines: [], tools: [], parts: [], operations: [], assignments: [], activeId: '' });
   const canEdit = () => !!(doc && doc.canEdit);
 
-  /* ---------------- the stopwatches ----------------
-     A stopwatch is a document the app owns the sharing of: it belongs to an
+  /* ---------------- the shopwatches ----------------
+     A shopwatch is a document the app owns the sharing of: it belongs to an
      account, has a name, a privacy setting, people invited to edit it, a chat
      and a live channel. Everything below this line still works on one shop
      record — that record is now the document's body.
@@ -369,17 +369,17 @@
       const data = await ctx.api('/docs');
       docs = { mine: data.docs || [], shared: data.shared || [] };
     } catch (err) {
-      flash('Your stopwatches could not be listed (' + err.message + ').');
+      flash('Your shopwatches could not be listed (' + err.message + ').');
       docs = { mine: [], shared: [] };
     }
     docsIn = true;
-    // an account that has used this add-on before stopwatches could be shared
+    // an account that has used this add-on before shopwatches could be shared
     // has a private record sitting there; offer to bring it across
     if (!docs.mine.length && !legacy) {
       try { legacy = await ctx.api('/legacy'); } catch { legacy = { has: false }; }
     }
     const all = docs.mine.concat(docs.shared);
-    // A stopwatch named in the address is opened whether or not it is in the
+    // A shopwatch named in the address is opened whether or not it is in the
     // list: the list is what this account owns or was invited into, and a
     // public one is neither. The host answers 404 if it may not be seen, and
     // openDoc says so, rather than the screen quietly showing something else.
@@ -406,7 +406,7 @@
     } catch (err) {
       doc = null;
       shop = null;
-      flash('That stopwatch could not be opened (' + err.message + ').');
+      flash('That shopwatch could not be opened (' + err.message + ').');
       render();
       return;
     }
@@ -472,7 +472,7 @@
   }
 
   /* ---------------- the live channel ----------------
-     The same stream a shared map runs on: everyone with this stopwatch open
+     The same stream a shared map runs on: everyone with this shopwatch open
      gets each saved change, each message and the list of who is here. A
      measured cycle appears on the other phone as it is measured.
   ---------------------------------------------------------------- */
@@ -596,7 +596,7 @@
     a.runs.unshift({ id: newId('r'), sec, at: at || Date.now(), note: '' });
     if (a.runs.length > limits.maxRuns) a.runs.length = limits.maxRuns;
     touch(a);
-    // what the others in this stopwatch see happen, in their chat
+    // what the others in this shopwatch see happen, in their chat
     saveNote = 'timed ' + jobName(a) + ' at ' + fmtSec(sec) + ' on ' + machineName(a.machineId);
     saveNow();
     renderStats();
@@ -618,8 +618,8 @@
     tick = null;
   }
 
-  /* ---------------- the stopwatch bar ----------------
-     Which stopwatch is open, who else is in it, and — for whoever owns it —
+  /* ---------------- the shopwatch bar ----------------
+     Which shopwatch is open, who else is in it, and — for whoever owns it —
      who may see it and who may type in it.
   ---------------------------------------------------------------- */
   const VISIBILITIES = [
@@ -628,7 +628,7 @@
     ['public', 'Everyone', 'Anyone can open it, and it can be discovered'],
   ];
 
-  // What is in the record this account kept before stopwatches, in counts, so
+  // What is in the record this account kept before shopwatches, in counts, so
   // the offer to bring it in says what is actually in there.
   function legacyBlurb() {
     const s = legacy && legacy.shop;
@@ -652,7 +652,7 @@
     // being read — so it is not repeated here.
     if (!shop && !doc) { box.hidden = true; return; }
     box.hidden = false;
-    // Somebody else's stopwatch open, and a record of your own never brought
+    // Somebody else's shopwatch open, and a record of your own never brought
     // across: the empty screen never appears, so the offer belongs here.
     const offerLegacy = !!(legacy && legacy.has && !docs.mine.length);
 
@@ -665,7 +665,7 @@
       row.appendChild(dropdown('mf-docpick', all.map(d => ({
         value: d.id,
         label: d.title + (d.mine ? '' : ' — ' + (d.owner ? '@' + d.owner.username : 'shared')),
-      })), doc ? doc.id : '', id => openDoc(id), 'Stopwatch'));
+      })), doc ? doc.id : '', id => openDoc(id), 'Shopwatch'));
     } else if (doc) {
       row.appendChild(el('div', 'mf-doctitle', doc.title));
     }
@@ -681,21 +681,21 @@
     }
 
     const btns = el('div', 'mf-docbar-btns');
-    btns.appendChild(button('mf-btn mf-btn-sm', '+ Stopwatch', newDoc, 'Start another one, empty'));
+    btns.appendChild(button('mf-btn mf-btn-sm', '+ Shopwatch', newDoc, 'Start another one, empty'));
     if (doc && doc.mine) {
       btns.appendChild(button('mf-btn mf-btn-sm', 'Share', () => openShare(),
-        'Who can see this stopwatch, and who can change it'));
+        'Who can see this shopwatch, and who can change it'));
     }
     if (doc && !doc.mine) {
       btns.appendChild(button('mf-btn mf-btn-sm', 'Save a copy', copyDoc,
-        'Take a copy of this into your own stopwatches'));
+        'Take a copy of this into your own shopwatches'));
     }
     if (doc) {
       const label = '💬' + (chat.length ? ' ' + chat.length : '') +
         (here.length > 1 ? ' · ' + here.length + ' here' : '');
       btns.appendChild(button('mf-btn mf-btn-sm' + (chatOpen ? ' mf-btn-lap' : ''), label,
         () => { chatOpen = !chatOpen; renderChat(); renderDocBar(); },
-        'Chat with whoever else is in this stopwatch'));
+        'Chat with whoever else is in this shopwatch'));
     }
     row.appendChild(btns);
     box.appendChild(row);
@@ -703,9 +703,9 @@
     if (offerLegacy) {
       const note = el('div', 'mf-note');
       note.appendChild(document.createTextNode(
-        'The shop record this account kept before stopwatches could be shared is still here — ' +
+        'The shop record this account kept before shopwatches could be shared is still here — ' +
         legacyBlurb() + '. '));
-      note.appendChild(button('mf-link', 'Bring it in as a stopwatch', adoptLegacy));
+      note.appendChild(button('mf-link', 'Bring it in as a shopwatch', adoptLegacy));
       box.appendChild(note);
     }
   }
@@ -722,7 +722,7 @@
   }
 
   async function newDoc(seedBody, seedTitle) {
-    const title = prompt('What is this stopwatch called?',
+    const title = prompt('What is this shopwatch called?',
       seedTitle || (docs.mine.length ? 'Shop floor ' + (docs.mine.length + 1) : 'Shop floor'));
     if (title === null) return null;
     const made = await createDoc(title.trim() || 'Shop floor', seedBody);
@@ -730,7 +730,7 @@
     return made;
   }
 
-  // The buttons along the top act on the open stopwatch. With none open they
+  // The buttons along the top act on the open shopwatch. With none open they
   // make one first and then do what was asked, rather than doing nothing.
   function withDoc(fn) {
     return async (...args) => {
@@ -759,7 +759,7 @@
       const made = await ctx.api('/docs/' + doc.id + '/copy', 'POST');
       docs.mine.push(made.doc);
       await openDoc(made.doc.id);
-      flash('Copied into your own stopwatches, private to you.', true);
+      flash('Copied into your own shopwatches, private to you.', true);
     } catch (err) { flash('Not copied (' + err.message + ').'); }
   }
 
@@ -767,7 +767,7 @@
      Two separate questions, asked separately because they have different
      answers: who may open this, and who may change it. A privacy tier is a
      broadcast; an editor is an invitation, and it overrides the tier — that is
-     how you share a private stopwatch with the one person setting the job.
+     how you share a private shopwatch with the one person setting the job.
   ---------------------------------------------------------------- */
   let sharePanel = false;
   let shareEditors = null;   // names, once fetched
@@ -851,7 +851,7 @@
         .catch(() => flash(url));
     }));
     btns.appendChild(button('mf-btn mf-btn-quiet', 'Close', () => { sharePanel = false; renderShare(); }));
-    btns.appendChild(button('mf-btn mf-btn-danger', 'Delete stopwatch', deleteDoc));
+    btns.appendChild(button('mf-btn mf-btn-danger', 'Delete shopwatch', deleteDoc));
     box.appendChild(btns);
     box.scrollIntoView({ block: 'nearest' });
   }
@@ -904,7 +904,7 @@
     const list = el('div', 'mf-chat-list');
     if (!chat.length) {
       list.appendChild(el('div', 'mf-note',
-        'Nothing said yet. Whoever else has this stopwatch open sees what is typed here, ' +
+        'Nothing said yet. Whoever else has this shopwatch open sees what is typed here, ' +
         'and what anybody changes is logged alongside it.'));
     }
     for (const entry of chat) {
@@ -919,7 +919,7 @@
     list.scrollTop = list.scrollHeight;
 
     if (!canEdit()) {
-      box.appendChild(el('div', 'mf-note', 'Only people who can change this stopwatch can chat in it.'));
+      box.appendChild(el('div', 'mf-note', 'Only people who can change this shopwatch can chat in it.'));
       return;
     }
     const row = el('div', 'mf-addtime mf-chat-say');
@@ -960,16 +960,16 @@
     box.innerHTML = '';
     if (!shop && !doc) {
       const empty = el('div', 'mf-empty');
-      // An account that used this add-on before stopwatches existed has a shop
-      // record and no stopwatch, so this screen is the first thing it sees.
+      // An account that used this add-on before shopwatches existed has a shop
+      // record and no shopwatch, so this screen is the first thing it sees.
       // Telling it to start one, with no word of the floor already saved, would
       // read as having lost the lot — so the record leads, and starting an
       // empty one is the other option rather than the only one.
       if (legacy && legacy.has) {
         empty.appendChild(el('div', 'mf-empty-title', 'Your shop record is still here'));
         empty.appendChild(el('div', 'mf-empty-text',
-          'This account kept a floor before stopwatches could be shared — ' + legacyBlurb() +
-          '. Bring it in and it becomes your first stopwatch, yours and private, exactly as it ' +
+          'This account kept a floor before shopwatches could be shared — ' + legacyBlurb() +
+          '. Bring it in and it becomes your first shopwatch, yours and private, exactly as it ' +
           'was. It is copied rather than moved: the old record stays where it is either way.'));
         const row = el('div', 'mf-form-btns');
         row.appendChild(button('mf-btn mf-btn-go', 'Bring in my shop record', adoptLegacy));
@@ -978,12 +978,12 @@
         box.appendChild(empty);
         return;
       }
-      empty.appendChild(el('div', 'mf-empty-title', 'Start a stopwatch'));
+      empty.appendChild(el('div', 'mf-empty-title', 'Start a shopwatch'));
       empty.appendChild(el('div', 'mf-empty-text',
-        'A stopwatch holds one floor: its parts and their operations, its machines, its tool crib, ' +
+        'A shopwatch holds one floor: its parts and their operations, its machines, its tool crib, ' +
         'and every cycle timed against them. It is yours and private until you say otherwise, and ' +
         'it can be shared with the people running the job — to watch, or to work in alongside you.'));
-      empty.appendChild(button('mf-btn mf-btn-go', '+ New stopwatch', () => newDoc()));
+      empty.appendChild(button('mf-btn mf-btn-go', '+ New shopwatch', () => newDoc()));
       box.appendChild(empty);
       return;
     }
@@ -3052,7 +3052,7 @@
       flash('No parts, machines or tools could be read out of that file.');
       return;
     }
-    // A file read with nothing open makes the stopwatch to read it into, named
+    // A file read with nothing open makes the shopwatch to read it into, named
     // after the file. The plan below is against that record, so it is made
     // first — but only once the file has proved to have something in it.
     if (!doc) {

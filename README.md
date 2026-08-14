@@ -29,12 +29,12 @@ and turns on **AI generation** simply by setting environment variables.
   host's side of the line. The add-on says only what an empty document is and what a stored
   one may contain. Shopwatch is the first to use it, so a floor can be handed to the people
   running the job. See [Writing one](#writing-one).
-- **Stopwatches you can share.** Shopwatch keeps as many floors as an account needs rather
+- **Shopwatches you can share.** Shopwatch keeps as many floors as an account needs rather
   than one, each with its own name and privacy: **private** (only you and anyone you invite
   to edit), **friends**, or **everyone**. An invited editor gets in whatever the tier says,
   which is how a private floor reaches the one person setting the job; everybody else who
   can open it gets it read only and can save a copy of their own. Two people in the same
-  stopwatch see each other's cycles as they are timed, the chat logs what changed, and a
+  shopwatch see each other's cycles as they are timed, the chat logs what changed, and a
   shared one gets a feed card saying what is in it.
 - **Clone a part number, not just a machine.** A revision runs the route the number before
   it ran, so **Clone** on a part copies the whole route across: every operation, and every
@@ -566,15 +566,15 @@ parts gives a run of cycle times without stopping the watch. A time measured els
 typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>, <kbd>L</kbd> and
 <kbd>R</kbd> start/stop, mark a cycle and reset.
 
-**A stopwatch is one floor**, and an account keeps as many as it needs — one per cell, one
+**A shopwatch is one floor**, and an account keeps as many as it needs — one per cell, one
 per building, one to try something in — with a switcher at the top to move between them. A
 new one is private until its owner shares it, and sharing asks two questions separately:
 **who can open it** (private, friends, or everyone) and **who can change it** (named
-usernames, which override the tier — that is how a private stopwatch reaches the one person
+usernames, which override the tier — that is how a private shopwatch reaches the one person
 setting the job). Everybody else who can open it gets it read only, and can **save a copy**
-into a stopwatch of their own. Two people in the same one see each other's edits live, the
+into a shopwatch of their own. Two people in the same one see each other's edits live, the
 💬 chat is shared by everyone who can open it and logs the edits as they happen — *timed
-80° CNMG rougher at 00:33.3 on HAAS ST-20* — and a shared stopwatch gets a feed card saying
+80° CNMG rougher at 00:33.3 on HAAS ST-20* — and a shared shopwatch gets a feed card saying
 what is in it. None of that is implemented in the add-on: it is the host's document
 facility, the same one described under [Writing one](#writing-one).
 

@@ -43,7 +43,7 @@ to the built-in screens; add it there and it joins your toolbar. Without it
 installed, nothing about the app changes.
 
 The folder and the plugin id are still `manufacturing`: the id is the URL prefix
-for its API, and it is what every saved stopwatch is filed under, so renaming it
+for its API, and it is what every saved shopwatch is filed under, so renaming it
 would orphan every one already saved. Only the name on screen is Shopwatch.
 
 It needs a host that speaks **plugin contract v2** — the version that owns
@@ -51,19 +51,19 @@ documents, sharing and the live channel on an add-on's behalf. An older host
 refuses to load it and says so at startup rather than half-installing it.
 
 To take it off again: `node tools/install-plugin.js --remove manufacturing`.
-Stopwatches stay on each account and come back if it is reinstalled — as does its
+Shopwatches stay on each account and come back if it is reinstalled — as does its
 place in anyone's toolbar, which is kept rather than quietly dropped.
 
 ## Using it
 
-**Start a stopwatch.** A stopwatch is one floor: its parts and their operations,
+**Start a shopwatch.** A shopwatch is one floor: its parts and their operations,
 its machines, its tool crib, and every cycle timed against them. An account keeps
 as many as it needs — one per cell, one per building, one per customer, one to
 try something in — and the switcher at the top of the screen moves between them.
 A new one is **yours and private** until you say otherwise.
 
-Everything below happens inside the open stopwatch. Nothing crosses from one to
-another except by [saving a copy](#sharing-a-stopwatch) or by exporting a
+Everything below happens inside the open shopwatch. Nothing crosses from one to
+another except by [saving a copy](#sharing-a-shopwatch) or by exporting a
 spreadsheet out of one and importing it into another.
 
 **Add a part**, and give it the operations that make it:
@@ -87,7 +87,7 @@ spreadsheet out of one and importing it into another.
 | Cost | Optional — what one costs, for cost per part |
 
 **Set it up.** This is where the tool, the machine and the operation meet, and it
-is the thing the stopwatch times:
+is the thing the shopwatch times:
 
 | Field | What it is |
 | --- | --- |
@@ -240,62 +240,62 @@ that part, on parts that were actually cut, and a number nobody has run yet has
 nothing to show. So the clone reads as ops and tools with no measured time
 against them, which is exactly what it is until somebody stands at the machine.
 
-## Sharing a stopwatch
+## Sharing a shopwatch
 
 A cycle time is worth more to the people who did not take it. **Share** on the
-doc bar is where a stopwatch stops being only yours, and it asks two separate
+doc bar is where a shopwatch stops being only yours, and it asks two separate
 questions, because they have different answers.
 
 **Who can open it** — one of three:
 
 | | |
 | --- | --- |
-| **Private** | Only you, and anyone you invite to edit. This is where every stopwatch starts. |
+| **Private** | Only you, and anyone you invite to edit. This is where every shopwatch starts. |
 | **Friends** | The people you are friends with in the app can open it, and it appears in their feed. |
 | **Everyone** | Anyone with the link can open it, and it can be found in Discover. |
 
 **Who can change it** — a list of usernames, and it is a separate question
 because it *overrides* the tier: an invited editor can open a **private**
-stopwatch, time cycles in it and talk in it. That is how you hand the job to the
+shopwatch, time cycles in it and talk in it. That is how you hand the job to the
 person setting it, without publishing the shop to anybody else. Up to 20 people
-per stopwatch.
+per shopwatch.
 
 Everyone else who can open it gets it **read only**: the doc bar says so, and the
 screen simply never writes — no half-saved edit, no error after the fact. What
 they *can* do is **Save a copy**, which takes the whole record into a private
-stopwatch of their own, to change without touching yours.
+shopwatch of their own, to change without touching yours.
 
-**Work in it together.** Two people with the same stopwatch open see each other's
+**Work in it together.** Two people with the same shopwatch open see each other's
 edits as they happen — a cycle timed at the machine appears on the office screen
 without a reload, and the doc bar says how many people are in here. This is the
 same live channel the mind maps use. A time being typed in is never overwritten
 by someone else's save mid-keystroke: the incoming version is held until yours
 has gone.
 
-**Say something about it.** 💬 opens the stopwatch's chat. Everyone who can open
-the stopwatch reads it; everyone who can change it can post. Edits post
+**Say something about it.** 💬 opens the shopwatch's chat. Everyone who can open
+the shopwatch reads it; everyone who can change it can post. Edits post
 themselves into it — *timed 80° CNMG rougher at 00:33.3 on HAAS ST-20* — so the
 chat doubles as the log of what happened to the floor, and a question asked in it
 reaches whoever is in there without leaving the screen. The last 400 messages are
 kept.
 
-**In the feed.** A friends-or-everyone stopwatch gets a card in the feed of the
+**In the feed.** A friends-or-everyone shopwatch gets a card in the feed of the
 people who can see it, saying what is in it — *3 parts · 3 machines · 3 tools ·
-12 cycles timed* — and opening the card opens the stopwatch. Making one public,
+12 cycles timed* — and opening the card opens the shopwatch. Making one public,
 being invited to edit one, and a cycle being timed in one you are in all send the
 usual notification.
 
-**Copy link** hands you the stopwatch's address. It is not a magic link: whoever
-opens it still has to be allowed to see it, so sending a private stopwatch's link
+**Copy link** hands you the shopwatch's address. It is not a magic link: whoever
+opens it still has to be allowed to see it, so sending a private shopwatch's link
 to somebody shows them nothing until you invite them.
 
-**Delete stopwatch** takes it and everything in it, and says how many cycles that
+**Delete shopwatch** takes it and everything in it, and says how many cycles that
 is before it does. Anyone you shared it with loses it too.
 
 ### Coming from a private record
 
 An account that used Shopwatch before any of this could be shared has one private
-record sitting there. The screen offers to **bring it across** into a stopwatch
+record sitting there. The screen offers to **bring it across** into a shopwatch
 of its own — copied, not moved: the old record is left where it is, so a rolled
 back install still finds it.
 
@@ -307,7 +307,7 @@ floor runs. A part with no operations, an operation nothing is set up for, a too
 in the crib and an idle machine each get a row of their own, so the file is the
 whole record rather than only the parts that have been timed.
 
-**⤒ Import** reads one back, into the open stopwatch — or, with none open, into a
+**⤒ Import** reads one back, into the open shopwatch — or, with none open, into a
 new one named after the file. It is the same shape the export writes, so a file
 that came out of here goes back in unchanged — and a tool list somebody already
 keeps in a spreadsheet can be brought in by putting these headers on it:
@@ -379,17 +379,17 @@ chosen; an op named with no part gathers under a part called **Unassigned**.
 
 ## The record, as a relational schema
 
-The record is stored as one JSON document per stopwatch (see below), but it is
+The record is stored as one JSON document per shopwatch (see below), but it is
 relational in shape and worth reading that way. Six entities inside the
-stopwatch, and one junction doing most of the work:
+shopwatch, and one junction doing most of the work:
 
 ```mermaid
 erDiagram
-    ACCOUNT   ||--o{ STOPWATCH : owns
-    ACCOUNT   }o--o{ STOPWATCH : "may edit"
-    STOPWATCH ||--o{ MACHINE   : holds
-    STOPWATCH ||--o{ TOOL      : holds
-    STOPWATCH ||--o{ PART      : holds
+    ACCOUNT   ||--o{ SHOPWATCH : owns
+    ACCOUNT   }o--o{ SHOPWATCH : "may edit"
+    SHOPWATCH ||--o{ MACHINE   : holds
+    SHOPWATCH ||--o{ TOOL      : holds
+    SHOPWATCH ||--o{ PART      : holds
     PART      ||--o{ OPERATION : "is made by"
     OPERATION |o--o{ SETUP     : "is cut by"
     MACHINE   ||--o{ SETUP     : "holds"
@@ -398,7 +398,7 @@ erDiagram
 ```
 
 ```sql
-CREATE TABLE stopwatch (            -- one floor, and who may see it
+CREATE TABLE shopwatch (            -- one floor, and who may see it
   id          text PRIMARY KEY,
   owner_id    text NOT NULL REFERENCES account(id) ON DELETE CASCADE,
   title       text NOT NULL CHECK (length(title) <= 80),
@@ -407,38 +407,38 @@ CREATE TABLE stopwatch (            -- one floor, and who may see it
   created_at  timestamptz NOT NULL,
   updated_at  timestamptz NOT NULL
 );
-CREATE INDEX ON stopwatch (owner_id, updated_at DESC);
-CREATE INDEX ON stopwatch (visibility, updated_at DESC);   -- the feed
+CREATE INDEX ON shopwatch (owner_id, updated_at DESC);
+CREATE INDEX ON shopwatch (visibility, updated_at DESC);   -- the feed
 
-CREATE TABLE stopwatch_editor (     -- invited to change it, whatever the tier
-  stopwatch_id text NOT NULL REFERENCES stopwatch(id) ON DELETE CASCADE,
+CREATE TABLE shopwatch_editor (     -- invited to change it, whatever the tier
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   account_id   text NOT NULL REFERENCES account(id)   ON DELETE CASCADE,
-  PRIMARY KEY (stopwatch_id, account_id)
+  PRIMARY KEY (shopwatch_id, account_id)
 );
 
-CREATE TABLE stopwatch_message (    -- the chat, and what was done to the floor
+CREATE TABLE shopwatch_message (    -- the chat, and what was done to the floor
   id           text PRIMARY KEY,
-  stopwatch_id text NOT NULL REFERENCES stopwatch(id) ON DELETE CASCADE,
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   account_id   text     NULL REFERENCES account(id)   ON DELETE SET NULL,
   body         text NOT NULL CHECK (length(body) <= 400),
   kind         text NOT NULL DEFAULT 'said' CHECK (kind IN ('said', 'did')),
   at           timestamptz NOT NULL
 );
-CREATE INDEX ON stopwatch_message (stopwatch_id, at DESC);
+CREATE INDEX ON shopwatch_message (shopwatch_id, at DESC);
 
 CREATE TABLE machine (              -- what is on the floor
   id           text PRIMARY KEY,
-  stopwatch_id text NOT NULL REFERENCES stopwatch(id) ON DELETE CASCADE,
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   name         text NOT NULL CHECK (length(name) <= 60),
   notes        text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL
 );
-CREATE UNIQUE INDEX ON machine (stopwatch_id, lower(name));
+CREATE UNIQUE INDEX ON machine (shopwatch_id, lower(name));
 
 CREATE TABLE tool (                 -- the crib: true wherever the tool runs
   id            text PRIMARY KEY,
-  stopwatch_id  text NOT NULL REFERENCES stopwatch(id) ON DELETE CASCADE,
+  shopwatch_id  text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   part_number   text NOT NULL DEFAULT '' CHECK (length(part_number) <= 60),
   description   text NOT NULL DEFAULT '' CHECK (length(description) <= 80),
   cutting_edges int  NOT NULL DEFAULT 0 CHECK (cutting_edges BETWEEN 0 AND 64),
@@ -451,7 +451,7 @@ CREATE TABLE tool (                 -- the crib: true wherever the tool runs
 
 CREATE TABLE part (                 -- what is being made
   id           text PRIMARY KEY,
-  stopwatch_id text NOT NULL REFERENCES stopwatch(id) ON DELETE CASCADE,
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   number       text NOT NULL DEFAULT '' CHECK (length(number) <= 60),
   description  text NOT NULL DEFAULT '' CHECK (length(description) <= 80),
   notes        text NOT NULL DEFAULT '',
@@ -459,7 +459,7 @@ CREATE TABLE part (                 -- what is being made
   updated_at   timestamptz NOT NULL,
   CHECK (number <> '' OR description <> '')
 );
-CREATE UNIQUE INDEX ON part (stopwatch_id, lower(number)) WHERE number <> '';
+CREATE UNIQUE INDEX ON part (shopwatch_id, lower(number)) WHERE number <> '';
 
 CREATE TABLE operation (            -- a step in making one part
   id         text PRIMARY KEY,
@@ -497,8 +497,8 @@ CREATE TABLE cycle (                -- one part, timed
 );
 CREATE INDEX ON cycle (setup_id, at DESC);
 
-CREATE TABLE shop (                 -- one row per stopwatch: what the watch is on
-  stopwatch_id    text PRIMARY KEY REFERENCES stopwatch(id) ON DELETE CASCADE,
+CREATE TABLE shop (                 -- one row per shopwatch: what the watch is on
+  shopwatch_id    text PRIMARY KEY REFERENCES shopwatch(id) ON DELETE CASCADE,
   active_setup_id text NULL REFERENCES setup(id) ON DELETE SET NULL,
   version         int NOT NULL,
   updated_at      timestamptz NOT NULL
@@ -526,26 +526,26 @@ Natural keys, used to match records when a spreadsheet is imported: machine by
 `(machine_id, tool_id, operation_id, lower(station))`; cycle by
 `(setup_id, at, sec)`, which is what makes importing the same file twice a no-op.
 
-**`stopwatch` is the sharing boundary.** Everything on the floor hangs off one
-row of it, which is what makes a stopwatch shareable as a unit: `visibility`
-answers who may open it, `stopwatch_editor` answers who may change it, and the
+**`shopwatch` is the sharing boundary.** Everything on the floor hangs off one
+row of it, which is what makes a shopwatch shareable as a unit: `visibility`
+answers who may open it, `shopwatch_editor` answers who may change it, and the
 second overrides the first — an editor row lets somebody into a private
-stopwatch, which is the point of having two questions. Nothing below `stopwatch`
+shopwatch, which is the point of having two questions. Nothing below `shopwatch`
 carries a permission of its own, so there is no way for a machine or a cycle to
-end up visible to somebody the stopwatch is not.
+end up visible to somebody the shopwatch is not.
 
-Row caps, enforced on every write: 40 stopwatches per account, 20 editors and 400
-messages per stopwatch, and within one stopwatch 60 machines, 200 tools, 120
+Row caps, enforced on every write: 40 shopwatches per account, 20 editors and 400
+messages per shopwatch, and within one shopwatch 60 machines, 200 tools, 120
 parts, 300 operations, 200 setups, 300 cycles per setup.
 
 ## What it stores, and where
 
-Every stopwatch is saved on the account that made it, in the same database as the
-rest of the app. A stopwatch is **private until its owner shares it**, and what
+Every shopwatch is saved on the account that made it, in the same database as the
+rest of the app. A shopwatch is **private until its owner shares it**, and what
 sharing does is exactly what the Share panel says: a friends or public tier lets
 those people open it and puts a card in their feed, and an invited editor can
 open and change it whatever the tier is. Nothing is sent outside the app either
-way. Stopwatches are included in **Settings → Export my data**, and they are
+way. Shopwatches are included in **Settings → Export my data**, and they are
 deleted with the account — including for the people they were shared with.
 
 ## How it is put together
@@ -559,12 +559,12 @@ public/client.css    its styles, scoped under .mf-root
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —
-and the host owns the envelope around it: who a stopwatch belongs to, who may
+and the host owns the envelope around it: who a shopwatch belongs to, who may
 open it, who may change it, its live channel, its chat and its feed card. So this
 add-on has no permission code of its own to get wrong, and the routes under
 `/api/plugins/manufacturing/docs/...` are the host's, the same ones any add-on
 gets. What is left here is `GET /legacy`, which offers up the private record from
-before stopwatches could be shared.
+before shopwatches could be shared.
 
 `sanitize` rebuilds every field of what a client sends before it is stored, drops
 any operation whose part is gone and any setup whose tool or machine is gone, and
