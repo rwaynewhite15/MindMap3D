@@ -1116,6 +1116,23 @@
     }
     box.appendChild(head);
 
+    // A reader has no watch. The clock would sit at zero and never move, which
+    // reads as a broken app rather than as a permission — the same reason none
+    // of the controls are drawn. What the panel is for them is which setup they
+    // are looking at; the numbers below it are the point.
+    if (!canEdit()) {
+      stopTick();
+      els.time = null;
+      els.cutline = null;
+      box.classList.remove('mf-running');
+      if (shop.assignments.length > 1) {
+        box.appendChild(dropdown('mf-pick',
+          shop.assignments.map(other => ({ value: other.id, label: jobName(other) + ' — ' + opLabel(other) })),
+          a.id, selectJob, 'Setup being shown'));
+      }
+      return;
+    }
+
     els.time = el('div', 'mf-time', fmtClock(elapsed()));
     box.appendChild(els.time);
 

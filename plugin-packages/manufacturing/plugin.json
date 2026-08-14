@@ -1,7 +1,7 @@
 {
   "id": "manufacturing",
   "name": "Shopwatch",
-  "version": "5.3.0",
+  "version": "5.3.1",
   "description": "A shop-floor cycle-time stopwatch over the records behind each time: parts and their operations, machines, and a tool crib. A tool carries its part number, description and cutting edges; setting it up on a machine for one operation carries the cutting time, the edges indexed there and the parts run between indexes — with the op's cycle charted across its tools, and CSV in as well as out.",
   "hostVersion": 2,
   "nav": {

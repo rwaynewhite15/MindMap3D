@@ -42,6 +42,8 @@ and turns on **AI generation** simply by setting environment variables.
   disabled: the watch, the forms, the add/delete and reorder controls are simply absent, so
   nothing on screen looks live and does nothing. That fixed the same gap for signed-in readers
   of somebody else's shopwatch, who used to see a full set of buttons that quietly did nothing.
+  The clock goes too — one that can never move is as dead as a button that does nothing — leaving
+  a reader the setup named and the numbers under it.
 - **Measure actual time in cut.** A cycle time is rapids, tool changes and bar feed as well as
   cutting, and only the cutting part sets tool life. **Mark in cut** on the watch records it as it
   happens — press as the tool enters the material and again as it leaves, as often as it does so

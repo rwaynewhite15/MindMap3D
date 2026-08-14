@@ -334,9 +334,11 @@ to somebody shows them nothing until you invite them.
 customer, an auditor, a machine builder — anyone — and it opens for them signed
 out: the parts and their operations, the machines, the tool crib, the recorded
 cycles and the op-cycle chart, exactly as you see them. It is genuinely read
-only, and not by disabling things — the watch, the setup forms, the add and
-delete controls and the reorder arrows are simply not drawn, so nothing on the
-screen looks live and does nothing. All they get besides the floor is **⤓ Export**
+only, and not by disabling things — the stopwatch itself, the setup forms, the
+add and delete controls and the reorder arrows are simply not drawn, so nothing
+on the screen looks live and does nothing. The clock goes with them: one that
+can never move is as dead as a button that does nothing, so a reader gets the
+setup named and the numbers under it instead. All they get besides the floor is **⤓ Export**
 (reading it and downloading it are the same permission) and a way to sign in and
 start one of their own.
 
