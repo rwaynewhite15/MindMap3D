@@ -586,18 +586,45 @@
   }
 
   // One part done: record the split since the last cycle and keep running.
+  // Records the split since the last press. Says whether it recorded, because
+  // the caller below only moves on when something was actually timed.
   function lap() {
     const a = activeJob();
-    if (!a) { flash('Pick a tool at a machine first — a cycle time belongs to one.'); return; }
-    if (!watch.running && !watch.accum) { flash('Start the watch, then mark each cycle as it finishes.'); return; }
+    if (!a) { flash('Pick a tool at a machine first — a cycle time belongs to one.'); return false; }
+    if (!watch.running && !watch.accum) { flash('Start the watch, then mark each cycle as it finishes.'); return false; }
     const now = elapsed();
     const cycle = (now - watch.lastLap) / 1000;
-    if (cycle < 0.2) return; // a double-tap is not a cycle
+    if (cycle < 0.2) return false; // a double-tap is not a cycle
     watch.lastLap = now;
     watch.laps += 1;
     saveWatch();
     addRun(a, round(cycle, 2));
     renderWatch();
+    return true;
+  }
+
+  /* ---------------- down the op, tool by tool ----------------
+     An operation is a run of tools cutting one after another, and what you
+     want at the machine is each one's share of the cycle. This is the press
+     for that: it records the split against the tool that has just finished
+     cutting and moves the watch to the next tool in the running order,
+     without stopping — so the next split begins the moment the last one ends,
+     which is what actually happens at the spindle.
+
+     Past the last tool it comes back to the first, because that is what the
+     machine does: down the op is one part, and the next part starts again at
+     tool 1. Nothing is recorded by the move itself; a press that times
+     nothing (the watch not running, or a double tap) moves nothing either.
+  ---------------------------------------------------------------- */
+  function lapNext() {
+    const a = activeJob();
+    if (!a) { flash('Pick a tool at a machine first — a cycle time belongs to one.'); return; }
+    const order = opJobs(a);
+    // one tool in the op: there is nowhere to move on to, so this is a cycle
+    if (order.length < 2) { lap(); return; }
+    if (!lap()) return;
+    const i = order.findIndex(x => x.id === a.id);
+    selectJob(order[(i + 1) % order.length].id, true);   // the watch runs on
   }
 
   function reset() {
@@ -1036,6 +1063,14 @@
       btns.appendChild(button('mf-btn mf-btn-go' + (watch.running ? ' mf-btn-stop' : ''),
         watch.running ? 'Stop' : (watch.accum ? 'Resume' : 'Start'), startStop,
         'Space starts and stops the watch'));
+      // Only where there is a next tool to move to. On a one-tool op it would
+      // be the same press as Cycle done under a name that promises more.
+      if (order.length > 1) {
+        const next = order[(order.findIndex(x => x.id === a.id) + 1) % order.length];
+        btns.appendChild(button('mf-btn mf-btn-lap', 'Tool done →', lapNext,
+          'Records this tool\'s time and moves the watch to ' + jobName(next) +
+          ', without stopping (N)'));
+      }
       btns.appendChild(button('mf-btn mf-btn-lap', 'Cycle done', lap,
         'Records the time since the last cycle and keeps the watch running (L)'));
       btns.appendChild(button('mf-btn mf-btn-quiet', 'Reset', reset, 'Back to zero, keeping every recorded cycle (R)'));
@@ -2142,15 +2177,20 @@
   // Pointing the watch at a different setup. The time on the display belonged
   // to the one that just left, and its cycles are already recorded against it,
   // so the watch starts the new one from zero. Returns false if nothing moved.
-  function setActive(id) {
+  // Picking a tool by hand starts a fresh measurement, so the watch goes back
+  // to zero with it. Moving down the op mid-run is the opposite: the watch has
+  // to carry on, because the next tool starts cutting the moment the last one
+  // stops, and a reset there would throw away the split that is already
+  // running. Only lapNext asks for that.
+  function setActive(id, keepWatch) {
     if (!shop || shop.activeId === id) return false;
     shop.activeId = id;
-    reset();
+    if (!keepWatch) reset();
     return true;
   }
 
-  function selectJob(id) {
-    if (!setActive(id)) return;
+  function selectJob(id, keepWatch) {
+    if (!setActive(id, keepWatch)) return;
     save();
     render();
   }
@@ -3149,6 +3189,7 @@
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
     if (e.key === ' ') { e.preventDefault(); startStop(); return; }
     if (e.key === 'l' || e.key === 'L') { e.preventDefault(); lap(); return; }
+    if (e.key === 'n' || e.key === 'N') { e.preventDefault(); lapNext(); return; }
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); reset(); }
   }
 

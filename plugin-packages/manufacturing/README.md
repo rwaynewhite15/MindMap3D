@@ -116,9 +116,25 @@ part. Each press records the split since the last one, so a run of parts gives a
 run of cycle times without stopping the watch. **Reset** zeroes the display and
 keeps every recorded cycle.
 
-At a laptop, <kbd>Space</kbd> starts and stops, <kbd>L</kbd> marks a cycle and
-<kbd>R</kbd> resets. A time measured somewhere else is typed straight in as
-`42.6` or `1:23.4`.
+**Time the op tool by tool.** An operation is a run of tools cutting one after
+another, and **Tool done →** is the press for measuring each one's share of it:
+it records the split against the tool that has just finished cutting and moves
+the watch to the next tool in the running order, **without stopping**. So the
+next split starts the moment the last one ends, which is what actually happens
+at the spindle. Press it down the whole op and past the last tool it comes back
+to the first — down the op is one part, and the next part starts again at tool 1.
+
+Nothing is recorded by the move itself, and a press that times nothing moves
+nothing: with the watch stopped, or on a double tap, the tool does not change.
+It only appears on an op with more than one tool set up; on a single-tool op it
+would be **Cycle done** under a name that promises more.
+
+A few passes down the op and the **Op cycle** chart fills in on its own — each
+tool's average, its share of the total, and where the cycle actually goes.
+
+At a laptop, <kbd>Space</kbd> starts and stops, <kbd>L</kbd> marks a cycle,
+<kbd>N</kbd> is **Tool done →**, and <kbd>R</kbd> resets. A time measured
+somewhere else is typed straight in as `42.6` or `1:23.4`.
 
 The watch keeps time from the clock rather than counting up, so a phone that
 sleeps mid-cycle, a backgrounded tab and a page reload all come back reading

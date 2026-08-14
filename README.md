@@ -42,6 +42,10 @@ and turns on **AI generation** simply by setting environment variables.
   disabled: the watch, the forms, the add/delete and reorder controls are simply absent, so
   nothing on screen looks live and does nothing. That fixed the same gap for signed-in readers
   of somebody else's shopwatch, who used to see a full set of buttons that quietly did nothing.
+- **Measure a whole operation in one pass.** **Tool done →** on the watch records the tool that
+  has just finished cutting and moves straight to the next tool in the running order without
+  stopping, so a run down the op gives every tool its own cycle time and fills in the op-cycle
+  chart. Past the last tool it comes back to the first — down the op is one part.
 - **Clone a part number, not just a machine.** A revision runs the route the number before
   it ran, so **Clone** on a part copies the whole route across: every operation, and every
   setup on them — the same tools, on the same machines, in the same stations, with the
@@ -569,8 +573,11 @@ from where you meant to get them.
 A cycle-time stopwatch for the shop floor. **Start** when the tool goes in, **Cycle done**
 at the end of each part — each press records the split since the last one, so a run of
 parts gives a run of cycle times without stopping the watch. A time measured elsewhere is
-typed straight in as `42.6` or `1:23.4`. At a laptop, <kbd>Space</kbd>, <kbd>L</kbd> and
-<kbd>R</kbd> start/stop, mark a cycle and reset.
+typed straight in as `42.6` or `1:23.4`. **Tool done →** records against the tool that just
+finished cutting and moves the watch straight to the next tool in the op without stopping, so one
+pass down an operation measures every tool in it — past the last it comes back to the first, which
+is one part. At a laptop, <kbd>Space</kbd>, <kbd>L</kbd>, <kbd>N</kbd> and <kbd>R</kbd> start/stop,
+mark a cycle, move to the next tool and reset.
 
 **A shopwatch is one floor**, and an account keeps as many as it needs — one per cell, one
 per building, one to try something in — with a switcher at the top to move between them. A

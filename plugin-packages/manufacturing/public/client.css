@@ -470,8 +470,12 @@
 
 @media (max-width: 520px) {
   .mf-page { padding: 12px 10px 40px; }
+  /* Four presses do not fit across a phone, and wrapping three-then-one
+     leaves the last one stranded. Two by two instead: even rows, and a target
+     big enough for a thumb at the machine. */
   .mf-watch-btns { flex-wrap: wrap; }
-  .mf-watch-btns .mf-btn { min-width: 96px; }
+  .mf-watch-btns .mf-btn { flex: 1 1 calc(50% - 4px); min-width: 0; }
+  .mf-watch-btns .mf-btn-quiet { flex: 1 1 calc(50% - 4px); padding-left: 8px; padding-right: 8px; }
   .mf-run-n { width: 34px; }
 }
 
