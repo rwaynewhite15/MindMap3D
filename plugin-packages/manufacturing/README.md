@@ -17,23 +17,25 @@ operation.** That is the shape of the record:
 - a **part** carries its **operations**, and an operation belongs to exactly one
   part, because that is what an op is: a step in making *that* part, not a name
   that means the same thing everywhere
-- **setting a tool up** on a machine for one of those operations carries what is
-  only true of that combination: which **pocket** it sits in, how many of the
-  tool's edges are **indexed through** there, and how many **parts run between
-  one index and the next** — along with every cycle timed against it
-- and one machine and one operation together are a **tool layout**: since an op
-  belongs to one part, that is machine-, part- and operation-specific, which is
-  exactly what a tool layout is on the floor. It carries **a number of its
-  own** — *run TL 12* — and the tools set up on it are its pockets, in the order
-  they cut
+- a **tool layout** is the tooling for one operation and the **machines that run
+  it**. It carries **a number of its own** — *run TL 12* — and its **pockets** are
+  the tools in it, in the order they cut. One layout, several machines: two
+  identical lathes running the same op off the same arrangement are one layout
+  with both machines on it, not two that drift apart
+- a **pocket** carries what is only true there: which station it sits in, how
+  many of the tool's edges are **indexed through** it, and how many **parts run
+  between one index and the next**
+- a **cycle** is measured on a machine, so every recorded cycle names the one it
+  was taken on. The same layout on two machines is one arrangement with two sets
+  of times, and neither is averaged into the other
 
-So a tool runs on as many machines as it is set up on, a machine holds as many
-tools, and the same tool in the same machine cutting a different operation is on
-a different layout with its own times. **The screen is arranged around the tool
-layout**: it is what the charts are of, what the running order is within, what
-the PDF prints one of to a page, and what everything is filed under. Time enough
-cycles and the record answers the questions that are actually asked at the
-machine:
+**The screen is arranged around the tool layout**: it is what the charts are of,
+what the running order is within, what a PDF page is one of, and what everything
+is filed under. It opens on the **floor** — the cells, the operations that run in
+each, and under every operation the layout it is run as with its machines and its
+pockets — and **nothing is pulled up until you press a machine or a pocket**.
+Time enough cycles and the record answers the questions that are actually asked
+at the machine:
 
 - how long the layout really takes, on average, at best, and how far it spreads
 - how much of the measured cycle is actually cut, and how much of it is not
@@ -119,57 +121,50 @@ the end rather than being put in one it is not in.
 | Cutting edges | Usable cutting edges the tool has — 4 on a CNMG insert |
 | Cost | Optional — what one costs, for cost per part |
 
-**Set it up.** This is where the tool, the machine and the operation meet, and it
-is the thing the shopwatch times:
+**Make a tool layout.** This is the thing the shopwatch times, and the thing the
+floor asks for by name:
+
+| Field | What it is |
+| --- | --- |
+| Tool layout number | What it is called on the floor — its own number in this shopwatch |
+| Operation | Which op of which part it cuts |
+| Machines that run it | Every machine set up with this same arrangement — tick as many as run it |
+| Notes | Fixture, offsets, work stops: what the next person setting it should know |
+
+**One layout, several machines.** Two identical lathes running the same op off
+the same tooling are **one layout with both machines ticked**, not two layouts
+that look alike — so a change to a pocket is one edit and reaches both, and a
+second machine of the same kind joins by being ticked rather than by copying
+anything. The cycles stay apart: each is measured on a machine, each remembers
+which, and the screen shows the numbers for the machine you are standing at.
+
+**Put tools in its pockets:**
 
 | Field | What it is |
 | --- | --- |
 | Tool | Which tool from the crib this is |
-| Machine | Which machine it is running on |
-| Operation | Which op of which part it is cutting |
+| Tool layout | Which layout this pocket belongs to |
 | Pocket | Turret station or pocket it sits in: `T0303` |
 | Seq | Where the tool falls in that layout's running order — 1 cuts first |
 | Indexable edges | How many of the tool's edges get indexed through here |
 | Parts per index | Parts run between one edge index and the next |
 
-**The machine and the operation together are the tool layout**, so setting the
-first tool up on a pair makes one, already numbered; every tool set up on the
-same pair after that joins it. The same tool set up for a second operation gets
-its own times, its own edges and its own tool life there — which is the point. A rougher that spends 38
-seconds in cut on Op 20 and 12 on Op 10 of the same part is one tool with two
-setups, not two tools; the same is true of the same op on a second machine.
+The same tool in a second layout gets its own times, its own edges and its own
+tool life there — which is the point. A rougher that spends 38 seconds in cut on
+Op 20 and 12 on Op 10 of the same part is one tool in two layouts, not two tools.
 
 Leaving **indexable edges** blank means every edge the tool has. Adding a part
-leads straight into its first operation, adding an operation into setting a tool
-up for it, and adding a machine or a tool into setting that up too — because a
-part with no ops, a tool on no machine and a machine with no tools are all
+leads straight into its first operation, adding an operation into making the
+layout that cuts it, and making a layout into filling its first pocket — because
+a part with no ops, a layout with no tools and a machine with no layout are all
 records that cannot tell you anything yet.
 
-**Number the tool layout.** A layout appears the moment the first tool is set up
-on a machine for an operation, and it arrives with the next free number on it,
-because a layout nobody can name cannot be asked for. **TL 4** is a button
-wherever it appears — on the watch, on the layout panel, on each machine's
-groups — and pressing it is where the number is changed to whatever the floor
-actually calls that layout.
-
-| Field | What it is |
-| --- | --- |
-| Tool layout number | What this layout is called on the floor — its own number in this shopwatch |
-| Notes | Fixture, offsets, work stops: what the next person setting it should know |
-
-**Two layouts cannot share a number**, and saying so is the whole of the
-validation: a number that names two layouts names neither, so the form says
-which layout already answers to it and changes nothing. The machine, the part
-and the op are not fields here — they are what the layout *is*, settled by the
-tools set up on it — and there is no delete either: a layout exists exactly as
-long as it has tools, so taking the last one off is what ends it, and its number
-goes back in the pot.
-
-Numbers survive everything else. Cloning a machine or a part number gives the
-new pairs their own next-free numbers; a spreadsheet exported and read back
-brings its numbers with it; and a floor recorded before layouts existed opens
-with every pair already numbered, machine by machine and, within a machine, in
-the order the ops run.
+**Pick a tool to time it.** The floor lists the cells, the operations in each and
+the layout each is run as. Pressing a **machine** on a layout says *I am at this
+machine running this layout*, and the watch comes up on its first tool; pressing
+a **pocket** puts the watch on that tool. **✕** puts it away again and gives the
+screen back to the floor. Nothing is pulled up until you ask for it — an empty
+stopwatch pointed at nothing is the biggest thing on a screen saying the least.
 
 **Time it.** **Start** when the tool goes in, **Cycle done** at the end of each
 part. Each press records the split since the last one, so a run of parts gives a
@@ -312,24 +307,19 @@ Hovering or tabbing to either a column or a row lights up the other.
 a measurement nobody took. It is drawn as an outline with nothing in it, listed
 as **not marked**, and counted in a line under the chart.
 
-**Read it from three ends.** **Parts and operations** lists each part with its
-ops, and each op with the tool layouts it runs as — *TL 3 Haas ST-20, TL 7
-Doosan* — how many tools are set up for it and what they measure. **Cells and
-machines** lists the floor by area: each cell in flow order, the machines in it
-in the order the work reaches them, and under each machine its tool layouts with
-the tools of each in the order they cut. **Tools** lists the crib, each tool with
-the layouts it is on as chips — click one to point the watch at that tool, on
-that layout. One filter box narrows all three, and it knows the names things are
-asked for by: typing **TL 12** (or just **12**) asks for everything on that
-layout, and typing a **cell's name** asks for everything in that cell.
+**The floor is the list.** It is the shop read the way it is walked: the
+**cells** in flow order, the **machines** in each, the **operations** that run
+there in the order the part is made, and under every operation the **tool
+layout** it is run as — its number, its machines as buttons, and its pockets.
+Under it, **Parts and operations** is the short list of what is being made, and
+**Tools** is the crib. One filter box narrows all three, and it knows the names
+things are asked for by: typing **TL 12** (or just **12**) asks for everything on
+that layout, and typing a **cell's name** asks for everything in that cell.
 
-**Each cell says what runs through it.** Under a cell's heading are its routes —
-one line per part, that part's operations in the order they are cut in this cell,
-with the machine each runs on: *12345-A · Op 10 · Haas ST-20 / Doosan 2600SY →
-Op 20 · Haas ST-20*. Where two machines in the cell can cut the same operation,
-both are named on the one step, because that is a choice about where to run it
-and not two steps. That line is the order of operations for the cell, and it is
-one lane of the value stream below.
+**Each cell is its order of operations.** Opening a cell lists the operations
+that run in it in the order the part is made, and under each the layout that cuts
+it. That is the order of operations for that cell, and it is one lane of the
+value stream below.
 
 **The screen opens closed.** Every heading on it folds — the three lists, each
 part and each machine inside them, the tool layout panel, the cut-and-waste
@@ -666,6 +656,16 @@ the machine. Two answers to one question, only one of them evidence: the typed
 one goes into that setup's notes rather than being thrown away, and the measured
 one stands alone.
 
+**Version 6** tied a layout to exactly one machine — the pair `(machine,
+operation)` *was* the layout — so identical machines each had one and the same
+arrangement was typed twice. Each old pair becomes a layout with one machine on
+it, every setup moves onto the layout it was part of, and each cycle keeps the
+machine it was measured on. Nothing is merged: two machines that ran the same op
+stay two layouts, because nobody has said their tooling is the same, and saying
+so is a decision the floor makes by ticking a machine onto a layout. Setups that
+named a machine but no operation had no layout at all; they get one — that
+machine, no operation — which is the state they were already in.
+
 **Version 5** had no cells: a machine stood on its own and the floor had no
 areas. Nothing is invented for it — a record read in comes back with no cells and
 every machine outside one, which is exactly the floor it described, and the lists
@@ -696,13 +696,12 @@ erDiagram
     SHOPWATCH   ||--o{ TOOL        : holds
     SHOPWATCH   ||--o{ PART        : holds
     PART        ||--o{ OPERATION   : "is made by"
-    OPERATION   |o--o{ SETUP       : "is cut by"
-    MACHINE     ||--o{ SETUP       : "holds"
-    TOOL        ||--o{ SETUP       : "is used in"
-    SETUP       ||--o{ CYCLE       : "was timed as"
-    MACHINE     ||--o{ TOOL_LAYOUT : "is set up as"
-    OPERATION   ||--o{ TOOL_LAYOUT : "is cut as"
-    TOOL_LAYOUT ||--o{ SETUP       : "is made of"
+    OPERATION   |o--o{ TOOL_LAYOUT : "is cut by"
+    TOOL_LAYOUT }o--o{ MACHINE     : "is run on"
+    TOOL_LAYOUT ||--o{ POCKET      : "is made of"
+    TOOL        ||--o{ POCKET      : "is used in"
+    POCKET      ||--o{ CYCLE       : "was timed as"
+    MACHINE     ||--o{ CYCLE       : "was timed on"
 ```
 
 ```sql
@@ -794,11 +793,10 @@ CREATE TABLE operation (            -- a step in making one part
 );
 CREATE UNIQUE INDEX ON operation (part_id, lower(name));
 
-CREATE TABLE setup (                -- one tool, on one machine, doing one op
+CREATE TABLE pocket (               -- one tool in one pocket of one layout
   id              text PRIMARY KEY,
-  tool_id         text NOT NULL REFERENCES tool(id)      ON DELETE CASCADE,
-  machine_id      text NOT NULL REFERENCES machine(id)   ON DELETE CASCADE,
-  operation_id    text     NULL REFERENCES operation(id) ON DELETE SET NULL,
+  layout_id       text NOT NULL REFERENCES tool_layout(id) ON DELETE CASCADE,
+  tool_id         text NOT NULL REFERENCES tool(id)        ON DELETE CASCADE,
   station         text NOT NULL DEFAULT '' CHECK (length(station) <= 20),
   seq             int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),
   index_edges     int  NOT NULL DEFAULT 0 CHECK (index_edges BETWEEN 0 AND 64),
@@ -807,30 +805,34 @@ CREATE TABLE setup (                -- one tool, on one machine, doing one op
   created_at      timestamptz NOT NULL,
   updated_at      timestamptz NOT NULL
 );
-CREATE INDEX ON setup (machine_id, operation_id, seq);   -- the running order
+CREATE INDEX ON pocket (layout_id, seq);   -- the running order
 
-CREATE TABLE tool_layout (          -- one machine cutting one operation
+CREATE TABLE tool_layout (          -- the tooling for one operation
   id           text PRIMARY KEY,
-  shopwatch_id text NOT NULL REFERENCES shopwatch(id)  ON DELETE CASCADE,
-  machine_id   text NOT NULL REFERENCES machine(id)    ON DELETE CASCADE,
-  operation_id text NOT NULL REFERENCES operation(id)  ON DELETE CASCADE,
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
+  operation_id text     NULL REFERENCES operation(id) ON DELETE SET NULL,
   number       int  NOT NULL CHECK (number BETWEEN 1 AND 9999),
   notes        text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL
 );
--- one layout per pair, and a number that names exactly one layout
-CREATE UNIQUE INDEX ON tool_layout (machine_id, operation_id);
-CREATE UNIQUE INDEX ON tool_layout (shopwatch_id, number);
+CREATE UNIQUE INDEX ON tool_layout (shopwatch_id, number);  -- a number names one layout
 
-CREATE TABLE cycle (                -- one part, timed
-  id       text PRIMARY KEY,
-  setup_id text NOT NULL REFERENCES setup(id) ON DELETE CASCADE,
-  sec      numeric NOT NULL CHECK (sec > 0 AND sec <= 86400),
-  at       timestamptz NOT NULL,
-  note     text NOT NULL DEFAULT '' CHECK (length(note) <= 80)
+CREATE TABLE tool_layout_machine (  -- the machines that run it
+  layout_id  text NOT NULL REFERENCES tool_layout(id) ON DELETE CASCADE,
+  machine_id text NOT NULL REFERENCES machine(id)     ON DELETE CASCADE,
+  PRIMARY KEY (layout_id, machine_id)
 );
-CREATE INDEX ON cycle (setup_id, at DESC);
+
+CREATE TABLE cycle (                -- one part, timed, on one machine
+  id         text PRIMARY KEY,
+  pocket_id  text NOT NULL REFERENCES pocket(id)  ON DELETE CASCADE,
+  machine_id text     NULL REFERENCES machine(id) ON DELETE SET NULL,
+  sec        numeric NOT NULL CHECK (sec > 0 AND sec <= 86400),
+  at         timestamptz NOT NULL,
+  note       text NOT NULL DEFAULT '' CHECK (length(note) <= 80)
+);
+CREATE INDEX ON cycle (pocket_id, machine_id, at DESC);
 
 CREATE TABLE shop (                 -- one row per shopwatch: what the watch is on
   shopwatch_id    text PRIMARY KEY REFERENCES shopwatch(id) ON DELETE CASCADE,
@@ -840,43 +842,40 @@ CREATE TABLE shop (                 -- one row per shopwatch: what the watch is 
 );
 ```
 
-**`tool_layout` is the pair `setup` keeps implying.** `(machine_id,
-operation_id)` is already what the running order is numbered within, what both
-charts are of and what a PDF page is — so the only thing a layout table adds is
-the one fact about that pair which is a decision rather than a reading: its
-`number`. Everything else about a layout is an aggregate over the setups that
-name the same pair, which is why there is no `cycle_time` or `tool_count` on it.
-Its two unique indexes are the whole of its integrity: one layout per pair, and
-one layout per number.
+**`tool_layout` is the arrangement, and `tool_layout_machine` is where it runs.**
+Splitting the machines out of the layout is what lets two identical machines
+share one: the pockets hang off the layout, so a change to the tooling is one
+row, while the machines are a set that can grow by one insert. `number` is the
+only thing on a layout that is a decision rather than a reading — everything else
+is an aggregate over its pockets — and its unique index is the whole of its
+integrity: a number names exactly one layout.
 
-The pair is derived, so the layout is too: a pair with no setups left is not a
-layout, and its row goes — freeing its number — while a pair that gains its first
-setup gets a row with the next free number. Both directions are enforced on every
-write rather than left to the client, so a record that arrives without layouts
-(anything written before version 5) comes back with them.
+**`pocket` is the junction now.** It ties a tool to a layout and carries what is
+true only there: `index_edges` and `parts_per_index`. A tool in two layouts is
+two rows with two tool lives, which is why the same insert can be a rougher on
+one op and a finisher on another without either figure moving.
 
-**`setup` is the whole point.** Tools and machines are many-to-many, and so are
-tools and operations, and machines and operations; all three relations are the
-same junction read from a different side. It is a *ternary* junction with
-attributes: `index_edges` and `parts_per_index` are true of that combination and
-of nothing narrower, which is why a tool cutting two operations in the same
-machine is two rows with two tool lives. `cycle` hangs off
-`setup` for the same reason — a measurement belongs to the exact combination it
-was measured on.
+**`cycle.machine_id` is what keeps a shared layout honest.** A measurement
+belongs to the machine it was taken on, so a layout run on two machines has two
+sets of cycles under the same pocket and the screen reads whichever machine you
+are standing at. It is nullable because a cycle recorded before layouts could be
+shared has no machine on it — at the time there was only one — and those answer to
+any machine rather than to none.
 
-`operation_id` is the one nullable foreign key: a tool can be in a machine before
-anybody has said what it is cutting, and a cloned machine arrives in exactly that
-state. Nothing derived is stored — averages, spread, parts per tool, minutes per
-edge, tools per hundred and cost per part are all computed from these columns, so
-no stale figure can contradict the cycles it came from.
+`operation_id` is nullable too: tooling can be laid out before anybody says which
+op it cuts, and deleting an operation leaves its layouts standing on their
+machines with nothing named to cut, which is a state the floor can see and fix.
+Nothing derived is stored — averages, spread, parts per tool, minutes per edge,
+tools per hundred and cost per part are all computed from these columns, so no
+stale figure can contradict the cycles it came from.
 
 Natural keys, used to match records when a spreadsheet is imported: machine by
 `lower(name)`; tool by `(lower(part_number), lower(description))`; part by
-`lower(number)`; operation by `(part_id, lower(name))`; setup by
-`(machine_id, tool_id, operation_id, lower(station))`; tool layout by
-`(machine_id, operation_id)` — never by its number, which is a name rather than
-an identity and is taken from a file only where it is free; cycle by
-`(setup_id, at, sec)`, which is what makes importing the same file twice a no-op.
+`lower(number)`; operation by `(part_id, lower(name))`; tool layout by the
+operation and machine a row names — never by its number, which is a name rather
+than an identity and is taken from a file only where it is free; pocket by
+`(layout_id, tool_id, lower(station))`; cycle by `(pocket_id, at, sec)`, which is
+what makes importing the same file twice a no-op.
 
 **`shopwatch` is the sharing boundary.** Everything on the floor hangs off one
 row of it, which is what makes a shopwatch shareable as a unit: `visibility`
@@ -898,7 +897,8 @@ the grouping rather than the machines.
 
 Row caps, enforced on every write: 40 shopwatches per account, 20 editors and 400
 messages per shopwatch, and within one shopwatch 40 cells, 60 machines, 200 tools,
-120 parts, 300 operations, 200 setups, 200 tool layouts, 300 cycles per setup.
+120 parts, 300 operations, 200 tool layouts, 20 machines per layout, 200 pockets,
+300 cycles per pocket.
 
 ## What it stores, and where
 
@@ -925,10 +925,15 @@ screen is about, in one shape — drawn as an inline SVG in `client.js` rather t
 shipped as a file: nothing to fetch, nothing to keep a second copy of at another
 size, and it takes the palette with it, since the mark is `currentColor` and the
 pivot is punched out in the page colour. The name beside it splits the way the
-app's own does, **Shop**·*watch*, and it appears twice: top left on the screen,
-and in the footer of every printed tool layout sheet. Nothing sits under it —
-a line of copy saying what the screen is for is for somebody who has not opened
-it yet.
+app's own does, **Shop**·*watch*.
+
+It goes **in the app's top bar**, at the left of the account's toolbar, through
+the slot the host offers the screen that is open (`ctx.brand`) — the bar has the
+room and the screen has better things to do with a row of its own. A host that
+offers no such slot gets it drawn on the page instead, exactly as before, so the
+add-on still runs on one. The same mark signs the footer of every printed tool
+layout sheet. Nothing sits under it either way: a line of copy saying what the
+screen is for is for somebody who has not opened it yet.
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —

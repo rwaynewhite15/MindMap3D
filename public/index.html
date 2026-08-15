@@ -11,6 +11,10 @@
 <body>
 
 <header id="topbar" hidden>
+  <!-- The screen that is open puts its own name here, if it has one to put. The
+       bar itself still carries no title of its own: what fills this is whatever
+       is on show, and it is cleared on the way out of that screen. -->
+  <div id="navBrand" class="nav-brand"></div>
   <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
       🔔<span id="notifBadge" class="badge" hidden></span>

@@ -1531,6 +1531,8 @@ function show(name) {
   for (const [id, p] of pluginViews) p.section.hidden = name !== pluginViewName(id);
   // now that the active section is set, rebuild the outline against its map
   if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
+  // A name in the bar belongs to the screen that put it there
+  if (!activePluginId || name !== pluginViewName(activePluginId)) clearNavBrand('');
   // hide the top bar (and its hamburger) only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
   $('#navToggle').hidden = name === 'auth';
@@ -1818,6 +1820,10 @@ function pluginCtx(id) {
     api: (path, method, body) => api('/api/plugins/' + id + (path || ''), method, body),
     // A copy of the signed-in user, or null. A copy so an add-on cannot edit it.
     me: () => (me ? { ...me } : null),
+    // The add-on's own name, in the top bar, while its screen is the one on
+    // show. Passing nothing clears it. It is cleared on the way out too, so an
+    // add-on cannot leave its name over somebody else's screen.
+    brand: node => setNavBrand(id, node),
     // Navigate within the add-on: ctx.go('t/abc') → #/p/<id>/t/abc
     go: sub => { location.hash = '#/p/' + id + (sub ? '/' + sub : ''); },
   };
@@ -1922,9 +1928,27 @@ function openPlugin(id, sub) {
 
 // Leaving an add-on's screen for anything else: its cue to flush a pending
 // save, the way the desk does on its way out.
+// Whose name is in the top bar, and the name itself. The owner is kept so that
+// leaving a screen only clears the name that screen put there.
+let navBrandOwner = '';
+
+function setNavBrand(ownerId, node) {
+  const slot = $('#navBrand');
+  if (!slot) return;
+  slot.innerHTML = '';
+  navBrandOwner = node ? ownerId : '';
+  if (node) slot.appendChild(node);
+}
+
+function clearNavBrand(ownerId) {
+  if (ownerId && navBrandOwner !== ownerId) return;
+  setNavBrand('', null);
+}
+
 function leaveActivePlugin(nextName) {
   if (!activePluginId || nextName === pluginViewName(activePluginId)) return;
   const entry = pluginViews.get(activePluginId);
+  clearNavBrand(activePluginId);
   activePluginId = null;
   if (entry && entry.def && entry.def.leave) {
     try { entry.def.leave(); } catch (err) { console.error(err); }

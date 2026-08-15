@@ -104,10 +104,12 @@ and turns on **AI generation** simply by setting environment variables.
   process boxes banded by cell, with the process time by step and a printable page.
   It draws only what has been measured: inventory, changeover and lead time are not
   in the record, so they are not on the map, and it says so.
-- **Tool layouts, numbered and charted.** A layout appears the moment the first tool is
-  set up on a machine for an operation, already carrying the next free number; **TL 4** is
-  a button wherever it shows, and pressing it is where the number becomes whatever the
-  floor calls that layout. No two layouts share one. Setups carry a **sequence** within
+- **Tool layouts, numbered, shared and charted.** A layout is the tooling for one
+  operation and **the machines that run it** — two identical lathes running the same op off
+  the same arrangement are one layout with both machines ticked, so a change to a pocket is
+  one edit and reaches both. Every recorded cycle names the machine it was taken on, so
+  their times stay apart and the screen shows the numbers for the machine you are standing
+  at. **TL 4** is a button wherever it shows, and no two layouts share a number. Setups carry a **sequence** within
   their layout — 1 cuts first, reorderable with ↑ / ↓ — and the **Tool layout** panel sums
   their averages into the layout's cycle, with a stacked bar dividing it between the tools
   in the order they run. The segments step along one cyan ramp light→dark so the running
@@ -135,6 +137,12 @@ and turns on **AI generation** simply by setting environment variables.
   original comes across once and waits for one. Tick **bring the operations too** and each
   setup arrives whole instead, on the same op with its tool life. The
   recorded cycles stay with the original either way, where they were measured.
+- **It opens on the floor, with nothing pulled up.** The cells, the operations that run in
+  each, and under every operation the layout it is run as with its machines and its
+  pockets. Pressing a **machine** says *I am here, running this* and brings the watch up on
+  its first tool; pressing a **pocket** puts the watch on that tool; **✕** puts it away
+  again. Until then there is no stopwatch on screen at all — an empty clock pointed at
+  nothing is the biggest thing on a screen saying the least.
 - **The screen opens closed.** Every heading in Shopwatch folds — the three lists and
   everything inside them, the tool layout panel, the cut-and-waste panel, the value
   stream, the recorded cycles and the stopwatch itself — and all of them start closed,
@@ -143,8 +151,12 @@ and turns on **AI generation** simply by setting environment variables.
   in cut, the part's process time, a cell's machines. What is kept on the device is what
   you have **opened**, so records added later arrive closed too. Searching opens
   everything, so a filter can never be answered by a closed heading.
-- **The top bar carries no title.** It is the account's toolbar and its notification bell,
-  aligned to the right; the screen underneath says what it is.
+- **The open screen puts its name in the top bar.** The bar has no title of its own — it
+  is the account's toolbar and its notification bell, aligned right — but a screen that has
+  a name and a mark can hand them to the slot at its left, and Shopwatch does. It is
+  cleared on the way out, so a screen's name never sits over somebody else's, and a screen
+  that sets none leaves the bar exactly as it was. That is a row the screen underneath no
+  longer spends on saying what it is.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
