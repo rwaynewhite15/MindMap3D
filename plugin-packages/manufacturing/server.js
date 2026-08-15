@@ -24,6 +24,12 @@
                    is only true of that combination — how many of the tool's
                    edges are indexed through there, how many parts run between
                    one index and the next, and every cycle timed against it
+     layouts       one machine and one operation: the tool layout. Because an
+                   operation belongs to one part, a layout is machine-, part-
+                   and operation-specific, which is exactly what a tool layout
+                   is on the floor. It carries a number, because a number is
+                   somebody's decision rather than anything derived; every other
+                   thing about a layout is read off the assignments on it
 
    A tool runs on as many machines as it is assigned to, and a machine holds as
    many tools; neither owns the other. The same tool on the same machine doing
@@ -46,6 +52,8 @@ const MAX_TOOLS = 200;            // tools in the crib
 const MAX_PARTS = 120;            // part numbers being made
 const MAX_OPERATIONS = 300;       // operations across all of those parts
 const MAX_ASSIGNMENTS = 200;      // tool-on-machine-for-an-operation links
+const MAX_LAYOUTS = 200;          // tool layouts: machine-and-operation pairs with tools on them
+const MAX_LAYOUT_NUMBER = 9999;   // what a tool layout is called on the floor
 const MAX_RUNS = 300;             // recorded cycles kept per assignment, newest first
 const MAX_RUN_SEC = 86400;        // a single cycle longer than a day is a stuck timer
 const MAX_EDGES = 64;             // cutting edges on one tool
@@ -199,11 +207,101 @@ module.exports = function (ctx) {
     return a;
   }
 
+  // One tool layout: one machine, one operation, and the number the floor asks
+  // for it by. Nothing else is stored, because nothing else about a layout is a
+  // decision — its tools, its cycle and its time in cut are all read off the
+  // assignments that name the same machine and the same operation.
+  function sanitizeLayout(raw, machineIds, operationIds) {
+    if (!raw || typeof raw !== 'object') return null;
+    const machineId = text(raw.machineId, 24);
+    const operationId = text(raw.operationId, 24);
+    // A layout is a machine and an operation. Missing either, there is nothing
+    // for it to be the layout of.
+    if (!machineIds.has(machineId) || !operationIds.has(operationId)) return null;
+    return stamp(raw, {
+      id: text(raw.id, 24) || newId(),
+      machineId,
+      operationId,
+      number: num(raw.number, MAX_LAYOUT_NUMBER, true), // 0 here means "give it one"
+      notes: text(raw.notes, 400),
+    });
+  }
+
+  const pairKey = (machineId, operationId) => machineId + '\u0000' + operationId;
+
+  /* Every machine-and-operation pair with a tool set up on it is a tool layout,
+     and every tool layout has a number no other layout in the shopwatch has.
+     This is what holds both of those true, whatever arrived: pairs nobody has
+     numbered are numbered, a number two layouts claim goes to the first of them
+     and the second is given a free one, and a pair whose last tool has gone
+     stops being a layout and hands its number back.
+
+     It runs on the way in and on the way out, so it is also the conversion from
+     every record written before layouts existed: such a record simply has no
+     layouts, and comes back with one per pair, numbered machine by machine and,
+     within a machine, in the order the ops run — the order somebody numbering
+     them by hand would have used. */
+  function fillLayouts(shop, raw) {
+    const machineIds = new Set(shop.machines.map(m => m.id));
+    const operationIds = new Set(shop.operations.map(o => o.id));
+    const live = new Set();
+    for (const a of shop.assignments) {
+      if (a.operationId) live.add(pairKey(a.machineId, a.operationId));
+    }
+
+    const seen = new Set();
+    const taken = new Set();
+    for (const item of list(raw)) {
+      const layout = sanitizeLayout(item, machineIds, operationIds);
+      if (!layout) continue;
+      const key = pairKey(layout.machineId, layout.operationId);
+      // one pair is one layout, and a pair with no tool on it is not one at all
+      if (!live.has(key) || seen.has(key)) continue;
+      if (taken.has(layout.number)) layout.number = 0;
+      seen.add(key);
+      if (layout.number) taken.add(layout.number);
+      if (shop.layouts.length < MAX_LAYOUTS) shop.layouts.push(layout);
+    }
+
+    let next = 1;
+    const free = () => {
+      while (taken.has(next) && next < MAX_LAYOUT_NUMBER) next++;
+      taken.add(next);
+      return next;
+    };
+    for (const layout of shop.layouts) if (!layout.number) layout.number = free();
+
+    const machineName = new Map(shop.machines.map(m => [m.id, m.name]));
+    const opById = new Map(shop.operations.map(o => [o.id, o]));
+    const partNumber = new Map(shop.parts.map(p => [p.id, p.number || p.desc]));
+    const address = key => {
+      const [machineId, operationId] = key.split('\u0000');
+      const op = opById.get(operationId);
+      return [
+        machineName.get(machineId) || '',
+        (op && partNumber.get(op.partId)) || '',
+        String(op && op.seq ? op.seq : 999).padStart(4, '0'),
+        (op && op.name) || '',
+      ].join(' ');
+    };
+    const missing = [...live].filter(key => !seen.has(key))
+      .sort((x, y) => address(x).localeCompare(address(y)));
+    const now = Date.now();
+    for (const key of missing) {
+      if (shop.layouts.length >= MAX_LAYOUTS) break;
+      const [machineId, operationId] = key.split('\u0000');
+      shop.layouts.push({
+        id: newId(), machineId, operationId, number: free(), notes: '',
+        createdAt: now, updatedAt: now,
+      });
+    }
+  }
+
   function emptyShop() {
     return {
-      version: 4,
+      version: 5,
       machines: [], tools: [], parts: [], operations: [], assignments: [],
-      activeId: '', updatedAt: 0,
+      layouts: [], activeId: '', updatedAt: 0,
     };
   }
 
@@ -454,6 +552,12 @@ module.exports = function (ctx) {
       keep(shop.assignments, sanitizeAssignment(raw, toolIds, machineIds, operationIds), MAX_ASSIGNMENTS);
     }
 
+    // The tool layouts, once the assignments are in: which machine-and-operation
+    // pairs are real is read off them, so nothing here can name a pair that has
+    // no tools on it. A record from before layouts existed has none to read, and
+    // comes out of this numbered.
+    fillLayouts(shop, s.layouts);
+
     // The stopwatch points at one assignment. An id that no longer names one
     // (it was deleted on another device) falls back to nothing selected.
     const activeId = text(s.activeId, 24);
@@ -469,6 +573,8 @@ module.exports = function (ctx) {
     maxParts: MAX_PARTS,
     maxOperations: MAX_OPERATIONS,
     maxAssignments: MAX_ASSIGNMENTS,
+    maxLayouts: MAX_LAYOUTS,
+    maxLayoutNumber: MAX_LAYOUT_NUMBER,
     maxRuns: MAX_RUNS,
     maxRunSec: MAX_RUN_SEC,
     maxEdges: MAX_EDGES,
@@ -485,6 +591,9 @@ module.exports = function (ctx) {
     if (shop.parts.length) bits.push(shop.parts.length + (shop.parts.length === 1 ? ' part' : ' parts'));
     if (shop.machines.length) bits.push(shop.machines.length + (shop.machines.length === 1 ? ' machine' : ' machines'));
     if (shop.tools.length) bits.push(shop.tools.length + (shop.tools.length === 1 ? ' tool' : ' tools'));
+    if (shop.layouts.length) {
+      bits.push(shop.layouts.length + (shop.layouts.length === 1 ? ' tool layout' : ' tool layouts'));
+    }
     if (timed) bits.push(timed + (timed === 1 ? ' cycle timed' : ' cycles timed'));
     return bits.join(' · ') || 'nothing in it yet';
   }

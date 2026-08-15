@@ -132,6 +132,33 @@
   white-space: nowrap;
 }
 
+/* ---------------- the tool layout number ----------------
+   What a layout is asked for by on the floor — "run TL 12" — so it is drawn as
+   a plate rather than as text: the same shape wherever it appears, and the way
+   in to changing the number where it can be changed. */
+.mf-tl {
+  font-family: var(--mf-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  flex: none;
+}
+.mf-tl-btn:hover { background: var(--accent); color: var(--bg); }
+.mf-tl-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mf-tl-sm { font-size: 11px; padding: 1px 6px; }
+
+/* The panel heading it sits in: the section name and the number on one line,
+   the address under them, and what can be done with the layout under that. */
+.mf-chart-heading { min-width: 0; }
+.mf-tl-row { display: flex; align-items: center; gap: 8px; }
+.mf-tl-acts { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+
 .mf-time {
   font-family: var(--mf-mono);
   font-size: clamp(48px, 17vw, 84px);
@@ -142,6 +169,45 @@
   margin: 14px 0 2px;
 }
 .mf-running .mf-time { color: var(--mf-run); }
+
+/* ---------------- the watch, folded down ----------------
+   Minimized, the panel is a heading and one line: the clock, and the presses a
+   cycle needs. It is still running — the amber border says so, and the clock is
+   still the amber one — it is just no longer taking half the screen from the
+   layout underneath it. */
+.mf-min {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  flex: none;
+}
+.mf-min:hover { color: var(--accent); border-color: var(--accent); }
+.mf-min:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mf-watch-small { padding: 12px 14px; }
+.mf-watch-min {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.mf-time-sm {
+  font-family: var(--mf-mono);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.mf-running .mf-time-sm { color: var(--mf-run); }
+.mf-watch-min-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.mf-watch-min-btns .mf-btn { min-height: 36px; }
 
 .mf-lapline { color: var(--dim); font-size: 13px; min-height: 18px; }
 
@@ -321,9 +387,9 @@
 .mf-check input { margin: 2px 0 0; accent-color: var(--accent); flex: none; }
 .mf-check:hover { color: var(--ink); }
 
-/* ---------------- the op cycle chart ----------------
-   A horizontal stacked bar: the op's measured cycle, divided between its tools
-   in the order they cut. The fills come from one cyan ramp stepped light→dark
+/* ---------------- the tool layout panel ----------------
+   A horizontal stacked bar: the layout's measured cycle, divided between its
+   tools in the order they cut. The fills come from one cyan ramp stepped light→dark
    along that order (see RAMP in client.js), so the running order is legible in
    the color itself; segments are separated by a 2px gap in the surface color
    rather than by borders, and the table underneath is both the legend and the
@@ -375,8 +441,8 @@
 .mf-legend-p { font-size: 11.5px; color: var(--dim); width: 62px; text-align: right; flex: none; }
 
 /* ---------------- in the cut, and the waste around it ----------------
-   One column per tool of the op, side by side. A column is that tool's
-   measured cycle, drawn to a scale shared across the op, and what is filled in
+   One column per tool of the layout, side by side. A column is that tool's
+   measured cycle, drawn to a scale shared across the layout, and what is filled in
    at the bottom of it is the part of that cycle the tool was marked in the cut
    for. So the empty top of each column is the waste — rapids, the tool change,
    the bar feed — and the tool with the most air above its fill is the one
@@ -384,7 +450,7 @@
 
    Between the fill and the waste is a 2px gap in the panel colour rather than
    a border: white space is what separates two fills here, the same way it does
-   along the op cycle bar above. A tool nobody has marked in cut is not drawn
+   along the layout's cycle bar above. A tool nobody has marked in cut is not drawn
    as a full column of waste — that is a measurement nobody took — but as an
    outline with nothing in it. */
 .mf-cutchart {
@@ -542,7 +608,7 @@
 .mf-chip-sm { font-size: 10.5px; padding: 1px 5px; }
 .mf-card-crib .mf-chip { white-space: normal; max-width: 100%; }
 
-.mf-group { display: flex; align-items: baseline; gap: 10px; margin: 16px 0 6px; }
+.mf-group { display: flex; align-items: center; gap: 8px; margin: 16px 0 6px; flex-wrap: wrap; }
 .mf-group-k {
   font-family: var(--mf-mono);
   font-size: 11.5px;

@@ -62,10 +62,11 @@ and turns on **AI generation** simply by setting environment variables.
   within a cycle, and the stretches add up. Each recorded cycle then carries its own time in cut
   and what share of the cycle that was, and the tool-life numbers use the measured figure instead
   of guessing from the whole cycle — saying which of the two they used.
-- **Measure a whole operation in one pass.** **Tool done →** on the watch records the tool that
-  has just finished cutting and moves straight to the next tool in the running order without
-  stopping, so a run down the op gives every tool its own cycle time and fills in the op-cycle
-  chart. Past the last tool it comes back to the first — down the op is one part.
+- **Measure a whole tool layout in one pass.** **Tool done →** on the watch records the tool
+  that has just finished cutting and moves straight to the next tool in the running order
+  without stopping, so a run down the layout gives every tool its own cycle time and fills in
+  the layout's chart. Past the last tool it comes back to the first — down the layout is one
+  part.
 - **Clone a part number, not just a machine.** A revision runs the route the number before
   it ran, so **Clone** on a part copies the whole route across: every operation, and every
   setup on them — the same tools, on the same machines, in the same stations, with the
@@ -80,11 +81,13 @@ and turns on **AI generation** simply by setting environment variables.
   time is only ever true of **one tool, on one machine, doing one operation**, and that is
   the shape of the record: **parts** carry their **operations**, a **tool** carries its own
   part number, description and cutting edges, and **setting a tool up** on a machine for one
-  of those ops carries the edges indexed there and the parts run between one index and the
-  next. The same tool in the same machine on another op is another setup with its own
-  times. Enough cycles answer what gets asked at the machine — how much of the cycle is
-  cut and how much is not, how long an edge lasts, how many tools a hundred parts costs. Install
-  it with `node tools/install-plugin.js manufacturing`.
+  of those ops carries the pocket it sits in, the edges indexed there and the parts run
+  between one index and the next. One machine and one operation together are a **tool
+  layout** — machine-, part- and operation-specific, numbered the way the floor asks for it,
+  *run TL 12* — and the whole screen is arranged around it. Enough cycles answer what gets
+  asked at the machine — how much of the cycle is cut and how much is not, how long an edge
+  lasts, how many tools a hundred parts costs. Install it with
+  `node tools/install-plugin.js manufacturing`.
 - **Tooling goes in and out as a spreadsheet.** **⤒ Import** reads a CSV in the same shape
   **⤓ Export** writes, so a file that came out goes back in unchanged and an existing tool
   list can be brought in by putting the right headers on it. One row makes whatever it
@@ -92,14 +95,30 @@ and turns on **AI generation** simply by setting environment variables.
   against it — and columns are read by name, not position. Nothing happens until you have
   seen what the file would do, an import never deletes anything, and importing the same
   file twice adds nothing the second time.
-- **The op's cycle, charted across its tools.** Setups carry a **sequence** — 1 cuts
-  first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
-  the op's total on that machine, with a stacked bar dividing it between the tools in the
-  order they run. The segments step along one cyan ramp light→dark so the running order
-  reads in the color, and the table beneath is both the legend and the numbers. **In cut,
-  and the waste** sits under it with the same tools as side-by-side columns — each the
+- **Tool layouts, numbered and charted.** A layout appears the moment the first tool is
+  set up on a machine for an operation, already carrying the next free number; **TL 4** is
+  a button wherever it shows, and pressing it is where the number becomes whatever the
+  floor calls that layout. No two layouts share one. Setups carry a **sequence** within
+  their layout — 1 cuts first, reorderable with ↑ / ↓ — and the **Tool layout** panel sums
+  their averages into the layout's cycle, with a stacked bar dividing it between the tools
+  in the order they run. The segments step along one cyan ramp light→dark so the running
+  order reads in the color, and the table beneath is both the legend and the numbers. **In
+  cut, and the waste** sits under it with the same tools as side-by-side columns — each the
   tool's measured cycle, filled only with the time marked in cut, so the empty top of a
   column is what the cycle spent not cutting.
+- **The tool layout sheet, as a PDF.** **🖨 PDF** prints one page per tool layout, in
+  number order and laid out the way the screen lays one out: the number and the whole
+  address, the cycle divided between the tools, the cut-against-waste columns, and a row
+  per **pocket** with the tool in it, what it is timed at and the tool life worked out for
+  it there — plus whatever anybody wrote about it. It is a print-ready page handed to the
+  browser, so *Save as PDF* and a printer are the same button, nothing is uploaded and no
+  library is fetched. Reading a floor and printing it are the same permission, so a
+  read-only shopwatch prints too.
+- **The stopwatch folds away.** The clock is huge because it has to be read from an arm's
+  length at the machine, which on a phone is most of the screen. **▾** folds it down to a
+  bar — the time and the presses a cycle needs — giving the layout underneath the room, and
+  it keeps running while folded: the panel still goes amber, the keys still work, and the
+  time comes back with it. Remembered on the device, like the folded lists.
 - **Clone a machine** when a second one of the same kind arrives. **Clone** suggests the
   next number after its name — `MC-101` → `MC-102`, `Lathe 3` → `Lathe 4` — and copies the
   **tools** across, in the stations they sit in. Only the tooling by default: which
@@ -674,23 +693,23 @@ makes a floor of a dozen machines readable on a phone. Folds live on the device,
 shop record, and a filter opens everything so a search is never answered by a closed
 heading.
 
-Setups run in **sequence order** within a machine and an operation — a newly set-up tool
-takes the next number, ↑ / ↓ move it, and the op renumbers itself so the sequence is
-always 1..n. The **Op cycle** panel sums the tools' averages into that op's real cycle
-time on that machine and draws a stacked bar dividing it between them in the order they
-cut, each segment sized by its share. The table beneath the bar is the legend and the
+Setups run in **sequence order** within their tool layout — a newly set-up tool takes the
+next number, ↑ / ↓ move it, and the layout renumbers itself so the sequence is always
+1..n. The **Tool layout** panel sums the tools' averages into that layout's real cycle
+time and draws a stacked bar dividing it between them in the order they cut, each segment
+sized by its share. The table beneath the bar is the legend and the
 numbers at once, and hovering or tabbing to either half lights up the other. Segment fills
 step along one cyan ramp light→dark with the running order — validated for monotone
 lightness, adjacent step separation, single hue, and a darkest step that still clears the
 dark chart surface — so the order reads in the color rather than in eight unrelated hues.
 Tools with nothing timed yet are listed as **not timed**, with a line saying how many,
-because the total is what has been measured rather than a finished op.
+because the total is what has been measured rather than a whole layout.
 
 Under it, **In cut, and the waste** answers the other question: how much of each tool's
 cycle is making chips. It is one column per tool, side by side — the column is that tool's
 measured cycle, and only the time marked in the cut is filled in, so the empty top of each
-column is the waste. One scale across the op makes the columns comparable to each other,
-and the figure above the plot is the op's own share. The fill is the in-cut hue and the
+column is the waste. One scale across the layout makes the columns comparable to each
+other, and the figure above the plot is the layout's own share. The fill is the in-cut hue and the
 unfilled part a dark step of the same hue — checked as an ordinal ramp against the panel
 for monotone lightness, a visible step gap, one hue and a dark end that still clears the
 surface — with a 2px gap in the panel colour between them rather than a border. The most
