@@ -22,6 +22,13 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_BODY = 2 * 1024 * 1024; // 2 MB
 const DATABASE_URL = process.env.DATABASE_URL;
+
+// How many shortcuts one account's toolbar holds, and what an id in it may look
+// like. Declared up here rather than beside the feature catalogue below because
+// loading the store normalizes every stored user, which reads both — and a const
+// cannot be read before the line that makes it.
+const MAX_TOOLBAR = 40;
+const TOOLBAR_ID_RE = /^[a-z0-9][a-z0-9:-]{1,39}$/;
 // Admin console: a single password held in the ADMIN_PASSWORD env var (set in
 // the Render dashboard). Unset → the admin page and its API are disabled.
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -653,8 +660,6 @@ const MAX_EDITORS = 20;
    a bookmark — because a toolbar is a set of shortcuts, not a set of
    permissions, and nothing about the account's data changes either way.
 ---------------------------------------------------------------- */
-const MAX_TOOLBAR = 40;
-const TOOLBAR_ID_RE = /^[a-z0-9][a-z0-9:-]{1,39}$/;
 const FEATURES = [
   { id: 'home', label: 'Home', hash: '#/home',
     blurb: 'A feed of new maps from the people you follow.' },

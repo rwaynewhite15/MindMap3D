@@ -3,7 +3,7 @@
 /* ================================================================
    Shopwatch — the shop-floor screen
 
-   Five things, and the relations between them:
+   Six things, and the relations between them:
 
      a tool        its own part number, what it is, how many cutting edges
      a machine     what it is called on the floor
@@ -17,12 +17,19 @@
                    is only true of that combination: the cycles timed against
                    it, how many of the tool's edges are indexed through there,
                    and how many parts run between one index and the next.
+     a tool layout one machine and one operation — and since an operation
+                   belongs to one part, that is machine-, part- and
+                   operation-specific, which is what a tool layout is on the
+                   floor: the tools set up together to cut it, in the order
+                   they cut. It carries a number of its own, because that is
+                   how it is asked for at the machine — run TL 12.
 
-   The stopwatch times an assignment, because a cycle time is only ever true of
-   one tool on one machine doing one op. The same tool in the same machine
-   cutting a different operation is a different setup with its own cutting
-   time — the time a tool spends in cut is a fact about the operation, not
-   about the tool.
+   The screen is arranged around the tool layout. The stopwatch times one
+   assignment on it, because a cycle time is only ever true of one tool on one
+   machine doing one op; the charts, the running order, the PDF and every total
+   are per layout, and the same tool in the same machine cutting a different
+   operation belongs to a different layout with its own cutting time — the time
+   a tool spends in cut is a fact about the operation, not about the tool.
 
    Everything here lives inside the section the shell hands to mount(). The
    only way out of it is ctx: ctx.api for this add-on's own routes, ctx.me for
@@ -69,10 +76,11 @@
   let watch = { running: false, since: 0, accum: 0, lastLap: 0, laps: 0,
                 inCut: false, cutAccum: 0, cutSince: 0 };
 
-  const watchKey = () => {
-    const who = ctx && ctx.me() ? ctx.me().username : '';
-    return 'mf.watch.' + who;
-  };
+  // Two accounts sharing a phone at the bench do not share a stopwatch or each
+  // other's folded lists, so what is kept on the device is kept under whoever
+  // is signed in.
+  const whoAmI = () => (ctx && ctx.me() ? ctx.me().username : '');
+  const watchKey = () => 'mf.watch.' + whoAmI();
 
   function saveWatch() {
     try { localStorage.setItem(watchKey(), JSON.stringify(watch)); } catch { /* private mode */ }
@@ -113,10 +121,7 @@
   ---------------------------------------------------------------- */
   let folded = new Set();
 
-  const foldKey = () => {
-    const who = ctx && ctx.me() ? ctx.me().username : '';
-    return 'mf.folded.' + who;
-  };
+  const foldKey = () => 'mf.folded.' + whoAmI();
   function saveFolded() {
     try { localStorage.setItem(foldKey(), JSON.stringify([...folded])); } catch { /* private mode */ }
   }
@@ -131,6 +136,38 @@
   // heading that contains it would be the screen hiding the answer it was just
   // asked for, so while a filter is on, everything is open.
   const isFolded = key => !filter && folded.has(key);
+
+  // The stopwatch folds away through the same device-local store, because it is
+  // the same kind of preference: about this screen on this device, not about the
+  // floor. It is read directly rather than through isFolded, though — a filter
+  // opens the lists because a closed heading could be hiding the answer to the
+  // search, and the watch is never the answer to one.
+  const WATCH_MIN = 'watch:min';
+  const minimized = () => folded.has(WATCH_MIN);
+
+  /* ---------------- whose device state this is ----------------
+     Both of the above are kept under the signed-in name, and the shell hands
+     that name over a moment after it opens the screen — so anything read at
+     mount is read before there is a name to read it under, and a watch left
+     running on this device would come back to a screen that had looked for it
+     in the wrong place. This re-reads both the moment the name lands, and
+     never again after that.
+
+     What is already on this screen outranks what is in storage: if the watch
+     has been started in that first moment, it stays started. A measurement
+     somebody is taking is not something a key changing underneath it is
+     allowed to throw away.
+  ---------------------------------------------------------------- */
+  let localFor = null;
+
+  function restoreLocal() {
+    const who = whoAmI();
+    if (localFor === who) return;
+    localFor = who;
+    if (!watch.running && !watch.accum && !watch.laps) restoreWatch();
+    restoreFolded();
+    if (watch.running) startTick();   // a watch read back running has to tick
+  }
 
   function toggleFold(key, redraw) {
     if (folded.has(key)) folded.delete(key);
@@ -269,10 +306,6 @@
     const seen = new Set();
     return jobsOfTool(id).map(a => a.machineId).filter(m => (seen.has(m) ? false : seen.add(m)));
   };
-  const machinesOfOperation = id => {
-    const seen = new Set();
-    return jobsOfOperation(id).map(a => a.machineId).filter(m => (seen.has(m) ? false : seen.add(m)));
-  };
   // How a machine is tooled: one tool in one station, however many operations
   // it cuts there. What a clone carries across.
   const distinctTools = id =>
@@ -295,28 +328,112 @@
   const jobLabel = a => operationLabel(jobOperation(a));
   const opLabel = a => [machineName(a.machineId), jobLabel(a)].join(' · ');
 
-  // The tools that run together: one machine, one operation. That is the
-  // grouping the running order, the chart and every total below are per — and
-  // it is why the cycle times live on the assignment, since the same tool in
-  // the same machine on another op is another setup with another time.
-  const opKey = a => a.machineId + '\u0000' + (a.operationId || '');
-  const opJobs = a => (a && shop ? shop.assignments.filter(x => opKey(x) === opKey(a)).sort(bySeq) : []);
+  /* ---------------- the tool layout ----------------
+     The tools that run together: one machine, one operation. Since an
+     operation belongs to one part, that pair is machine-, part- and
+     operation-specific — a tool layout. It is the grouping the running order,
+     both charts, the PDF and every total below are per, and it is why the
+     cycle times live on the assignment: the same tool in the same machine on
+     another op is on another layout, with another time.
 
-  // Running order within an operation. An assignment with no sequence yet
-  // sorts after the ones that have one, oldest first, so an unplaced tool
-  // lands at the end of the list rather than jumping to the front of the job.
+     The pair is what a layout *is*, so it is derived. What is stored is the one
+     thing about a layout that is a decision rather than a reading — the number
+     the floor asks for it by — which lives in a record of its own, made and kept
+     in step by ensureLayouts() below.
+  ---------------------------------------------------------------- */
+  const pairKey = (machineId, operationId) => machineId + '\u0000' + (operationId || '');
+  const layoutKey = a => pairKey(a.machineId, a.operationId);
+  const layoutJobs = a => (a && shop ? shop.assignments.filter(x => layoutKey(x) === layoutKey(a)).sort(bySeq) : []);
+
+  const byNumber = (a, b) => (a.number || Infinity) - (b.number || Infinity);
+  const layoutList = () => (shop && Array.isArray(shop.layouts) ? shop.layouts : []);
+  const allLayouts = () => [...layoutList()].sort(byNumber);
+  const layoutById = id => layoutList().find(l => l.id === id) || null;
+  const layoutByKey = key => layoutList().find(l => pairKey(l.machineId, l.operationId) === key) || null;
+  // A tool on a machine but on no operation is not on a layout: that is half a
+  // pair, and half a pair has nothing to be the layout of.
+  const layoutOf = a => (a && a.operationId ? layoutByKey(layoutKey(a)) : null);
+  const layoutsOfOperation = id => layoutList().filter(l => l.operationId === id).sort(byNumber);
+  const layoutJobsOf = l =>
+    (l && shop ? shop.assignments.filter(a => layoutKey(a) === pairKey(l.machineId, l.operationId)).sort(bySeq) : []);
+  // What it is called, and what it is: the number is the name it is asked for by
+  // on the floor, and the machine, the part and the op are the address behind it.
+  const tlName = l => 'TL ' + (l && l.number ? l.number : '–');
+  const layoutWhere = l =>
+    (l ? [machineName(l.machineId), operationLabel(operationById(l.operationId))].join(' · ') : '');
+
+  // Running order within a layout. An assignment with no sequence yet sorts
+  // after the ones that have one, oldest first, so an unplaced tool lands at the
+  // end of the list rather than jumping to the front of the job.
   function bySeq(a, b) {
     const as = a.seq || Infinity, bs = b.seq || Infinity;
     if (as !== bs) return as - bs;
     return (a.createdAt || 0) - (b.createdAt || 0);
   }
 
-  // Close up the numbering of a setup after a move or a deletion, so the
+  // Close up the numbering of a layout after a move or a deletion, so the
   // sequence is always 1..n with no gaps and no ties.
-  function renumberOp(key) {
-    shop.assignments.filter(x => opKey(x) === key).sort(bySeq).forEach((a, i) => {
+  function renumberLayout(key) {
+    shop.assignments.filter(x => layoutKey(x) === key).sort(bySeq).forEach((a, i) => {
       if (a.seq !== i + 1) { a.seq = i + 1; touch(a); }
     });
+  }
+
+  /* Every machine-and-operation pair with a tool on it is a tool layout, and
+     every tool layout has a number no other layout in this shopwatch has. This
+     is what holds both of those true after anything that can make or unmake a
+     pair: a setup added, moved to another machine or another op, or deleted; a
+     machine or a part cloned; a spreadsheet imported. The server does the same
+     fill when it reads a record, so a floor saved before layouts existed opens
+     already numbered and this only has to keep up with what happens on screen. */
+  function ensureLayouts() {
+    if (!shop) return;
+    if (!Array.isArray(shop.layouts)) shop.layouts = [];
+    const live = new Set();
+    for (const a of shop.assignments) if (a.operationId) live.add(layoutKey(a));
+
+    const seen = new Set();
+    const taken = new Set();
+    // A pair whose last tool has gone is not a tool layout any more, and its
+    // number goes back in the pot.
+    shop.layouts = shop.layouts.filter(l => {
+      const key = pairKey(l.machineId, l.operationId);
+      if (!live.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      if (l.number && !taken.has(l.number)) taken.add(l.number);
+      else l.number = 0;   // a number two layouts claim is nobody's; renumbered below
+      return true;
+    });
+
+    let next = 1;
+    const free = () => {
+      while (taken.has(next)) next++;
+      taken.add(next);
+      return next;
+    };
+    for (const l of shop.layouts) if (!l.number) { l.number = free(); touch(l); }
+    // New pairs are numbered machine by machine, and within a machine in the
+    // order the ops run — the order somebody numbering them by hand would use.
+    const now = Date.now();
+    for (const key of [...live].filter(k => !seen.has(k)).sort(byAddress)) {
+      const [machineId, operationId] = key.split('\u0000');
+      shop.layouts.push({
+        id: newId('l'), machineId, operationId, number: free(), notes: '',
+        createdAt: now, updatedAt: now,
+      });
+    }
+  }
+
+  // Two layout keys in the order they would be read off the floor: by machine,
+  // then by part, then by where the op falls in making it.
+  function byAddress(x, y) {
+    const [mx, ox] = x.split('\u0000');
+    const [my, oy] = y.split('\u0000');
+    const byMachine = machineName(mx).localeCompare(machineName(my));
+    if (byMachine) return byMachine;
+    const a = operationById(ox) || {}, b = operationById(oy) || {};
+    const byPart = partName(partById(a.partId)).localeCompare(partName(partById(b.partId)));
+    return byPart || byStep(a, b);
   }
 
   function statsFor(a) {
@@ -450,6 +567,7 @@
       doc = data.doc;
       shop = data.body && data.body.assignments ? data.body : emptyShop();
       limits = (data.limits || limits);
+      ensureLayouts();  // the host fills these in too; this covers an older one
     } catch (err) {
       doc = null;
       shop = null;
@@ -545,6 +663,7 @@
       // a shared map does too, so the last save wins either way.
       if (dirty || !payload.body) return;
       shop = payload.body;
+      ensureLayouts();  // in memory only: whoever saved this has already saved theirs
       render();
     });
     live.addEventListener('chat', e => {
@@ -689,7 +808,7 @@
   function lapNext() {
     const a = activeJob();
     if (!a) { flash('Pick a tool at a machine first — a cycle time belongs to one.'); return; }
-    const order = opJobs(a);
+    const order = layoutJobs(a);
     // one tool in the op: there is nowhere to move on to, so this is a cycle
     if (order.length < 2) { lap(); return; }
     if (!lap()) return;
@@ -1047,6 +1166,7 @@
 
   /* ---------------- rendering ---------------- */
   function render() {
+    restoreLocal();   // the signed-in name may only just have arrived
     renderDocBar();
     renderShare();
     renderChat();
@@ -1101,12 +1221,16 @@
       return;
     }
 
+    const small = canEdit() && minimized();
     box.classList.toggle('mf-running', watch.running);
+    box.classList.toggle('mf-watch-small', small);
 
-    // which tool, at which machine, on which operation
+    // which tool layout, which tool, at which machine, on which operation
+    const layout = layoutOf(a);
     const head = el('div', 'mf-watch-head');
     const who = el('div', 'mf-watch-who');
     const title = el('div', 'mf-watch-title');
+    if (layout) title.appendChild(tlChip(layout));
     if (a.seq) title.appendChild(el('span', 'mf-seq', String(a.seq)));
     if (a.station) title.appendChild(el('span', 'mf-chip', a.station));
     title.appendChild(el('span', 'mf-watch-name', jobName(a)));
@@ -1114,14 +1238,18 @@
     if (tool && tool.partNumber && tool.desc) title.appendChild(el('span', 'mf-watch-pn', tool.partNumber));
     who.appendChild(title);
     const where = el('div', 'mf-watch-op', opLabel(a));
-    // where in the operation's running order this tool sits
-    const order = opJobs(a);
+    // where in the layout's running order this tool sits
+    const order = layoutJobs(a);
     if (a.seq && order.length > 1) where.textContent += ' · tool ' + a.seq + ' of ' + order.length;
     who.appendChild(where);
     head.appendChild(who);
     if (canEdit()) {
       head.appendChild(button('mf-btn mf-btn-sm', 'Edit setup', () => openForm('assignment', a.id),
         'The operation, edges and tool life of this tool on this machine'));
+      // Folding the watch away is only offered to whoever has one. It keeps
+      // running either way — see minimized() for where the state lives.
+      head.appendChild(button('mf-min', small ? '▸' : '▾', () => toggleFold(WATCH_MIN, renderWatch),
+        small ? 'Open the stopwatch' : 'Fold the stopwatch down to a bar — it keeps running'));
     }
     box.appendChild(head);
 
@@ -1135,10 +1263,43 @@
       els.cutline = null;
       box.classList.remove('mf-running');
       if (shop.assignments.length > 1) {
-        box.appendChild(dropdown('mf-pick',
-          shop.assignments.map(other => ({ value: other.id, label: jobName(other) + ' — ' + opLabel(other) })),
-          a.id, selectJob, 'Setup being shown'));
+        box.appendChild(dropdown('mf-pick', jobOptions(), a.id, selectJob, 'Setup being shown'));
       }
+      return;
+    }
+
+    /* ---------------- folded down to a bar ----------------
+       The clock is 84 pixels tall because it has to be read from an arm's
+       length at the machine. Sitting at the bench with the layout open below
+       it, that is most of a phone screen spent on a number you are not looking
+       at — so the watch folds down to one line: the time, and the presses a
+       cycle actually needs. It is not stopped, paused or reset by folding; the
+       stopwatch is measuring something, and hiding the display is not a reason
+       to throw the measurement away. The keys still work, and the panel still
+       goes amber while it runs.
+    ---------------------------------------------------------------- */
+    if (small) {
+      els.cutline = null;
+      els.time = el('div', 'mf-time-sm', fmtClock(elapsed()));
+      const row = el('div', 'mf-watch-min');
+      row.appendChild(els.time);
+      const btns = el('div', 'mf-watch-min-btns');
+      btns.appendChild(button('mf-btn mf-btn-sm mf-btn-cut' + (watch.inCut ? ' mf-btn-cutting' : ''),
+        watch.inCut ? '◼ In cut' : '◻ Cut', toggleCut,
+        watch.inCut
+          ? 'The tool is in the material — press as it comes out (C)'
+          : 'Press as the tool enters the material (C)'));
+      btns.appendChild(button('mf-btn mf-btn-sm mf-btn-go' + (watch.running ? ' mf-btn-stop' : ''),
+        watch.running ? 'Stop' : (watch.accum ? 'Resume' : 'Start'), startStop,
+        'Space starts and stops the watch'));
+      if (order.length > 1) {
+        btns.appendChild(button('mf-btn mf-btn-sm mf-btn-lap', 'Tool done →', lapNext,
+          'Records this tool\'s time and moves the watch to the next one, without stopping (N)'));
+      }
+      btns.appendChild(button('mf-btn mf-btn-sm mf-btn-lap', 'Cycle done', lap,
+        'Records the time since the last cycle and keeps the watch running (L)'));
+      row.appendChild(btns);
+      box.appendChild(row);
       return;
     }
 
@@ -1198,10 +1359,59 @@
     }
 
     if (shop.assignments.length > 1) {
-      box.appendChild(dropdown('mf-pick',
-        shop.assignments.map(other => ({ value: other.id, label: jobName(other) + ' — ' + opLabel(other) })),
-        a.id, selectJob, 'Tool being timed'));
+      box.appendChild(dropdown('mf-pick', jobOptions(), a.id, selectJob, 'Tool being timed'));
     }
+  }
+
+  /* Every setup there is, under the tool layout it is on. A list of tools is
+     unreadable without saying which layout each is part of — the same insert
+     runs on three of them — so the layouts are the headings and the tools sit
+     under theirs in the order they cut. */
+  function jobOptions() {
+    const groups = new Map();
+    for (const a of shop.assignments) {
+      const key = layoutKey(a);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a);
+    }
+    const opts = [];
+    const heading = (key, jobs) => {
+      const l = layoutByKey(key);
+      return l ? tlName(l) + ' — ' + layoutWhere(l)
+        : machineName(jobs[0].machineId) + ' — no operation set';
+    };
+    // Numbered layouts first and in number order; the tools that are on a
+    // machine but on no operation are not a layout, and go last.
+    const keys = [...groups.keys()].sort((x, y) => {
+      const lx = layoutByKey(x), ly = layoutByKey(y);
+      if (lx && ly) return byNumber(lx, ly);
+      if (lx || ly) return lx ? -1 : 1;
+      return heading(x, groups.get(x)).localeCompare(heading(y, groups.get(y)));
+    });
+    for (const key of keys) {
+      const jobs = groups.get(key).sort(bySeq);
+      const group = heading(key, jobs);
+      for (const a of jobs) {
+        opts.push({ value: a.id, label: (a.seq ? a.seq + '. ' : '') + jobName(a), group });
+      }
+    }
+    return opts;
+  }
+
+  // The number a layout is asked for by, and the way in to changing it: the
+  // number is the first thing anybody wants to change about a layout, and there
+  // is nowhere else it would go.
+  function tlChip(l, cls) {
+    const extra = cls ? ' ' + cls : '';
+    if (!canEdit()) {
+      const chip = el('span', 'mf-tl' + extra, tlName(l));
+      chip.title = layoutWhere(l);
+      return chip;
+    }
+    return button('mf-tl mf-tl-btn' + extra, tlName(l), e => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      openForm('layout', l.id);
+    }, 'Number this tool layout — ' + layoutWhere(l));
   }
 
   function tile(label, value, hint) {
@@ -1222,7 +1432,8 @@
     if (!a.operationId) {
       const note = el('div', 'mf-note');
       note.appendChild(document.createTextNode(
-        'This tool is on the machine but not on an operation. The cycle times and the tool life belong to the op it is cutting, so name it. '));
+        'This tool is on the machine but not on an operation, so it is on no tool layout. The cycle ' +
+        'times and the tool life belong to the op it is cutting, so name it. '));
       note.appendChild(button('mf-link', 'Edit setup', () => openForm('assignment', a.id)));
       box.appendChild(note);
     }
@@ -1232,7 +1443,7 @@
       timing.appendChild(tile('cycles timed', String(s.count)));
       timing.appendChild(tile('average', fmtSec(s.avg)));
       timing.appendChild(tile('best', fmtSec(s.best)));
-      timing.appendChild(tile('spread', fmtSec(s.spread), 'Slowest cycle minus fastest — how repeatable the op is'));
+      timing.appendChild(tile('spread', fmtSec(s.spread), 'Slowest cycle minus fastest — how repeatable this tool is here'));
       if (s.avgCut) {
         timing.appendChild(tile('time in cut', fmtSec(s.avgCut),
           'Measured at the machine, averaged over the ' + s.cutCount +
@@ -1271,7 +1482,7 @@
 
     const derived = el('div', 'mf-tiles mf-tiles-life');
     derived.appendChild(tile('parts / index', String(life.parts),
-      'Parts run between one edge index and the next, on this machine and this op'));
+      'Parts run between one edge index and the next, on this tool layout'));
     if (life.partsPerTool) {
       derived.appendChild(tile('parts / tool', String(life.partsPerTool),
         life.edges + ' indexable edge' + (life.edges === 1 ? '' : 's') + ' × ' + life.parts + ' parts per index' +
@@ -1333,7 +1544,7 @@
     const active = activeJob();
     if (!active) { box.hidden = true; return; }
 
-    const jobs = opJobs(active);
+    const jobs = layoutJobs(active);
     const rows = jobs.map((a, i) => {
       const s = statsFor(a);
       return { a, i, avg: s ? s.avg : 0, count: s ? s.count : 0, step: rampStep(i, jobs.length) };
@@ -1342,10 +1553,24 @@
     const total = timed.reduce((sum, r) => sum + r.avg, 0);
     box.hidden = false;
 
+    const layout = layoutOf(active);
     const head = el('div', 'mf-chart-head');
-    const heading = el('div');
-    heading.appendChild(el('div', 'mf-section-title', 'Op cycle'));
-    heading.appendChild(el('div', 'mf-chart-op', opLabel(active)));
+    const heading = el('div', 'mf-chart-heading');
+    const titleRow = el('div', 'mf-tl-row');
+    titleRow.appendChild(el('div', 'mf-section-title', 'Tool layout'));
+    if (layout) titleRow.appendChild(tlChip(layout));
+    heading.appendChild(titleRow);
+    heading.appendChild(el('div', 'mf-chart-op', layout ? layoutWhere(layout) : opLabel(active)));
+    if (layout) {
+      const acts = el('div', 'mf-tl-acts');
+      // Reading a layout and printing it are the same permission, so this is
+      // there for a shared shopwatch somebody may only look at.
+      acts.appendChild(button('mf-link', '🖨 PDF', () => exportPdf(layout.id),
+        'This tool layout on a page of its own — every tool on it, ready to print or save as PDF'));
+      put(acts, wBtn('mf-link', 'Number', () => openForm('layout', layout.id),
+        'What this layout is called on the floor'));
+      heading.appendChild(acts);
+    }
     head.appendChild(heading);
     const figure = el('div', 'mf-chart-figure');
     figure.appendChild(el('div', 'mf-chart-total', total ? fmtSec(total) : '—'));
@@ -1355,8 +1580,18 @@
     head.appendChild(figure);
     box.appendChild(head);
 
+    // A tool in a machine with no operation named is half of a pair, and half a
+    // pair is not a layout: there is nothing for the number to be the number of.
+    if (!layout) {
+      box.appendChild(el('div', 'mf-note',
+        'This tool is on the machine but not on an operation, so it is not on a tool layout yet — ' +
+        'and a cycle time needs one to be true of. Name the op on the setup and this becomes a ' +
+        'numbered layout with the tools that run alongside it.'));
+    }
+
     if (!timed.length) {
-      box.appendChild(el('div', 'mf-note', 'Time a cycle against a tool on this op and its share of the total appears here.'));
+      box.appendChild(el('div', 'mf-note',
+        'Time a cycle against a tool on this layout and its share of the total appears here.'));
       return;
     }
 
@@ -1366,7 +1601,8 @@
       const bar = el('div', 'mf-bar');
       bar.setAttribute('role', 'img');
       bar.setAttribute('aria-label',
-        'Total op cycle ' + fmtSec(total) + ', divided between ' + timed.length + ' tools. The same numbers are in the table below.');
+        'The tool layout cycle, ' + fmtSec(total) + ', divided between ' + timed.length +
+        ' tools. The same numbers are in the table below.');
       timed.forEach((r, n) => {
         const share = r.avg / total;
         const seg = el('div', 'mf-seg');
@@ -1410,8 +1646,8 @@
     const untimed = rows.length - timed.length;
     if (untimed) {
       box.appendChild(el('div', 'mf-note', untimed + ' of ' + rows.length +
-        ' tools on this op ' + (untimed === 1 ? 'has' : 'have') +
-        ' no cycles timed yet, so the total is what has been measured so far, not the finished op.'));
+        ' tools on this layout ' + (untimed === 1 ? 'has' : 'have') +
+        ' no cycles timed yet, so the total is what has been measured so far, not the whole layout.'));
     }
 
     // Hovering or focusing either half lights up the other, so a two-pixel
@@ -1434,19 +1670,19 @@
   }
 
   /* ---------------- in the cut, and the waste around it ----------------
-     The op cycle chart above says which tool owns the cycle. This one says how
-     much of each tool's cycle is cutting metal, which is a different question
-     and usually the more useful one: a column is a tool's measured cycle, and
-     only the part of it marked in the cut is filled in. What is left empty at
-     the top of the column is the waste — the rapids, the tool change, the bar
-     feed — and because every column is drawn to one scale across the op, the
-     one with the most air over its fill is the one worth attacking.
+     The tool layout panel above says which tool owns the cycle. This one says
+     how much of each tool's cycle is cutting metal, which is a different
+     question and usually the more useful one: a column is a tool's measured
+     cycle, and only the part of it marked in the cut is filled in. What is left
+     empty at the top of the column is the waste — the rapids, the tool change,
+     the bar feed — and because every column is drawn to one scale across the
+     layout, the one with the most air over its fill is the one worth attacking.
 
      A tool's column and its fill are averaged over the same cycles: the ones
      somebody marked in and out of cut. Averaging the fill over the marked
-     cycles and the column over all of them would let a mostly-unmarked op draw
-     a fill taller than the column it sits in, which is arithmetic rather than
-     anything that happened at the machine.
+     cycles and the column over all of them would let a mostly-unmarked layout
+     draw a fill taller than the column it sits in, which is arithmetic rather
+     than anything that happened at the machine.
   ---------------------------------------------------------------- */
   function renderCutChart() {
     const box = els.cutchart;
@@ -1454,7 +1690,7 @@
     const active = activeJob();
     if (!active) { box.hidden = true; return; }
 
-    const rows = opJobs(active).map(a => {
+    const rows = layoutJobs(active).map(a => {
       const s = statsFor(a);
       return {
         a,
@@ -1469,13 +1705,15 @@
     const withCut = drawn.filter(r => r.cut > 0);
     box.hidden = false;
 
+    const layout = layoutOf(active);
     const head = el('div', 'mf-chart-head');
     const heading = el('div');
     heading.appendChild(el('div', 'mf-section-title', 'In cut, and the waste'));
-    heading.appendChild(el('div', 'mf-chart-op', opLabel(active)));
+    heading.appendChild(el('div', 'mf-chart-op',
+      layout ? tlName(layout) + ' · ' + layoutWhere(layout) : opLabel(active)));
     head.appendChild(heading);
 
-    // The op's own share, over the tools that were marked — one sum of cut
+    // The layout's own share, over the tools that were marked — one sum of cut
     // over one sum of the cycles it was measured in.
     const cutTotal = withCut.reduce((sum, r) => sum + r.cut, 0);
     const cycleTotal = withCut.reduce((sum, r) => sum + r.cycle, 0);
@@ -1490,13 +1728,13 @@
 
     if (!drawn.length) {
       box.appendChild(el('div', 'mf-note',
-        'Time a cycle against a tool on this op, mark it in and out of cut as it runs, and the ' +
-        'cutting and the waste separate here.'));
+        'Time a cycle against a tool on this layout, mark it in and out of cut as it runs, and ' +
+        'the cutting and the waste separate here.'));
       return;
     }
 
-    // One scale across the op: every column is a share of the longest cycle on
-    // it, so the columns are comparable to each other and not only to
+    // One scale across the layout: every column is a share of the longest cycle
+    // on it, so the columns are comparable to each other and not only to
     // themselves.
     const longest = Math.max(...drawn.map(r => r.cycle));
     // Direct labels go on the extremes only — the best and the worst share —
@@ -1512,9 +1750,9 @@
     const plot = el('div', 'mf-plot');
     plot.setAttribute('role', 'img');
     plot.setAttribute('aria-label',
-      'One column per tool on this op, each the tool\'s measured cycle, filled with the time it was ' +
-      'marked in cut; the empty part of a column is the waste. ' +
-      (opShare ? Math.round(opShare * 100) + '% of the marked cycle across the op is cutting. ' : '') +
+      'One column per tool on this tool layout, each the tool\'s measured cycle, filled with the ' +
+      'time it was marked in cut; the empty part of a column is the waste. ' +
+      (opShare ? Math.round(opShare * 100) + '% of the marked cycle across the layout is cutting. ' : '') +
       'The same numbers are in the table below.');
     const axis = el('div', 'mf-plot-axis');
 
@@ -1600,12 +1838,12 @@
     const unmarked = drawn.filter(r => !r.cut).length;
     if (unmarked) {
       box.appendChild(el('div', 'mf-note', unmarked + ' of ' + drawn.length +
-        ' timed tools on this op ' + (unmarked === 1 ? 'has' : 'have') +
+        ' timed tools on this layout ' + (unmarked === 1 ? 'has' : 'have') +
         ' no cycle marked in and out of cut, so ' + (unmarked === 1 ? 'it is' : 'they are') +
         ' drawn empty rather than counted as waste — nobody has said yet which it is.'));
     } else if (withCut.length) {
       box.appendChild(el('div', 'mf-note',
-        'Across the op that is ' + fmtSec(cycleTotal - cutTotal) + ' a part not cutting, out of ' +
+        'Across the layout that is ' + fmtSec(cycleTotal - cutTotal) + ' a part not cutting, out of ' +
         fmtSec(cycleTotal) + '.'));
     }
 
@@ -1712,15 +1950,20 @@
   ];
 
   const JOB_FIELDS = [
-    { key: 'station', label: 'Station', placeholder: 'T0303' },
-    { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the op — 1 cuts first' },
+    { key: 'station', label: 'Pocket', placeholder: 'T0303', hint: 'Turret station or pocket this tool sits in' },
+    { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the layout — 1 cuts first' },
     { key: 'indexEdges', label: 'Indexable edges', placeholder: '4', num: true, hint: 'How many of the tool\'s edges get indexed through here' },
     { key: 'partsPerIndex', label: 'Parts per index', placeholder: '250', num: true, hint: 'Parts run between one edge index and the next' },
   ];
 
+  const LAYOUT_FIELDS = [
+    { key: 'number', label: 'Tool layout number', placeholder: '1', num: true, wide: true,
+      hint: 'What this layout is called on the floor — its own number in this shopwatch' },
+  ];
+
   const FORM_FIELDS = {
     machine: MACHINE_FIELDS, tool: TOOL_FIELDS, part: PART_FIELDS,
-    operation: OPERATION_FIELDS, assignment: JOB_FIELDS,
+    operation: OPERATION_FIELDS, assignment: JOB_FIELDS, layout: LAYOUT_FIELDS,
   };
   const FORM_TITLES = {
     machine: ['New machine', 'Edit machine'],
@@ -1728,10 +1971,11 @@
     part: ['New part', 'Edit part'],
     operation: ['New operation', 'Edit operation'],
     assignment: ['Set a tool up on a machine', 'Edit this setup'],
+    layout: ['Tool layout', 'Number this tool layout'],
   };
   const FINDER = {
     machine: machineById, tool: toolById, part: partById,
-    operation: operationById, assignment: jobById,
+    operation: operationById, assignment: jobById, layout: layoutById,
   };
 
   // The operations of every part, grouped by the part they belong to — which
@@ -1760,6 +2004,13 @@
     if (kind === 'operation' && !id && !shop.parts.length) {
       flash('Add the part first — an operation is a step in making one.');
       openForm('part');
+      return;
+    }
+    // A tool layout is never made here: it comes into being, already numbered,
+    // the moment a tool is set up on a machine for an operation. This form only
+    // ever changes the number on one that exists.
+    if (kind === 'layout' && !layoutById(id)) {
+      flash('That tool layout is not there any more.');
       return;
     }
     const found = id ? FINDER[kind](id) : null;
@@ -1811,9 +2062,9 @@
 
   // The next free place in the running order of the setup a draft names.
   function nextSeq(draft) {
-    const key = draft.machineId + '\u0000' + (draft.operationId || '');
+    const key = pairKey(draft.machineId, draft.operationId);
     return shop.assignments
-      .filter(x => opKey(x) === key && x.id !== draft.id)
+      .filter(x => layoutKey(x) === key && x.id !== draft.id)
       .reduce((max, x) => Math.max(max, x.seq || 0), 0) + 1;
   }
 
@@ -1835,6 +2086,7 @@
     if (kind === 'tool') return saveTool(draft);
     if (kind === 'part') return savePart(draft);
     if (kind === 'operation') return saveOperation(draft);
+    if (kind === 'layout') return saveLayout(draft);
     return saveAssignment(draft);
   }
 
@@ -1843,11 +2095,13 @@
     renderForm();
   }
 
-  // Every save below ends the same way: the form closes, the record is queued
-  // for saving, and the screen is redrawn.
+  // Every save below ends the same way: the form closes, the tool layouts are
+  // brought back in step with what is now set up, the record is queued for
+  // saving, and the screen is redrawn.
   function done() {
     form = null;
     formError = '';
+    ensureLayouts();
     save();
     render();
   }
@@ -1945,7 +2199,7 @@
       });
       copied++;
     }
-    for (const key of new Set(jobsOnMachine(toId).map(opKey))) renumberOp(key);
+    for (const key of new Set(jobsOnMachine(toId).map(layoutKey))) renumberLayout(key);
     return { copied, skipped };
   }
 
@@ -2037,14 +2291,14 @@
           createdAt: now,
           updatedAt: now,
         });
-        keys.add(a.machineId + '\u0000' + op.id);
+        keys.add(pairKey(a.machineId, op.id));
         setups++;
       }
     }
     // The copies keep the numbering they came with; these close up any gap an
     // operation or a setup left out for want of room would otherwise leave.
     renumberPart(toId);
-    for (const key of keys) renumberOp(key);
+    for (const key of keys) renumberLayout(key);
     return { ops, setups, skipped };
   }
 
@@ -2227,14 +2481,14 @@
     };
     const existing = jobById(draft.id);
     if (existing) {
-      const wasOp = opKey(existing);
+      const wasLayout = layoutKey(existing);
       Object.assign(existing, assignment);
       touch(existing);
       // Editing can move a tool to another machine or another operation, or
       // renumber it; close up the gap it left behind as well as the order it
       // joined.
-      renumberOp(wasOp);
-      if (opKey(existing) !== wasOp) renumberOp(opKey(existing));
+      renumberLayout(wasLayout);
+      if (layoutKey(existing) !== wasLayout) renumberLayout(layoutKey(existing));
     } else {
       if (shop.assignments.length >= limits.maxAssignments) {
         return fail('That is as many setups as one account keeps (' + limits.maxAssignments + ').');
@@ -2243,9 +2497,35 @@
         id: newId('a'), ...assignment, runs: [], createdAt: Date.now(), updatedAt: Date.now(),
       };
       shop.assignments.push(created);
-      renumberOp(opKey(created));
+      renumberLayout(layoutKey(created));
       setActive(created.id); // a tool set up mid-shift is the one being timed next
     }
+    done();
+  }
+
+  /* ---------------- numbering a tool layout ----------------
+     The one thing about a layout somebody decides. A layout comes into being
+     with a number already on it — the next free one — because a layout with no
+     number could not be asked for, and this is where that number is changed to
+     whatever the floor actually calls it.
+
+     Two layouts cannot share a number: the number is how one is asked for, and
+     a number that names two of them names neither.
+  ---------------------------------------------------------------- */
+  function saveLayout(draft) {
+    const layout = layoutById(draft.id);
+    if (!layout) return fail('That tool layout is not there any more.');
+    const number = Math.floor(cleanNum(draft.number));
+    if (!number) return fail('A tool layout needs a number — it is what it is asked for by on the floor.');
+    if (number > (limits.maxLayoutNumber || 9999)) {
+      return fail('Tool layout numbers go up to ' + (limits.maxLayoutNumber || 9999) + '.');
+    }
+    const clash = layoutList().find(l => l.id !== layout.id && l.number === number);
+    if (clash) return fail('TL ' + number + ' is already ' + layoutWhere(clash) + '.');
+    layout.number = number;
+    layout.notes = cleanText(draft.notes).slice(0, 400);
+    touch(layout);
+    saveNote = 'numbered ' + layoutWhere(layout) + ' as TL ' + number;
     done();
   }
 
@@ -2329,7 +2609,7 @@
   // Every deletion above can leave the watch pointed at something that is gone,
   // and the setups it touched a tool short.
   function afterDelete() {
-    for (const key of new Set(shop.assignments.map(opKey))) renumberOp(key);
+    for (const key of new Set(shop.assignments.map(layoutKey))) renumberLayout(key);
     if (!jobById(shop.activeId)) setActive(shop.assignments.length ? shop.assignments[0].id : '');
     done();
   }
@@ -2409,6 +2689,18 @@
         box.appendChild(opt);
       }
     }
+    // A layout is not chosen or made here — the machine, the part and the op
+    // are what it is, and they are already settled by the tools set up on it.
+    // What this form is for is the number, so what the number names is said
+    // above it.
+    if (kind === 'layout') {
+      const layout = layoutById(draft.id);
+      const jobs = layout ? layoutJobsOf(layout) : [];
+      box.appendChild(el('div', 'mf-note', layoutWhere(layout) + ' — ' + jobs.length +
+        (jobs.length === 1 ? ' tool set up on it' : ' tools set up on it') +
+        '. The machine, the part and the op are what this layout is; the number is what it is ' +
+        'called on the floor, and no two layouts here can share one.'));
+    }
     const grid = el('div', 'mf-grid');
 
     // A setup is a link before it is anything else, so the three things it
@@ -2471,6 +2763,7 @@
       machine: 'Control, spindle, anything the next setup should know',
       part: 'Material, stock size, anything the whole job depends on',
       operation: 'Fixture, orientation, what this op leaves for the next',
+      layout: 'Fixture, offsets, work stops — anything the next person setting this layout should know',
     }[kind];
     area.addEventListener('input', () => { draft.notes = area.value; });
     notes.appendChild(area);
@@ -2490,7 +2783,9 @@
     const row = el('div', 'mf-form-btns');
     row.appendChild(button('mf-btn mf-btn-go', 'Save', saveForm));
     row.appendChild(button('mf-btn mf-btn-quiet', 'Cancel', closeForm));
-    if (draft.id) {
+    // A tool layout has no delete of its own: it exists exactly as long as
+    // there are tools set up on it, so taking the last one off is what ends it.
+    if (draft.id && DELETERS[kind]) {
       row.appendChild(button('mf-btn mf-btn-danger', DELETE_LABELS[kind], () => DELETERS[kind](draft.id)));
     }
     box.appendChild(row);
@@ -2540,8 +2835,12 @@
     const tool = jobTool(a);
     const part = jobPart(a);
     const op = jobOperation(a);
+    const layout = layoutOf(a);
+    // A layout is asked for by its number on the floor, so typing TL 12 — or
+    // just 12 — is a way of asking for everything on it.
     return hay(a.station, a.notes, machineName(a.machineId), op && op.name,
       part && part.number, part && part.desc,
+      layout && tlName(layout), layout && layout.notes,
       tool && tool.partNumber, tool && tool.desc).includes(filter);
   }
 
@@ -2561,7 +2860,7 @@
     }
     const search = el('input', 'mf-input mf-search');
     search.type = 'search';
-    search.placeholder = 'Filter by part, op, machine, tool…';
+    search.placeholder = 'Filter by tool layout, part, op, machine, tool…';
     search.value = filter;
     search.addEventListener('input', () => {
       filter = search.value.trim().toLowerCase();
@@ -2646,9 +2945,13 @@
         name.appendChild(el('span', 'mf-op-name', o.name));
         row.appendChild(name);
 
-        const machines = machinesOfOperation(o.id).map(machineName);
+        // An op run on two machines is two tool layouts, so the machines are
+        // named by the layout each is: that is what would be asked for.
+        const tls = layoutsOfOperation(o.id);
         const bits = [];
-        bits.push(machines.length ? machines.join(', ') : 'no machine yet');
+        bits.push(tls.length
+          ? tls.map(l => tlName(l) + ' ' + machineName(l.machineId)).join(', ')
+          : 'no machine yet');
         bits.push(jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : 'no tools set up');
         let total = 0, timed = 0;
         for (const a of jobs) {
@@ -2735,17 +3038,19 @@
         continue;
       }
 
-      // within a machine, the tools are grouped by the operation they are set
-      // up for and run in the order they cut
+      // within a machine, the tools are grouped by the tool layout they are on
+      // — the operation they are set up for — and run in the order they cut
       const groups = new Map();
       for (const a of jobs) {
-        const key = opKey(a);
+        const key = layoutKey(a);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(a);
       }
       for (const group of groups.values()) group.sort(bySeq);
       for (const group of groups.values()) {
         const gh = el('div', 'mf-group');
+        const layout = layoutOf(group[0]);
+        if (layout) gh.appendChild(tlChip(layout, 'mf-tl-sm'));
         gh.appendChild(el('div', 'mf-group-k', jobLabel(group[0])));
         let gTotal = 0, gTimed = 0;
         for (const a of group) {
@@ -2820,7 +3125,7 @@
   function moveJob(id, to) {
     const a = jobById(id);
     if (!a) return;
-    const order = opJobs(a);
+    const order = layoutJobs(a);
     const from = order.indexOf(a);
     if (to < 0 || to >= order.length || to === from) return;
     order.splice(to, 0, ...order.splice(from, 1));
@@ -2869,7 +3174,11 @@
         // the other direction of the relation: every machine this one tool is
         // set up on, and what it is cutting there
         for (const a of jobs.sort((x, y) => machineName(x.machineId).localeCompare(machineName(y.machineId)))) {
-          const label = machineName(a.machineId) + (a.station ? ' · ' + a.station : '');
+          // Which layout, then where in it: a tool on three layouts is asked
+          // for by the number of the one you mean.
+          const layout = layoutOf(a);
+          const label = (layout ? tlName(layout) + ' · ' : '') + machineName(a.machineId) +
+            (a.station ? ' · ' + a.station : '');
           const st = statsFor(a);
           tags.appendChild(button('mf-tag' + (a.id === shop.activeId ? ' mf-tag-on' : ''), label,
             () => selectJob(a.id),
@@ -2909,13 +3218,19 @@
      the ones it makes. An import never deletes anything. A part is matched by
      number, an operation by its name within that part, a machine by name, a
      tool by its part number and description, and a setup by the machine, tool
-     and operation it joins plus the station it sits in. Re-importing the same
+     and operation it joins plus the pocket it sits in. Re-importing the same
      file changes nothing, because a cycle is recognized by when it was recorded
      and how long it took.
+
+     The tool layout number is the one column that is neither a record's own
+     field nor derived: it belongs to the machine-and-op pair the row names. It
+     is taken where it is free, so a file exported from here goes back in with
+     its layouts still called what they were called.
   ---------------------------------------------------------------- */
   // Each record that can carry notes has its own notes column, so none can
   // swallow another's and a file that came out of here goes back in whole.
   const IMPORT_COLUMNS = [
+    'tool_layout',
     'machine', 'machine_notes',
     'part', 'part_description', 'part_notes', 'op', 'op_notes',
     'seq', 'station',
@@ -2928,6 +3243,8 @@
   // shorter ones a person is likely to type, and the ones earlier versions of
   // this add-on wrote, so a file exported before any of this still reads.
   const COLUMN_ALIASES = {
+    tool_layout: 'layout', tool_layout_number: 'layout', layout: 'layout',
+    layout_number: 'layout', tl: 'layout',
     machine: 'machine', machine_name: 'machine', machine_no: 'machine',
     machine_notes: 'machineNotes', machine_note: 'machineNotes',
     tool_notes: 'toolNotes', tool_note: 'toolNotes',
@@ -3086,12 +3403,16 @@
 
       const key = jobKeyOf(machineKey, toolKey, operationKey, cell.station);
       if (!links.has(key)) {
-        links.set(key, { key, machineKey, toolKey, operationKey, fields: {}, runs: [], lifeMin: 0 });
+        links.set(key, { key, machineKey, toolKey, operationKey, fields: {}, runs: [], lifeMin: 0, layout: 0 });
       }
       const link = links.get(key);
       for (const f of ['station', 'notes']) {
         if (cell[f]) link.fields[f] = cell[f];
       }
+      // The tool layout number in the file belongs to the machine-and-op pair
+      // this row names, not to the setup — every row of one layout carries the
+      // same number, and the last one to say anything is as good as the first.
+      if (cell.layout) link.layout = Math.floor(readNumber(cell.layout)) || link.layout;
       for (const f of JOB_NUMERIC) {
         if (!cell[f]) continue;
         const n = readNumber(cell[f]);
@@ -3137,6 +3458,7 @@
       machines: [...machines.entries()].map(([key, m]) => ({ key, name: m.name, notes: m.notes })),
       tools: [...tools.values()],
       links: [...links.values()],
+      layoutNumbers: [...links.values()].filter(l => l.layout).length,
       dataRows, skipped, badTimes, badSecs, converted, unconverted,
     };
   }
@@ -3230,7 +3552,7 @@
       if (kept > limits.maxRuns) plan.overflowRuns += kept - limits.maxRuns;
       if (match) {
         plan.newRuns += fresh.length;
-        plan.update.push({ job: match, fields: link.fields, runs: fresh });
+        plan.update.push({ job: match, fields: link.fields, runs: fresh, layout: link.layout });
       } else if (jobRoom > 0) {
         jobRoom--;
         plan.newRuns += fresh.length;
@@ -3296,11 +3618,13 @@
     }
 
     const touched = new Set();
+    const numbered = [];   // [the layout's key, the number the file gave it]
     for (const u of plan.update) {
       Object.assign(u.job, u.fields);
       u.job.runs = [...u.runs, ...u.job.runs].sort((a, b) => b.at - a.at).slice(0, limits.maxRuns);
       touch(u.job);
-      touched.add(opKey(u.job));
+      touched.add(layoutKey(u.job));
+      if (u.layout && u.job.operationId) numbered.push([layoutKey(u.job), u.layout]);
     }
     for (const a of plan.add) {
       const machine = machineByKey.get(a.link.machineKey);
@@ -3319,10 +3643,23 @@
       // every edge the tool has
       if (!job.indexEdges && tool.cuttingEdges) job.indexEdges = tool.cuttingEdges;
       shop.assignments.push(job);
-      touched.add(opKey(job));
+      touched.add(layoutKey(job));
+      if (a.link.layout && job.operationId) numbered.push([layoutKey(job), a.link.layout]);
     }
-    for (const key of touched) renumberOp(key);
+    for (const key of touched) renumberLayout(key);
     for (const p of shop.parts) renumberPart(p.id);
+    // The layouts the new setups have brought into being, numbered next-free…
+    ensureLayouts();
+    // …and then given back the numbers the file carried, where those are free.
+    // A number another layout already answers to is left alone: the file's word
+    // is not worth taking two layouts' names away over, and the preview says so.
+    for (const [key, number] of numbered) {
+      const layout = layoutByKey(key);
+      if (!layout || layout.number === number) continue;
+      if (layoutList().some(l => l.number === number)) continue;
+      layout.number = number;
+      touch(layout);
+    }
     if (!jobById(shop.activeId) && shop.assignments.length) shop.activeId = shop.assignments[0].id;
     saveNow(); // a bulk import goes out at once rather than sitting in the debounce
     render();
@@ -3359,6 +3696,8 @@
     if (read.unconverted) notes.push(read.unconverted + ' tool life' + (read.unconverted === 1 ? '' : 's') +
       ' in minutes had no cycle to convert against, and ' +
       (read.unconverted === 1 ? 'was' : 'were') + ' left out.');
+    if (read.layoutNumbers) notes.push('Tool layout numbers in the file are kept where they are free; ' +
+      'one that another layout already answers to is left alone.');
     if (plan.dupeRuns) notes.push(plan.dupeRuns + ' cycle' + (plan.dupeRuns === 1 ? ' is' : 's are') +
       ' already recorded and will be left alone.');
     if (read.skipped) notes.push(read.skipped + ' row' + (read.skipped === 1 ? '' : 's') +
@@ -3423,11 +3762,12 @@
   }
 
   /* ---------------- export ---------------- */
-  // One row per recorded cycle, carrying the part, the operation, the machine,
-  // the tool and the setup between them, so the file can be pivoted in a
-  // spreadsheet without going back to the app. A setup with nothing timed still
-  // gets its row, and so do a part with no operations, an operation with no
-  // tools, a tool in the crib and a machine with nothing on it.
+  // One row per recorded cycle, carrying the tool layout it was measured on and
+  // the part, the operation, the machine, the tool and the setup that make up
+  // that layout, so the file can be pivoted in a spreadsheet without going back
+  // to the app. A setup with nothing timed still gets its row, and so do a part
+  // with no operations, an operation with no tools, a tool in the crib and a
+  // machine with nothing on it.
   function exportCsv() {
     if (!shop || (!shop.tools.length && !shop.machines.length && !shop.parts.length)) {
       flash('Nothing to export yet.');
@@ -3454,14 +3794,20 @@
       cutting_edges: t.cuttingEdges || '', tool_cost: t.cost || '', tool_notes: t.notes,
     } : {});
 
-    // in running order, machine by machine and op by op, so the file opens the
-    // way the floor runs
-    const jobs = [...shop.assignments].sort((a, b) =>
-      opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b));
+    // in tool layout order, and within a layout in the order the tools cut, so
+    // the file opens the way the floor runs
+    const jobs = [...shop.assignments].sort((a, b) => {
+      const la = layoutOf(a), lb = layoutOf(b);
+      if (la && lb && la !== lb) return byNumber(la, lb);
+      if (!la !== !lb) return la ? -1 : 1;   // the ones on no layout go last
+      return opLabel(a).localeCompare(opLabel(b)) || bySeq(a, b);
+    });
     for (const a of jobs) {
       const s = statsFor(a);
       const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
+      const layout = layoutOf(a);
       const base = {
+        tool_layout: layout ? layout.number : '',
         ...machineCells(a.machineId),
         ...opCells(jobOperation(a)),
         ...toolCells(jobTool(a)),
@@ -3506,6 +3852,328 @@
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
+
+  /* ---------------- the tool layout, on paper ----------------
+     A shop runs off a tool layout sheet: one page, one layout, every pocket on
+     it and what goes in each. This is that sheet, made out of what the
+     shopwatch already knows — so it carries the measured cycle and the time in
+     cut alongside the tooling, which a typed-up sheet never does.
+
+     One page per tool layout, laid out the way the screen lays one out: the
+     number and the address at the top, the layout's cycle divided between its
+     tools in the order they cut, the same tools as columns of cut and waste,
+     and then the table — pocket by pocket, with the tool in it, what it is
+     timed at, and the tool life worked out for it there. The pockets are the
+     spine of that table, ready for the holder and the insert to hang off each
+     one as those become records of their own.
+
+     It is a print document rather than a file this add-on writes byte by byte:
+     the browser's own "Save as PDF" makes a better PDF than anything that could
+     be hand-rolled here, it needs no library, and the same page prints straight
+     onto paper for the machine. The colours are the app's, so what comes out
+     reads as the screen it came from; print-color-adjust keeps them, since a
+     chart whose fills the printer has helpfully removed says nothing.
+  ---------------------------------------------------------------- */
+  const escHtml = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const PDF_STYLE = `
+    :root {
+      --bg: #10141D; --panel: #141926; --line: #232938; --ink: #EDEFF4;
+      --dim: #8A93A6; --accent: #4FD1E0; --cut: #E8734A; --waste: #6E3F2E;
+      --unmarked: #565E72;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* The padding is for the window this opens in, where there is no page
+       margin to stand the sheet off the edge of the glass. Printing has one, so
+       it is given back there rather than counted twice. */
+    body {
+      margin: 0; padding: 10px 14px; background: var(--bg); color: var(--ink);
+      font: 11px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    @page { size: A4 portrait; margin: 10mm; }
+    @media print { body { padding: 0; } }
+    /* One layout, one page. The last one does not push a blank sheet out. */
+    .tl { padding: 4mm 0 0; page-break-after: always; break-after: page; }
+    .tl:last-child { page-break-after: auto; break-after: auto; }
+
+    .head { display: flex; align-items: flex-start; gap: 12px; border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+    .no {
+      font-family: var(--mono); font-size: 26px; font-weight: 700; line-height: 1;
+      color: var(--accent); border: 2px solid var(--accent); border-radius: 8px;
+      padding: 6px 10px; white-space: nowrap;
+    }
+    .who { flex: 1; min-width: 0; }
+    .machine { font-size: 17px; font-weight: 700; }
+    .op { font-family: var(--mono); font-size: 12px; color: var(--dim); margin-top: 2px; }
+    .figure { text-align: right; white-space: nowrap; }
+    .total { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1.05; }
+    .sub { font-size: 10px; color: var(--dim); }
+
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-top: 8px; page-break-inside: avoid; }
+    .panel-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; }
+    .k { font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+    .v { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+    .bar { display: flex; gap: 2px; height: 20px; }
+    .seg { display: flex; align-items: center; justify-content: center; min-width: 3px; font-family: var(--mono); font-size: 9px; font-weight: 700; }
+    .seg:last-child { border-radius: 0 3px 3px 0; }
+
+    .legend { margin-top: 8px; }
+    .lrow { display: flex; align-items: center; gap: 7px; padding: 2px 0; font-size: 10.5px; }
+    .lrow.off { color: var(--dim); }
+    .sw { width: 9px; height: 9px; border-radius: 2px; border: 1px solid var(--line); flex: none; }
+    .n { font-family: var(--mono); font-size: 9.5px; color: var(--dim); width: 12px; flex: none; }
+    .nm { flex: 1; min-width: 0; }
+    .val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .pct { color: var(--dim); width: 62px; text-align: right; flex: none; font-size: 10px; }
+    .chip {
+      font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+      background: var(--line); color: var(--accent); border-radius: 4px; padding: 1px 5px; flex: none;
+    }
+
+    .plot { display: flex; align-items: flex-end; justify-content: flex-start; gap: 8px; height: 70px; border-bottom: 1px solid var(--line); }
+    .slot { flex: 1 1 0; max-width: 54px; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+    .col { width: 100%; max-width: 20px; display: flex; flex-direction: column; justify-content: flex-end; }
+    .waste { background: var(--waste); border-radius: 3px 3px 0 0; min-height: 1px; }
+    .cut { background: var(--cut); min-height: 1px; }
+    .cut.top { border-radius: 3px 3px 0 0; }
+    .unmarked { flex: 1; border: 1px solid var(--unmarked); border-bottom: none; border-radius: 3px 3px 0 0; }
+    .axis { display: flex; justify-content: flex-start; gap: 8px; margin-top: 4px; }
+    .aslot { flex: 1 1 0; max-width: 54px; text-align: center; font-family: var(--mono); font-size: 9px; color: var(--dim); }
+    .aslot b { display: block; color: var(--ink); font-size: 9px; }
+    .key { display: flex; gap: 12px; margin-top: 8px; font-size: 9.5px; color: var(--dim); }
+    .key span { display: flex; align-items: center; gap: 5px; }
+    .key i { width: 9px; height: 9px; border-radius: 2px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    th {
+      text-align: left; font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--dim); font-weight: 600; padding: 0 5px 4px 0; border-bottom: 1px solid var(--line);
+    }
+    td { padding: 4px 5px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td.pocket { font-family: var(--mono); font-weight: 700; color: var(--accent); white-space: nowrap; }
+    td.tool { font-weight: 600; }
+    .rownote td { border-bottom: 1px solid var(--line); color: var(--dim); font-size: 9.5px; padding-top: 0; }
+    .empty { color: var(--dim); font-size: 10.5px; }
+
+    .notes { margin-top: 8px; page-break-inside: avoid; }
+    .note { font-size: 10px; color: var(--dim); margin-top: 4px; }
+    .note b { color: var(--ink); font-weight: 600; }
+    .foot { display: flex; gap: 10px; margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 9px; color: var(--dim); }
+    .foot .right { margin-left: auto; }
+  `;
+
+  // One page: everything the shopwatch holds about one tool layout.
+  function layoutPage(l, when) {
+    const jobs = layoutJobsOf(l);
+    const op = operationById(l.operationId);
+    const part = op ? partById(op.partId) : null;
+    const machine = machineById(l.machineId);
+    const rows = jobs.map((a, i) => {
+      const s = statsFor(a);
+      return {
+        a,
+        step: rampStep(i, jobs.length),
+        avg: s ? s.avg : 0,
+        count: s ? s.count : 0,
+        // the cut, and the cycle it is a share of — the marked ones, where any
+        // were marked, exactly as the screen does it
+        cut: s ? s.avgCut : 0,
+        cycle: s ? (s.avgCutCycle || s.avg) : 0,
+        marked: s ? s.cutCount : 0,
+        life: lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0),
+      };
+    });
+    const timed = rows.filter(r => r.avg > 0);
+    const total = timed.reduce((sum, r) => sum + r.avg, 0);
+    const drawn = rows.filter(r => r.cycle > 0);
+    const withCut = drawn.filter(r => r.cut > 0);
+    const cutTotal = withCut.reduce((sum, r) => sum + r.cut, 0);
+    const cycleTotal = withCut.reduce((sum, r) => sum + r.cycle, 0);
+    const share = cycleTotal ? cutTotal / cycleTotal : 0;
+    const longest = drawn.length ? Math.max(...drawn.map(r => r.cycle)) : 0;
+
+    const head =
+      '<div class="head">' +
+        '<div class="no">' + escHtml(tlName(l)) + '</div>' +
+        '<div class="who">' +
+          '<div class="machine">' + escHtml(machine ? machine.name : 'No machine') + '</div>' +
+          '<div class="op">' + escHtml(operationLabel(op)) +
+            (part && part.desc && part.number ? ' — ' + escHtml(part.desc) : '') + '</div>' +
+        '</div>' +
+        '<div class="figure">' +
+          '<div class="total">' + (total ? fmtSec(total) : '—') + '</div>' +
+          '<div class="sub">' + (timed.length
+            ? 'measured across ' + timed.length + (timed.length === 1 ? ' tool' : ' tools')
+            : 'nothing timed yet') + '</div>' +
+        '</div>' +
+      '</div>';
+
+    // The cycle divided between the tools in the order they cut, on the same
+    // ramp the screen uses — one hue stepped light to dark along the order.
+    const bar = timed.length > 1
+      ? '<div class="bar">' + timed.map(r =>
+        '<div class="seg" style="flex-grow:' + (r.avg / total).toFixed(4) +
+        ';background:' + r.step.fill + ';color:' + r.step.ink + '">' +
+        (r.avg / total >= 0.07 && r.a.seq ? escHtml(r.a.seq) : '') + '</div>').join('') + '</div>'
+      : '';
+    const legend = '<div class="legend">' + rows.map(r =>
+      '<div class="lrow' + (r.avg ? '' : ' off') + '">' +
+        '<span class="sw"' + (r.avg ? ' style="background:' + r.step.fill + '"' : '') + '></span>' +
+        '<span class="n">' + escHtml(r.a.seq || '–') + '</span>' +
+        (r.a.station ? '<span class="chip">' + escHtml(r.a.station) + '</span>' : '') +
+        '<span class="nm">' + escHtml(jobName(r.a)) + '</span>' +
+        '<span class="val">' + (r.avg ? fmtSec(r.avg) : '—') + '</span>' +
+        '<span class="pct">' + (r.avg ? Math.round((r.avg / total) * 100) + '%' : 'not timed') + '</span>' +
+      '</div>').join('') + '</div>';
+
+    const cycle =
+      '<div class="panel">' +
+        '<div class="panel-head"><span class="k">The cycle, tool by tool</span>' +
+          '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'nothing timed yet') + '</span></div>' +
+        (timed.length ? bar + legend
+          : '<div class="empty">No cycles have been timed on this layout yet.</div>') +
+      '</div>';
+
+    // A column is a tool's measured cycle; what is filled in is the part of it
+    // marked in the cut, so the air above the fill is the waste.
+    const plot = drawn.length
+      ? '<div class="plot">' + drawn.map(r => {
+        const inner = r.cut > 0
+          ? ((r.cycle - r.cut > 0
+            ? '<div class="waste" style="height:' + (((r.cycle - r.cut) / r.cycle) * 100).toFixed(2) + '%"></div>'
+            : '') +
+            '<div class="cut' + (r.cycle - r.cut > 0 ? '' : ' top') + '" style="height:' +
+            ((r.cut / r.cycle) * 100).toFixed(2) + '%"></div>')
+          : '<div class="unmarked"></div>';
+        return '<div class="slot"><div class="col" style="height:' +
+          ((r.cycle / longest) * 100).toFixed(2) + '%">' + inner + '</div></div>';
+      }).join('') + '</div>' +
+      '<div class="axis">' + drawn.map(r =>
+        '<div class="aslot">' + escHtml(r.a.seq || '–') +
+        (r.cut ? '<b>' + Math.round((r.cut / r.cycle) * 100) + '%</b>' : '') + '</div>').join('') + '</div>' +
+      '<div class="key">' +
+        '<span><i style="background:var(--cut)"></i>in cut</span>' +
+        '<span><i style="background:var(--waste)"></i>everything else</span>' +
+        (drawn.some(r => !r.cut) ? '<span><i style="border:1px solid var(--unmarked)"></i>not marked</span>' : '') +
+      '</div>'
+      : '<div class="empty">Nothing has been marked in and out of cut on this layout yet.</div>';
+
+    const cut =
+      '<div class="panel">' +
+        '<div class="panel-head"><span class="k">In cut, and the waste</span>' +
+          '<span class="v">' + (share
+            ? Math.round(share * 100) + '% of the marked cycle is cutting'
+            : 'nothing marked in cut') + '</span></div>' +
+        plot +
+      '</div>';
+
+    // The sheet itself: a row per pocket, in the order the tools cut.
+    const columns = ['#', 'Pocket', 'Tool', 'Tool part no.', 'Cycles', 'Avg', 'In cut',
+      'Edges', 'Parts / index', 'Parts / tool', 'Min / edge'];
+    const body = rows.map(r => {
+      const tool = jobTool(r.a);
+      const cells = [
+        ['num', escHtml(r.a.seq || '–')],
+        ['pocket', escHtml(r.a.station || '—')],
+        ['tool', escHtml(jobName(r.a))],
+        ['num', escHtml((tool && tool.partNumber) || '—')],
+        ['num', escHtml(r.count || '—')],
+        ['num', r.avg ? fmtSec(r.avg) : '—'],
+        ['num', r.cut ? fmtSec(r.cut) + ' · ' + Math.round((r.cut / r.cycle) * 100) + '%' : '—'],
+        ['num', escHtml(r.a.indexEdges || (tool && tool.cuttingEdges) || '—')],
+        ['num', escHtml(r.a.partsPerIndex || '—')],
+        ['num', escHtml((r.life && r.life.partsPerTool) || '—')],
+        ['num', r.life && r.life.edgeMin ? escHtml(round(r.life.edgeMin, 1)) : '—'],
+      ];
+      const line = '<tr>' + cells.map(([cls, v]) => '<td class="' + cls + '">' + v + '</td>').join('') + '</tr>';
+      // What the last person to set this tool learned about it, under its row —
+      // which is the half of a layout sheet that is usually written in pen.
+      return line + (r.a.notes
+        ? '<tr class="rownote"><td></td><td colspan="' + (columns.length - 1) + '">' +
+          escHtml(r.a.notes) + '</td></tr>'
+        : '');
+    }).join('');
+    const table =
+      '<div class="panel">' +
+        '<div class="panel-head"><span class="k">The tools, in the order they cut</span>' +
+          '<span class="v">' + jobs.length + (jobs.length === 1 ? ' pocket' : ' pockets') + '</span></div>' +
+        (jobs.length
+          ? '<table><thead><tr>' + columns.map(h => '<th>' + escHtml(h) + '</th>').join('') +
+            '</tr></thead><tbody>' + body + '</tbody></table>'
+          : '<div class="empty">No tools are set up on this layout.</div>') +
+      '</div>';
+
+    const notes = [
+      ['This layout', l.notes],
+      [op ? op.name : 'Operation', op && op.notes],
+      [part ? partName(part) : 'Part', part && part.notes],
+      [machine ? machine.name : 'Machine', machine && machine.notes],
+    ].filter(([, text]) => text);
+    const notesBlock = notes.length
+      ? '<div class="notes panel">' +
+        '<div class="panel-head"><span class="k">Notes</span></div>' +
+        notes.map(([who, text]) =>
+          '<div class="note"><b>' + escHtml(who) + '</b> — ' + escHtml(text) + '</div>').join('') +
+        '</div>'
+      : '';
+
+    const foot = '<div class="foot"><span>' + escHtml(doc ? doc.title : 'Shopwatch') +
+      ' · ' + escHtml(tlName(l)) + ' · ' + escHtml(layoutWhere(l)) + '</span>' +
+      '<span class="right">' + escHtml(when) + '</span></div>';
+
+    return '<section class="tl">' + head + cycle + cut + table + notesBlock + foot + '</section>';
+  }
+
+  // Every tool layout, or one of them, as a print-ready document handed to the
+  // browser's own print dialog — where "Save as PDF" is one of the choices.
+  function exportPdf(onlyId) {
+    if (!shop) return;
+    const pages = onlyId ? [layoutById(onlyId)].filter(Boolean) : allLayouts();
+    if (!pages.length) {
+      flash(shop.assignments.length
+        ? 'None of the tools set up here are on an operation yet, so there is no tool layout to print.'
+        : 'Set a tool up on a machine for an operation first — a tool layout is what a page is.');
+      return;
+    }
+    const when = new Date().toLocaleString();
+    const title = (doc ? doc.title : 'Shopwatch') +
+      (onlyId ? ' — ' + tlName(pages[0]) : ' — tool layouts');
+    const html = '<!doctype html><html><head><meta charset="utf-8"><title>' + escHtml(title) +
+      '</title><style>' + PDF_STYLE + '</style></head><body>' +
+      pages.map(l => layoutPage(l, when)).join('') + '</body></html>';
+
+    const win = window.open('', '_blank');
+    if (!win) { flash('Allow pop-ups on this site to make the PDF.'); return; }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    // The print is fired from here rather than from a script inside the page,
+    // which is the more reliable of the two where inline script is restricted.
+    let printed = false;
+    const firePrint = () => {
+      if (printed) return;
+      printed = true;
+      try { win.focus(); win.print(); } catch { /* the page is open; Ctrl+P still works */ }
+    };
+    win.onload = () => setTimeout(firePrint, 120);
+    setTimeout(firePrint, 350);
+
+    // A tool on a machine with no operation named is on no layout, so it is on
+    // no page. Better said than quietly left out of a sheet somebody is about
+    // to work from.
+    const loose = onlyId ? 0 : shop.assignments.filter(a => !a.operationId).length;
+    flash(pages.length + (pages.length === 1 ? ' tool layout' : ' tool layouts') +
+      ', one to a page — choose “Save as PDF” in the print dialog.' +
+      (loose ? ' ' + loose + (loose === 1 ? ' tool is' : ' tools are') +
+        ' on a machine with no operation named, so ' + (loose === 1 ? 'it is' : 'they are') +
+        ' on no layout and no page.' : ''), true);
+  }
+
   /* ---------------- keyboard ---------------- */
   // Hands are usually on the machine rather than the keyboard, but a laptop at
   // the bench gets the three keys that matter. Ignored while typing, and while
@@ -3523,6 +4191,52 @@
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); reset(); }
   }
 
+  /* ---------------- the mark ----------------
+     A stopwatch whose hand is a cutting insert: the two things this screen is
+     about, in one shape. The dial and the crown say what it is from across a
+     bench; the rhombus sweeping out of the middle is an 80° insert, which is
+     the hand of a watch that only ever times metal being cut.
+
+     It is drawn rather than fetched — an inline SVG needs no file, no request
+     and no second copy at another size, and it takes the palette with it: the
+     mark is currentColor, so it is the app's accent wherever the app's accent
+     is, and the pivot is punched out in the page colour rather than painted in
+     a colour that would be wrong on another background.
+
+     The wordmark beside it splits the way the app's own does — MindMap**Share**,
+     Shop**watch** — because the two halves are the two halves of the idea.
+  ---------------------------------------------------------------- */
+  const LOGO = '<svg viewBox="0 0 24 24" class="mf-logo" aria-hidden="true" focusable="false">' +
+    // the crown: the button, and a neck run far enough down to meet the dial —
+    // the two are one shape at any size, and a gap there reads as a loose dot
+    '<rect x="10.2" y="0.9" width="3.6" height="2.3" rx="1.1" fill="currentColor"/>' +
+    '<rect x="11.1" y="2.6" width="1.8" height="3.6" fill="currentColor"/>' +
+    '<circle cx="12" cy="13.6" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/>' +
+    // the hand: a rhombus, the shape of the insert it is timing, swept out of
+    // the middle to where a second hand sits
+    '<polygon points="16.17,9.43 15.05,13.61 10.87,14.73 11.99,10.55" fill="currentColor"/>' +
+    '<circle cx="12" cy="13.6" r="1" fill="var(--bg)"/>' +
+    '</svg>';
+
+  function brand() {
+    const box = el('div', 'mf-brand');
+    // The mark is set as markup because an SVG built with createElement lands in
+    // the HTML namespace and never draws. It is a constant with nothing
+    // interpolated into it.
+    const mark = el('span', 'mf-mark');
+    mark.innerHTML = LOGO;
+    box.appendChild(mark);
+
+    const text = el('div', 'mf-brand-text');
+    const title = el('h1', 'mf-h1');
+    title.appendChild(document.createTextNode('Shop'));
+    title.appendChild(el('span', 'mf-h1-b', 'watch'));
+    text.appendChild(title);
+    text.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, layout by layout'));
+    box.appendChild(text);
+    return box;
+  }
+
   /* ---------------- the shell's hooks ---------------- */
   function mount(section, context) {
     ctx = context;
@@ -3532,10 +4246,7 @@
     const page = el('div', 'mf-page');
 
     const top = el('div', 'mf-top');
-    const heading = el('div');
-    heading.appendChild(el('h1', 'mf-h1', 'Shopwatch'));
-    heading.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, op by op'));
-    top.appendChild(heading);
+    top.appendChild(brand());
     const actions = el('div', 'mf-top-btns');
     // Everything that adds to a floor is left off a screen that cannot write to
     // one. Export stays: reading it and downloading it are the same permission.
@@ -3561,6 +4272,10 @@
         'Read a spreadsheet of tooling back in — the columns ⤓ Export writes'));
     }
     actions.appendChild(button('mf-btn mf-btn-sm', '⤓ Export', exportCsv, 'Download the whole shop record as a spreadsheet'));
+    // Reading a floor and printing it are the same permission, so this stays on
+    // a screen that may not write, next to Export for the same reason.
+    actions.appendChild(button('mf-btn mf-btn-sm', '🖨 PDF', () => exportPdf(),
+      'Every tool layout, one to a page — to print, or to save as a PDF'));
     if (signedIn()) actions.appendChild(file);
     top.appendChild(actions);
     page.appendChild(top);
@@ -3610,14 +4325,14 @@
     host.appendChild(page);
 
     document.addEventListener('keydown', onKey);
-    restoreWatch();
-    restoreFolded();
+    restoreLocal();
     render(); // the loading state; open() runs straight after this and fetches
   }
 
   // Coming back to the screen: the record may have moved on another device, and
   // #/p/manufacturing/t/<id> points the watch at a particular setup.
   function open(sub) {
+    restoreLocal();
     startTick();
     const path = String(sub || '');
     const asDoc = path.match(/^d\/([A-Za-z0-9]{1,40})$/);
