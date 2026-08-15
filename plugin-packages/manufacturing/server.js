@@ -21,14 +21,13 @@
                    everywhere
      assignments   one tool, on one machine, doing one operation. This is the
                    many-to-many between tools and machines, and it carries what
-                   is only true of that combination — the cutting time, how
-                   many of the tool's edges are indexed through there, how many
-                   parts run between one index and the next, and every cycle
-                   timed against it
+                   is only true of that combination — how many of the tool's
+                   edges are indexed through there, how many parts run between
+                   one index and the next, and every cycle timed against it
 
    A tool runs on as many machines as it is assigned to, and a machine holds as
    many tools; neither owns the other. The same tool on the same machine doing
-   a different operation is a different assignment with its own cutting time,
+   a different operation is a different assignment with its own cycle times,
    because the time a tool spends in cut is a fact about the operation it is
    doing and not about the tool. An assignment whose tool, machine or operation
    is gone is dropped or unlinked here rather than stored as a dangling link.
@@ -49,7 +48,6 @@ const MAX_OPERATIONS = 300;       // operations across all of those parts
 const MAX_ASSIGNMENTS = 200;      // tool-on-machine-for-an-operation links
 const MAX_RUNS = 300;             // recorded cycles kept per assignment, newest first
 const MAX_RUN_SEC = 86400;        // a single cycle longer than a day is a stuck timer
-const MAX_CUT_SEC = 86400;        // cutting time for one part
 const MAX_EDGES = 64;             // cutting edges on one tool
 const MAX_PARTS_PER_INDEX = 100000; // parts between one edge index and the next
 const MAX_SEQ = 999;              // position in the op's running order
@@ -186,7 +184,6 @@ module.exports = function (ctx) {
       // cut. 0 means it has not been placed yet, and sorts after the ones that
       // have.
       seq: num(raw.seq, MAX_SEQ, true),
-      cutSec: num(raw.cutSec, MAX_CUT_SEC, false),
       indexEdges: num(raw.indexEdges, MAX_EDGES, true),
       partsPerIndex: num(raw.partsPerIndex, MAX_PARTS_PER_INDEX, true),
       notes: text(raw.notes, 400),
@@ -204,7 +201,7 @@ module.exports = function (ctx) {
 
   function emptyShop() {
     return {
-      version: 3,
+      version: 4,
       machines: [], tools: [], parts: [], operations: [], assignments: [],
       activeId: '', updatedAt: 0,
     };
@@ -296,13 +293,12 @@ module.exports = function (ctx) {
 
       if (shop.assignments.length >= MAX_ASSIGNMENTS) continue;
       const avg = runs.length ? runs.reduce((sum, r) => sum + r.sec, 0) / runs.length : 0;
-      const cutSec = avg ? Math.round(avg * 1000) / 1000 : 0;
       // Version 1 held tool life as cutting minutes per edge. In parts, that is
       // the life divided by the cycle it was measured against — so with nothing
       // timed there is no cycle to divide by, and the old figure is carried
       // into the notes rather than turned into a number nobody measured.
-      const partsPerIndex = old.lifeMin && cutSec
-        ? Math.min(Math.floor((old.lifeMin * 60) / cutSec), MAX_PARTS_PER_INDEX)
+      const partsPerIndex = old.lifeMin && avg
+        ? Math.min(Math.floor((old.lifeMin * 60) / avg), MAX_PARTS_PER_INDEX)
         : 0;
       const carried = [];
       if (old.insertsPerOp > 1) carried.push(old.insertsPerOp + ' inserts mounted');
@@ -318,7 +314,6 @@ module.exports = function (ctx) {
         op: old.op,
         station: old.station,
         seq: old.seq,
-        cutSec,
         indexEdges: old.indexes,
         partsPerIndex,
         notes,
@@ -396,15 +391,42 @@ module.exports = function (ctx) {
     return shop;
   }
 
+  /* Version 3 kept a cutting time typed onto the setup, next to the time
+     actually marked in and out of cut at the machine. Two answers to one
+     question, and only one of them was measured — so the typed one is gone and
+     the measured one stands alone.
+
+     A number somebody typed is not this file's to throw away, though: where a
+     setup carries one, it goes into that setup's notes, the way version 1's
+     tool life in minutes did when there was no cycle to convert it against.
+     Once carried it is not a field any more, so a second pass finds nothing
+     and adds nothing. */
+  function fromVersion3(s) {
+    for (const raw of list(s.assignments)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const cutSec = num(raw.cutSec, MAX_RUN_SEC, false);
+      delete raw.cutSec;
+      if (!cutSec) continue;
+      const carried = 'cutting time was ' + (Math.round(cutSec * 100) / 100) + ' s';
+      raw.notes = [text(raw.notes, 400), '(' + carried + ')'].filter(Boolean).join(' ');
+    }
+    return s;
+  }
+
   // Always returns a valid record — used both to normalize what comes out of
   // storage and to validate what a client sends in.
   function sanitizeShop(input) {
     let s = input && typeof input === 'object' ? input : {};
+    // Which shape this arrived in has to be read before anything converts it,
+    // because every conversion below returns the current one.
+    const was = num(s.version, 99, true);
     // A record without an assignments list was written before tools and
     // machines were separate things; one without an operations list, before
     // the part and the op were records rather than text on the link.
     if (!Array.isArray(s.assignments)) s = fromVersion1(s);
     if (!Array.isArray(s.operations)) s = fromVersion2(s);
+    // ...and one written before this version carries a typed cutting time.
+    if (was < 4) s = fromVersion3(s);
 
     const shop = emptyShop();
     // Two records claiming the same id would make one of them unreachable, so

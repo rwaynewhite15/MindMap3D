@@ -27,6 +27,18 @@
      running and the tool cutting are different states, and Stop is already
      amber. Warm, and loud enough to read across a machine. */
   --mf-cut: #E8734A;
+  /* The rest of the cycle, on the cut-and-waste chart: a dark step of the same
+     hue, so cut and not-cut read as one measure rather than two subjects. The
+     pair is checked as an ordinal ramp against the panel it is drawn on —
+     monotone lightness, 0.30 between the steps, and this darker one still
+     clearing the panel at 2.02:1, which is what keeps an all-waste column
+     visible as a column. */
+  --mf-waste: #6E3F2E;
+  /* Neither: a tool nobody has marked in and out of cut. Off the cut ramp
+     altogether, because no measurement was taken — it is not zero seconds. A
+     hairline needs more contrast than a fill to read at all, so this sits a
+     step above the waste step, at 2.71:1 on the panel. */
+  --mf-unmarked: #565E72;
   --mf-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -361,6 +373,91 @@
 .mf-legend-name { flex: 1; min-width: 6em; display: flex; align-items: center; gap: 6px; }
 .mf-legend-v { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; }
 .mf-legend-p { font-size: 11.5px; color: var(--dim); width: 62px; text-align: right; flex: none; }
+
+/* ---------------- in the cut, and the waste around it ----------------
+   One column per tool of the op, side by side. A column is that tool's
+   measured cycle, drawn to a scale shared across the op, and what is filled in
+   at the bottom of it is the part of that cycle the tool was marked in the cut
+   for. So the empty top of each column is the waste — rapids, the tool change,
+   the bar feed — and the tool with the most air above its fill is the one
+   worth attacking.
+
+   Between the fill and the waste is a 2px gap in the panel colour rather than
+   a border: white space is what separates two fills here, the same way it does
+   along the op cycle bar above. A tool nobody has marked in cut is not drawn
+   as a full column of waste — that is a measurement nobody took — but as an
+   outline with nothing in it. */
+.mf-cutchart {
+  margin-top: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.mf-cutchart-figure { margin-left: auto; text-align: right; }
+/* Proportional figures, not tabular: this one is read as a number, not lined
+   up under another one. */
+.mf-cutchart-pct { font-family: var(--mf-mono); font-size: 30px; font-weight: 700; line-height: 1.05; }
+
+/* The plot: a fixed band for the columns, with the axis and everything under
+   it left to grow, so a long tool name can never squeeze the bars. */
+.mf-plot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 10px;
+  height: 132px;
+  border-bottom: 1px solid var(--line);   /* the baseline every column grows from */
+}
+/* The slots share the width evenly but stop growing, so three tools stand
+   together in the middle rather than being flung to the corners: side by side
+   is the whole point of the chart, and columns a screen apart cannot be
+   compared by eye. The axis row below uses the same flex and the same cap, so
+   every label stays under its own column. */
+.mf-plot-slot { flex: 1 1 0; min-width: 0; max-width: 72px; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+/* Never fill the slot — a column is capped and the leftover is air. */
+.mf-col {
+  width: 100%;
+  max-width: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;                  /* the surface gap between waste and cut */
+  justify-content: flex-end;
+}
+.mf-col:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.mf-col-waste { background: var(--mf-waste); flex-basis: 0; border-radius: 4px 4px 0 0; min-height: 2px; }
+.mf-col-cut { background: var(--mf-cut); flex-basis: 0; min-height: 2px; }
+/* Nothing above it: then the cut is the top of the column and takes the
+   rounded end. */
+.mf-col-cut.mf-col-top { border-radius: 4px 4px 0 0; }
+/* Timed, but never marked in and out of cut: a column with no reading in it. */
+.mf-col-empty {
+  flex: 1 1 auto;
+  border: 1px solid var(--mf-unmarked);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+.mf-col.mf-on .mf-col-waste, .mf-col.mf-on .mf-col-cut { filter: brightness(1.12); }
+
+/* The axis band under the baseline: which tool each column is, and — on the
+   most and least cut of them only — what it reads. */
+.mf-plot-axis { display: flex; justify-content: center; gap: 10px; margin-top: 6px; }
+.mf-axis-slot { flex: 1 1 0; min-width: 0; max-width: 72px; text-align: center; }
+.mf-axis-n {
+  font-family: var(--mf-mono);
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.mf-axis-call { font-size: 11px; color: var(--ink); font-weight: 600; margin-top: 1px; }
+
+.mf-cutkey { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 12px; color: var(--dim); }
+.mf-cutkey span { display: flex; align-items: center; gap: 6px; }
+.mf-cutkey i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.mf-key-cut { background: var(--mf-cut); }
+.mf-key-waste { background: var(--mf-waste); }
+.mf-key-unmarked { border: 1px solid var(--mf-unmarked); }
+.mf-legend-w { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; color: var(--dim); }
 
 /* ---------------- the three lists ----------------
    The same records from three ends: parts with the operations that make them,
