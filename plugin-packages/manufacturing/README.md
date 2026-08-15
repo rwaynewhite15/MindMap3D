@@ -12,21 +12,27 @@ operation.** That is the shape of the record:
   part, because that is what an op is: a step in making *that* part, not a name
   that means the same thing everywhere
 - **setting a tool up** on a machine for one of those operations carries what is
-  only true of that combination: the **cutting time**, how many of the tool's
-  edges are **indexed through** there, and how many **parts run between one index
-  and the next** — along with every cycle timed against it
+  only true of that combination: how many of the tool's edges are **indexed
+  through** there, and how many **parts run between one index and the next** —
+  along with every cycle timed against it
 
 So a tool runs on as many machines as it is set up on, a machine holds as many
 tools, and the same tool in the same machine cutting a different operation is a
-different setup with its own cutting time. Time enough cycles and the record
-answers the questions that are actually asked at the machine:
+different setup with its own times. Time enough cycles and the record answers
+the questions that are actually asked at the machine:
 
 - how long the op really takes, on average, at best, and how far it spreads
-- how much of the measured cycle is actually cut
+- how much of the measured cycle is actually cut, and how much of it is not
 - how long an edge lasts in minutes of cut, at the parts it runs between indexes
 - how many parts a whole tool covers, how many tools a hundred parts consumes,
   and what they cost per part
 - and, across the op's tools in the order they cut, **where the cycle actually goes**
+
+**Cutting time is measured, not typed.** There is nowhere to enter what a tool
+*should* spend in cut, because a number somebody typed and a number somebody
+measured are two answers to one question and only one of them is evidence. The
+time in cut comes from marking the tool in and out at the machine, and every
+figure worked out from it says so.
 
 ## Installing
 
@@ -96,13 +102,12 @@ is the thing the shopwatch times:
 | Operation | Which op of which part it is cutting |
 | Station | Turret position or pocket: `T0303` |
 | Seq | Where the tool falls in that op's running order — 1 cuts first |
-| Cutting time | Seconds in cut on one part, on this machine and this op |
 | Indexable edges | How many of the tool's edges get indexed through here |
 | Parts per index | Parts run between one edge index and the next |
 
-The same tool set up for a second operation gets its own cutting time, its own
-edges and its own tool life there — which is the point. A rougher that spends
-38 seconds in cut on Op 20 and 12 on Op 10 of the same part is one tool with two
+The same tool set up for a second operation gets its own times, its own edges
+and its own tool life there — which is the point. A rougher that spends 38
+seconds in cut on Op 20 and 12 on Op 10 of the same part is one tool with two
 setups, not two tools; the same is true of the same op on a second machine.
 
 Leaving **indexable edges** blank means every edge the tool has. Adding a part
@@ -130,15 +135,19 @@ counted, and a tool still in the cut when you resume carries on from where it
 was.
 
 The measured figure then appears as **time in cut**, with what share of the
-cycle it is, and each recorded cycle shows its own. Where a setup also has a
-cutting time typed in, the screen says how far the two are apart — which is
-usually the interesting number.
+cycle it is and what the rest of that cycle went on, and each recorded cycle
+shows its own.
 
-**Cutting time comes from the best thing available**, in this order: what the
-setup says, then what was marked in and out at the machine, then the whole
-measured cycle. The **min / edge** tile says which of the three it used, so a
-tool life worked out from a whole cycle is never mistaken for one worked out
-from real time in cut.
+That share is worked out over the cycles that were **actually marked**, not over
+every cycle timed. Averaging the time in cut over the marked cycles and the
+cycle over all of them would let a mostly-unmarked op come out more than 100%
+cut, which would be arithmetic rather than anything that happened at the
+machine.
+
+**Cutting time comes from what was marked**, and failing that from the whole
+measured cycle — which is an overestimate. The **min / edge** tile says which of
+the two it used, so a tool life worked out from a whole cycle is never mistaken
+for one worked out from real time in cut.
 
 **Time the op tool by tool.** An operation is a run of tools cutting one after
 another, and **Tool done →** is the press for measuring each one's share of it:
@@ -165,18 +174,15 @@ The watch keeps time from the clock rather than counting up, so a phone that
 sleeps mid-cycle, a backgrounded tab and a page reload all come back reading
 correctly.
 
-**Read the numbers.** From the parts per index on the setup, and the cutting time
-(or, until one is filled in, the measured average):
+**Read the numbers.** From the parts per index on the setup, and the time marked
+in cut (or, until anything is marked, the measured average):
 
 ```
 parts per tool     = parts per index × indexable edges
-minutes per edge   = parts per index × cutting time ÷ 60
+minutes per edge   = parts per index × time in cut ÷ 60
 tools / 100 parts  = 100 ÷ parts per tool
 cost per part      = tool cost ÷ parts per tool
 ```
-
-With a cutting time and a measured average both present, the screen also says how
-much of the cycle is cut and how much is everything else.
 
 **Put the tools in running order.** Each setup carries a **Seq** — 1 cuts first —
 within its machine and operation. A newly set-up tool takes the next number
@@ -206,6 +212,35 @@ tools are in that state — the total is what has been measured, not a finished 
 An op with only one timed tool gets the figure without a bar; one segment is not
 a part-to-whole story.
 
+**See what is not cutting.** The **Op cycle** chart says which tool owns the
+cycle. The **In cut, and the waste** panel under it answers the other question,
+which is usually the more useful one: how much of each tool's cycle is making
+chips.
+
+It is one column per tool of the op, side by side. A column is that tool's
+measured cycle, drawn to a scale shared across the op, and only the part of it
+marked in the cut is filled in — so **the empty top of each column is the
+waste**: the rapids, the tool change, the bar feed. The tool with the most air
+above its fill is the one worth attacking, and because every column is on the
+same scale, that comparison is a glance rather than a calculation. The figure
+above the plot is the op's own share, over the tools that were marked.
+
+The fill is the app's in-cut hue and the unfilled part is a dark step of that
+same hue, so cut and not-cut read as one measure rather than two subjects; the
+pair is checked against the panel it is drawn on for monotone lightness, a
+visible gap between the steps, one hue, and a dark step that still clears the
+surface. Between the two is a 2px gap in the panel colour rather than a border —
+white space is what separates the fills, the same as on the op cycle bar.
+
+The most and least cut columns are labelled on the axis; every other number is
+in the table under the plot, which gives each tool its time in cut, what was
+wasted and its percentage, and doubles as the accessible twin of the plot.
+Hovering or tabbing to either a column or a row lights up the other.
+
+**A tool nobody marked in cut is not drawn as a column of waste** — that would be
+a measurement nobody took. It is drawn as an outline with nothing in it, listed
+as **not marked**, and counted in a line under the chart.
+
 **Read it from three ends.** **Parts and operations** lists each part with its
 ops, and each op with the machines it runs on, how many tools are set up for it
 and what they measure. **Machines** lists each machine with the tools on it,
@@ -227,7 +262,7 @@ asked for would be worse than useless.
 
 Deleting a machine takes its setups and leaves the tools in the crib; deleting a
 tool takes it out of every setup it was in; deleting an operation takes the
-setups that were for it, because the cutting times belong to the op. All of them
+setups that were for it, because the cycles timed belong to the op. All of them
 say exactly what will go before they do it.
 
 **Clone a machine** when a second one of the same kind arrives. **Clone** on a
@@ -240,17 +275,17 @@ before saving if the machine is called something else.
 By default it copies the tooling and nothing else, because nothing else is a fact
 about the machine. A tool that cuts three operations on the original comes across
 once, as one tool in one station; **which operations the new machine runs is its
-own business**, and the cutting time, the indexable edges and the parts between
-indexes are all facts about the op being cut. The clone therefore lists its tools
-under **No operation set** until each is put on one — which is a setup like any
-other, and the point at which it gets a cutting time.
+own business**, and the indexable edges and the parts between indexes are both
+facts about the op being cut. The clone therefore lists its tools under **No
+operation set** until each is put on one — which is a setup like any other, and
+the point at which it becomes something the watch can time.
 
 **Bring the operations too** — the tick box on the clone form — when the second
 machine is standing in for the first and running the same work. Each setup then
 arrives whole: the same tool, in the same station, on the same operation, with
-the cutting time, indexable edges and tool life worked out for it, and the op
-ends up listing both machines. That is a claim about the new machine — that it
-cuts the same op in the same time — so it is asked for rather than assumed, and
+the indexable edges and tool life worked out for it, and the op ends up listing
+both machines. That is a claim about the new machine — that it cuts the same op
+the same way — so it is asked for rather than assumed, and
 the form says which of the two it is about to do before you save.
 
 The **recorded cycles** stay with the original either way: a cycle time is a
@@ -266,8 +301,7 @@ with a machine, the suggestion is only a suggestion.
 
 Saving copies **the whole route**: every operation of the part, and every setup on
 each of them — the same tools, on the same machines, in the same stations, with
-the cutting times, the indexable edges and the parts between indexes worked out
-for them. So `12345-B` arrives running Op 10 and Op 20 on the same machines with
+the indexable edges and the parts between indexes worked out for them. So `12345-B` arrives running Op 10 and Op 20 on the same machines with
 the same tooling, and the work left is whatever is actually different about it.
 
 Unlike a cloned machine, none of that is optional, because the two cases are not
@@ -386,7 +420,7 @@ keeps in a spreadsheet can be brought in by putting these headers on it:
 ```
 machine, machine_notes, part, part_description, part_notes, op, op_notes,
 seq, station, tool_part_number, tool_description, cutting_edges, tool_cost,
-tool_notes, cutting_time_sec, indexable_edges, parts_per_index, notes,
+tool_notes, indexable_edges, parts_per_index, notes,
 cycle_seconds, cycle_cut_seconds, recorded_at
 ```
 
@@ -406,10 +440,10 @@ not be able to contradict the times it was supposed to summarize.
 
 **Older files still read.** From version 1: `insert` is taken as the tool's part
 number, `indexes_per_insert` as its cutting edges, and a tool life given in
-cutting minutes per edge is turned into parts between indexes at the cutting time
-in the file — or, failing that, at the cycles in the file itself, which is the
-same division version 1 did on screen. A life with neither to divide by is left
-out rather than guessed at, and the preview says how many.
+cutting minutes per edge is turned into parts between indexes at the cycles in
+the file itself, which is the same division version 1 did on screen. A life with
+no cycles to divide by is left out rather than guessed at, and the preview says
+how many.
 
 Quoted fields, commas and newlines inside them, semicolon-separated files from
 non-English spreadsheets, comma decimals (`10,5`) and Excel's byte-order mark all
@@ -436,9 +470,8 @@ so the same tool on two machines was two unrelated records and nothing linked
 them. Each old record becomes a machine, a tool and the setup between the two;
 tools met twice under the same insert designation and description collapse into
 one crib entry with a setup on each machine. The insert designation becomes the
-tool's part number, indexes per insert its cutting edges, the measured average
-the cutting time, and the tool life in minutes per edge becomes parts per index
-at that measured cycle. Where nothing was timed there is no cycle to divide by,
+tool's part number, indexes per insert its cutting edges, and the tool life in
+minutes per edge becomes parts per index at that measured cycle. Where nothing was timed there is no cycle to divide by,
 so the old figure is carried into the setup's notes rather than turned into a
 number nobody measured — as is an inserts-per-op count above one.
 
@@ -550,7 +583,6 @@ CREATE TABLE setup (                -- one tool, on one machine, doing one op
   operation_id    text     NULL REFERENCES operation(id) ON DELETE SET NULL,
   station         text NOT NULL DEFAULT '' CHECK (length(station) <= 20),
   seq             int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),
-  cut_sec         numeric NOT NULL DEFAULT 0 CHECK (cut_sec BETWEEN 0 AND 86400),
   index_edges     int  NOT NULL DEFAULT 0 CHECK (index_edges BETWEEN 0 AND 64),
   parts_per_index int  NOT NULL DEFAULT 0 CHECK (parts_per_index BETWEEN 0 AND 100000),
   notes           text NOT NULL DEFAULT '',
@@ -579,9 +611,9 @@ CREATE TABLE shop (                 -- one row per shopwatch: what the watch is 
 **`setup` is the whole point.** Tools and machines are many-to-many, and so are
 tools and operations, and machines and operations; all three relations are the
 same junction read from a different side. It is a *ternary* junction with
-attributes: `cut_sec`, `index_edges` and `parts_per_index` are true of that
-combination and of nothing narrower, which is why a tool cutting two operations
-in the same machine is two rows with two cutting times. `cycle` hangs off
+attributes: `index_edges` and `parts_per_index` are true of that combination and
+of nothing narrower, which is why a tool cutting two operations in the same
+machine is two rows with two tool lives. `cycle` hangs off
 `setup` for the same reason — a measurement belongs to the exact combination it
 was measured on.
 

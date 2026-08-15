@@ -17,6 +17,18 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **See what a cycle is not cutting.** Shopwatch's new **In cut, and the waste** chart is one
+  column per tool of an operation, side by side. A column is that tool's measured cycle, and
+  only the part of it marked in the cut is filled in — so the empty top of each column is the
+  waste: the rapids, the tool change, the bar feed. Every column is drawn to one scale across
+  the op, so the tool with the most air above its fill is the one worth attacking, at a glance
+  rather than by arithmetic. A tool nobody marked in cut is drawn as an outline with nothing
+  in it rather than as a column of waste — that would be a measurement nobody took.
+- **Cutting time is measured, not typed.** The **Cutting time** field is gone from a setup.
+  A number somebody typed and a number somebody measured were two answers to one question,
+  and only one of them was evidence; the tool-life figures now come from what was actually
+  marked in and out at the machine, and say so. A typed cutting time on an existing setup is
+  moved into that setup's notes rather than dropped.
 - **You choose what MindMapShare is.** Every screen — Home, My Maps, Desk, Browse, Friends,
   and any installed add-on — is optional, and an account **starts with none of them**. The
   **Features** library lists everything this server can do; add what you actually use to
@@ -57,7 +69,7 @@ and turns on **AI generation** simply by setting environment variables.
 - **Clone a part number, not just a machine.** A revision runs the route the number before
   it ran, so **Clone** on a part copies the whole route across: every operation, and every
   setup on them — the same tools, on the same machines, in the same stations, with the
-  cutting times and tool life worked out for them. A revision letter takes the next letter,
+  tool life worked out for them. A revision letter takes the next letter,
   `12345-A` to `12345-B`. The recorded cycles stay with the number that was actually cut.
 - **Plugins — add-ons downloaded and installed separately.** MindMapShare now looks in a
   `plugins/` folder at startup and adds whatever is there: a screen of its own in the
@@ -68,10 +80,10 @@ and turns on **AI generation** simply by setting environment variables.
   time is only ever true of **one tool, on one machine, doing one operation**, and that is
   the shape of the record: **parts** carry their **operations**, a **tool** carries its own
   part number, description and cutting edges, and **setting a tool up** on a machine for one
-  of those ops carries the cutting time, the edges indexed there and the parts run between
-  one index and the next. The same tool in the same machine on another op is another setup
-  with its own cutting time. Enough cycles answer what gets asked at the machine — how much
-  of the cycle is cut, how long an edge lasts, how many tools a hundred parts costs. Install
+  of those ops carries the edges indexed there and the parts run between one index and the
+  next. The same tool in the same machine on another op is another setup with its own
+  times. Enough cycles answer what gets asked at the machine — how much of the cycle is
+  cut and how much is not, how long an edge lasts, how many tools a hundred parts costs. Install
   it with `node tools/install-plugin.js manufacturing`.
 - **Tooling goes in and out as a spreadsheet.** **⤒ Import** reads a CSV in the same shape
   **⤓ Export** writes, so a file that came out goes back in unchanged and an existing tool
@@ -84,13 +96,16 @@ and turns on **AI generation** simply by setting environment variables.
   first, reorderable with ↑ / ↓ — and the **Op cycle** panel sums their averages into
   the op's total on that machine, with a stacked bar dividing it between the tools in the
   order they run. The segments step along one cyan ramp light→dark so the running order
-  reads in the color, and the table beneath is both the legend and the numbers.
+  reads in the color, and the table beneath is both the legend and the numbers. **In cut,
+  and the waste** sits under it with the same tools as side-by-side columns — each the
+  tool's measured cycle, filled only with the time marked in cut, so the empty top of a
+  column is what the cycle spent not cutting.
 - **Clone a machine** when a second one of the same kind arrives. **Clone** suggests the
   next number after its name — `MC-101` → `MC-102`, `Lathe 3` → `Lathe 4` — and copies the
   **tools** across, in the stations they sit in. Only the tooling by default: which
   operations the new machine runs is its own business, so a tool that cuts three ops on the
   original comes across once and waits for one. Tick **bring the operations too** and each
-  setup arrives whole instead, on the same op with its cutting time and tool life. The
+  setup arrives whole instead, on the same op with its tool life. The
   recorded cycles stay with the original either way, where they were measured.
 - **Fold away what you are not looking at.** Every list heading in Shopwatch opens and
   closes what is under it — the three lists, and each part and each machine inside them.
@@ -611,43 +626,43 @@ belongs to exactly one part — that is what an op is, a step in making *that* p
 **tool** carries what is true of it wherever it runs: its own **part number**,
 **description** and **cutting edges**, plus an optional cost, kept once in the crib.
 **Setting a tool up** on a machine for one of those operations carries what is true only
-of that combination: the **cutting time**, the **indexable edges** used there, the **parts
-per index** it lasts, and the station and seq it sits in — along with every cycle timed
-against it.
+of that combination: the **indexable edges** used there, the **parts per index** it lasts,
+and the station and seq it sits in — along with every cycle timed against it.
 
 So tools and machines are many-to-many — a tool runs on as many machines as it is set up
 on, a machine holds as many tools, neither owns the other — and the same tool in the same
-machine cutting a different op is a different setup with its own cutting time. A rougher
+machine cutting a different op is a different setup with its own times. A rougher
 that spends 38 seconds in cut on Op 20 and 12 on Op 10 is one tool with two setups, not two
 tools. From those numbers:
 
 ```
 parts per tool     = parts per index × indexable edges
-minutes per edge   = parts per index × cutting time ÷ 60
+minutes per edge   = parts per index × time in cut ÷ 60
 tools / 100 parts  = 100 ÷ parts per tool
 cost per part      = tool cost ÷ parts per tool
 ```
 
-With both a cutting time and a measured average, the screen also says how much of the cycle
-is actually cut. The floor reads from three ends, narrowed by one filter box: **Parts and
+Cutting time is measured, never typed: there is nowhere to enter what a tool *should*
+spend in cut, because a typed number and a measured one are two answers to one question
+and only one of them is evidence. The floor reads from three ends, narrowed by one filter box: **Parts and
 operations** lists each part with its ops, and each op with the machines it runs on and
 what they measure; **Machines** lists each machine with the tools on it, grouped by the
 operation they are set up for and in the order they cut; **Tools** lists the crib, each
 tool with the machines it runs on as chips. Deleting a machine leaves its tools in the
 crib, deleting a tool takes it out of every setup, and deleting an operation takes the
-setups that were for it — the cutting times belong to the op.
+setups that were for it — the cycles timed belong to the op.
 
 **Clone** on a machine stands a second one of the same kind up beside it: the next number
 after its name is suggested, and saving copies the tools across in the stations they sit
 in. Only the tools by default — a tool cutting three ops on the original arrives once, on
-no operation, because which ops the new machine runs is its own business and the cutting
-time and tool life belong to the op being cut. **Bring the operations too**, on the clone
-form, copies each setup whole instead: same op, same cutting time, same tool life, with the
+no operation, because which ops the new machine runs is its own business and the tool life
+belongs to the op being cut. **Bring the operations too**, on the clone
+form, copies each setup whole instead: same op, same tool life, with the
 op then listing both machines. The recorded cycles stay with the original either way.
 
 **Clone** on a part number does the same for a revision, and copies the whole route: every
 operation of the part and every setup on them — the same tools, on the same machines, in
-the same stations, with the cutting times and tool life worked out for them. A revision
+the same stations, with the tool life worked out for them. A revision
 letter takes the next letter (`12345-A` suggests `12345-B`), a trailing number takes the
 next number. None of it is optional the way a machine's operations are: which ops a machine
 runs is a decision about the machine, but the ops that make a part are what the part is.
@@ -670,6 +685,23 @@ lightness, adjacent step separation, single hue, and a darkest step that still c
 dark chart surface — so the order reads in the color rather than in eight unrelated hues.
 Tools with nothing timed yet are listed as **not timed**, with a line saying how many,
 because the total is what has been measured rather than a finished op.
+
+Under it, **In cut, and the waste** answers the other question: how much of each tool's
+cycle is making chips. It is one column per tool, side by side — the column is that tool's
+measured cycle, and only the time marked in the cut is filled in, so the empty top of each
+column is the waste. One scale across the op makes the columns comparable to each other,
+and the figure above the plot is the op's own share. The fill is the in-cut hue and the
+unfilled part a dark step of the same hue — checked as an ordinal ramp against the panel
+for monotone lightness, a visible step gap, one hue and a dark end that still clears the
+surface — with a 2px gap in the panel colour between them rather than a border. The most
+and least cut columns are labelled; every other number is in the table beneath, which is
+also the accessible twin of the plot. A tool with cycles timed but nothing marked in cut is
+drawn as an outline with nothing in it and listed as **not marked**, never as a column of
+waste: its share is a measurement nobody took, not zero.
+
+Each tool's column and its fill are averaged over the **same** cycles — the ones actually
+marked in and out. Averaging the fill over the marked cycles and the column over all of
+them would let a mostly-unmarked op draw a fill taller than the column holding it.
 
 **⤓ Export** downloads every recorded cycle, one row each, carrying the part, the op, the
 machine, the tool and the setup between them, ordered the way the floor runs — plus a row

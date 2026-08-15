@@ -14,9 +14,9 @@
                    everywhere.
      an assignment one tool, on one machine, doing one operation. This is the
                    many-to-many between tools and machines, and it carries what
-                   is only true of that combination: the cutting time, how many
-                   of the tool's edges are indexed through there, and how many
-                   parts run between one index and the next.
+                   is only true of that combination: the cycles timed against
+                   it, how many of the tool's edges are indexed through there,
+                   and how many parts run between one index and the next.
 
    The stopwatch times an assignment, because a cycle time is only ever true of
    one tool on one machine doing one op. The same tool in the same machine
@@ -297,7 +297,7 @@
 
   // The tools that run together: one machine, one operation. That is the
   // grouping the running order, the chart and every total below are per — and
-  // it is why the cutting time lives on the assignment, since the same tool in
+  // it is why the cycle times live on the assignment, since the same tool in
   // the same machine on another op is another setup with another time.
   const opKey = a => a.machineId + '\u0000' + (a.operationId || '');
   const opJobs = a => (a && shop ? shop.assignments.filter(x => opKey(x) === opKey(a)).sort(bySeq) : []);
@@ -323,14 +323,18 @@
     const runs = (a && a.runs) || [];
     if (!runs.length) return null;
     let sum = 0, best = Infinity, worst = 0;
-    let cutSum = 0, cutCount = 0;
+    let cutSum = 0, cutCount = 0, cutCycleSum = 0;
     for (const r of runs) {
       sum += r.sec;
       if (r.sec < best) best = r.sec;
       if (r.sec > worst) worst = r.sec;
       // Only cycles somebody actually marked in and out of cut count towards
       // the average: an unmarked cycle is no information, not zero seconds.
-      if (r.cut > 0) { cutSum += r.cut; cutCount += 1; }
+      // Their own cycle times are summed alongside, because time in cut only
+      // means anything against the cycle it was measured in — averaged over
+      // every cycle instead, an op mostly left unmarked can come out more than
+      // 100% cut, which is arithmetic, not a measurement.
+      if (r.cut > 0) { cutSum += r.cut; cutCount += 1; cutCycleSum += r.sec; }
     }
     return {
       count: runs.length,
@@ -341,6 +345,9 @@
       last: runs[0].sec, // runs are kept newest first
       cutCount,
       avgCut: cutCount ? cutSum / cutCount : 0,
+      // The cycle the time in cut is a share of: the same cycles, averaged the
+      // same way, so the share can never come out above one.
+      avgCutCycle: cutCount ? cutCycleSum / cutCount : 0,
     };
   }
 
@@ -349,9 +356,9 @@
   // indexes, and how many of the tool's edges get indexed through there. A
   // setup that leaves the edges blank falls back to the tool's own count — the
   // whole tool gets used up unless somebody says otherwise. Returns null until
-  // there is a tool life to work from; `cut` is the cutting time if it is
-  // filled in and the measured average otherwise, so the minutes are honest
-  // about which.
+  // there is a tool life to work from; `cut` is what was marked in and out
+  // where anybody marked it, so the minutes are honest about where they came
+  // from.
   function lifeFor(a, avgSec, avgCut) {
     const parts = a.partsPerIndex || 0;
     if (!parts) return null;
@@ -359,10 +366,10 @@
     const edges = a.indexEdges || (tool ? tool.cuttingEdges : 0) || 0;
     const partsPerTool = edges ? parts * edges : 0;
     // Best available answer to "how long is this tool in cut on one part":
-    // what somebody set, then what was marked in and out at the machine, then
-    // the whole measured cycle — which is an overestimate, and says so.
-    const cut = a.cutSec || avgCut || avgSec || 0;
-    const from = a.cutSec ? 'set' : (avgCut ? 'incut' : (avgSec ? 'cycle' : ''));
+    // what was marked in and out at the machine, and failing that the whole
+    // measured cycle — which is an overestimate, and says so.
+    const cut = avgCut || avgSec || 0;
+    const from = avgCut ? 'incut' : (avgSec ? 'cycle' : '');
     return {
       parts,
       edges,
@@ -711,6 +718,7 @@
     renderStats();
     renderRuns();
     renderChart();    // this tool's share of the operation just moved
+    renderCutChart(); // and so did how much of its cycle was cutting
     renderParts();    // as did the operation's measured cycle
     renderMachines(); // and its average, on its card
   }
@@ -1048,6 +1056,7 @@
     renderRuns();
     renderForm();
     renderChart();
+    renderCutChart();
     renderSearch();
     renderParts();
     renderMachines();
@@ -1079,7 +1088,7 @@
         : (started ? 'Set a tool up on a machine' : 'Start with a part, a machine and a tool')));
       empty.appendChild(el('div', 'mf-empty-text', shop.assignments.length
         ? 'Every cycle time is recorded against one tool, on one machine, doing one operation — so choose the one at the spindle before you start the watch.'
-        : 'A part has operations; a tool has a part number and cutting edges. Setting a tool up on a machine for one of those operations is what carries the cutting time, the edges indexed there and the parts between indexes — and what the stopwatch records against.'));
+        : 'A part has operations; a tool has a part number and cutting edges. Setting a tool up on a machine for one of those operations is what carries the edges indexed there and the parts between indexes — and what the stopwatch records against.'));
       const row = el('div', 'mf-form-btns');
       if (!shop.parts.length) row.appendChild(button('mf-btn mf-btn-go', '+ Add a part', () => openForm('part')));
       if (!shop.machines.length) row.appendChild(button('mf-btn', '+ Add a machine', () => openForm('machine')));
@@ -1112,7 +1121,7 @@
     head.appendChild(who);
     if (canEdit()) {
       head.appendChild(button('mf-btn mf-btn-sm', 'Edit setup', () => openForm('assignment', a.id),
-        'The operation, cutting time, edges and tool life of this tool on this machine'));
+        'The operation, edges and tool life of this tool on this machine'));
     }
     box.appendChild(head);
 
@@ -1213,7 +1222,7 @@
     if (!a.operationId) {
       const note = el('div', 'mf-note');
       note.appendChild(document.createTextNode(
-        'This tool is on the machine but not on an operation. The cutting time and the tool life belong to the op it is cutting, so name it. '));
+        'This tool is on the machine but not on an operation. The cycle times and the tool life belong to the op it is cutting, so name it. '));
       note.appendChild(button('mf-link', 'Edit setup', () => openForm('assignment', a.id)));
       box.appendChild(note);
     }
@@ -1229,35 +1238,21 @@
           'Measured at the machine, averaged over the ' + s.cutCount +
           (s.cutCount === 1 ? ' cycle' : ' cycles') + ' marked in and out of cut'));
       }
-      if (a.cutSec) {
-        timing.appendChild(tile('cutting time', fmtSec(a.cutSec),
-          'What this tool is set to spend in cut on this machine, on ' + jobLabel(a)));
-      }
       box.appendChild(timing);
-      // What was actually marked, against what the setup says it should be.
-      if (s.avgCut && s.avg) {
-        const share = Math.round((s.avgCut / s.avg) * 100);
-        let line = 'Measured in cut for ' + fmtSec(s.avgCut) + ' of the ' + fmtSec(s.avg) +
-          ' cycle — ' + share + '% of it is cut, over ' + s.cutCount +
-          (s.cutCount === 1 ? ' marked cycle' : ' marked cycles') + '.';
-        if (a.cutSec) {
-          const off = Math.round(((s.avgCut - a.cutSec) / a.cutSec) * 100);
-          line += Math.abs(off) < 5
-            ? ' That matches the cutting time on the setup.'
-            : ' The setup says ' + fmtSec(a.cutSec) + ' — ' +
-              Math.abs(off) + '% ' + (off > 0 ? 'more' : 'less') + ' in cut than it expects.';
-        }
-        box.appendChild(el('div', 'mf-note', line));
-      }
-      if (a.cutSec && s.avg) {
-        const share = Math.round((a.cutSec / s.avg) * 100);
+      // What was marked in cut, against the cycles it was marked in — and so
+      // what the rest of those cycles went on, which is the number worth
+      // knowing.
+      if (s.avgCut && s.avgCutCycle) {
+        const share = Math.round((s.avgCut / s.avgCutCycle) * 100);
         box.appendChild(el('div', 'mf-note',
-          a.cutSec > s.avg
-            ? 'The cutting time on this setup is longer than the whole measured cycle, so one of the two is wrong.'
-            : share >= 100
-              ? 'The cutting time is the whole measured cycle. Set it to the time actually in cut and everything else in the cycle shows up here.'
-              : 'Cutting time is ' + fmtSec(a.cutSec) + ' of the ' + fmtSec(s.avg) + ' measured cycle — ' +
-                share + '% of it is cut, the rest is everything else.'));
+          'Measured in cut for ' + fmtSec(s.avgCut) + ' of a ' + fmtSec(s.avgCutCycle) +
+          ' cycle — ' + share + '% of it is cut, over ' + s.cutCount +
+          (s.cutCount === 1 ? ' marked cycle' : ' marked cycles') + '. The other ' +
+          fmtSec(s.avgCutCycle - s.avgCut) + ' is rapids, the tool change and the bar feed.'));
+      } else if (s.count) {
+        box.appendChild(el('div', 'mf-note',
+          'Nothing marked in cut on this tool yet. Mark it in and out as it cuts and the ' +
+          'part of the cycle actually making chips separates from the part that is not.'));
       }
     } else {
       box.appendChild(el('div', 'mf-note',
@@ -1285,10 +1280,9 @@
     if (life.edgeMin) {
       derived.appendChild(tile('min / edge', String(round(life.edgeMin, 1)),
         'Cutting minutes one edge lasts, at ' +
-        fmtSec(a.cutSec || (s ? s.avgCut : 0) || (s ? s.avg : 0)) +
-        (life.from === 'set' ? ' of cut, from the setup'
-          : life.from === 'incut' ? ' measured in cut'
-            : ' measured cycle — mark the tool in and out of cut for a truer figure')));
+        fmtSec((s ? s.avgCut : 0) || (s ? s.avg : 0)) +
+        (life.from === 'incut' ? ' measured in cut'
+          : ' measured cycle — mark the tool in and out of cut for a truer figure')));
     }
     if (life.per100) {
       derived.appendChild(tile('tools / 100 parts', String(round(life.per100, 2)),
@@ -1439,6 +1433,201 @@
     }
   }
 
+  /* ---------------- in the cut, and the waste around it ----------------
+     The op cycle chart above says which tool owns the cycle. This one says how
+     much of each tool's cycle is cutting metal, which is a different question
+     and usually the more useful one: a column is a tool's measured cycle, and
+     only the part of it marked in the cut is filled in. What is left empty at
+     the top of the column is the waste — the rapids, the tool change, the bar
+     feed — and because every column is drawn to one scale across the op, the
+     one with the most air over its fill is the one worth attacking.
+
+     A tool's column and its fill are averaged over the same cycles: the ones
+     somebody marked in and out of cut. Averaging the fill over the marked
+     cycles and the column over all of them would let a mostly-unmarked op draw
+     a fill taller than the column it sits in, which is arithmetic rather than
+     anything that happened at the machine.
+  ---------------------------------------------------------------- */
+  function renderCutChart() {
+    const box = els.cutchart;
+    box.innerHTML = '';
+    const active = activeJob();
+    if (!active) { box.hidden = true; return; }
+
+    const rows = opJobs(active).map(a => {
+      const s = statsFor(a);
+      return {
+        a,
+        // The cycle this tool's time in cut is a share of, and the share
+        // itself. Unmarked, there is a cycle but no reading inside it.
+        cycle: s ? (s.avgCutCycle || s.avg) : 0,
+        cut: s ? s.avgCut : 0,
+        marked: s ? s.cutCount : 0,
+      };
+    });
+    const drawn = rows.filter(r => r.cycle > 0);
+    const withCut = drawn.filter(r => r.cut > 0);
+    box.hidden = false;
+
+    const head = el('div', 'mf-chart-head');
+    const heading = el('div');
+    heading.appendChild(el('div', 'mf-section-title', 'In cut, and the waste'));
+    heading.appendChild(el('div', 'mf-chart-op', opLabel(active)));
+    head.appendChild(heading);
+
+    // The op's own share, over the tools that were marked — one sum of cut
+    // over one sum of the cycles it was measured in.
+    const cutTotal = withCut.reduce((sum, r) => sum + r.cut, 0);
+    const cycleTotal = withCut.reduce((sum, r) => sum + r.cycle, 0);
+    const opShare = cycleTotal ? cutTotal / cycleTotal : 0;
+    const figure = el('div', 'mf-cutchart-figure');
+    figure.appendChild(el('div', 'mf-cutchart-pct', opShare ? Math.round(opShare * 100) + '%' : '—'));
+    figure.appendChild(el('div', 'mf-chart-sub', opShare
+      ? 'of the marked cycle is cutting'
+      : 'nothing marked in cut yet'));
+    head.appendChild(figure);
+    box.appendChild(head);
+
+    if (!drawn.length) {
+      box.appendChild(el('div', 'mf-note',
+        'Time a cycle against a tool on this op, mark it in and out of cut as it runs, and the ' +
+        'cutting and the waste separate here.'));
+      return;
+    }
+
+    // One scale across the op: every column is a share of the longest cycle on
+    // it, so the columns are comparable to each other and not only to
+    // themselves.
+    const longest = Math.max(...drawn.map(r => r.cycle));
+    // Direct labels go on the extremes only — the best and the worst share —
+    // and only when there are enough columns for "extreme" to mean anything.
+    // Every other number is in the table underneath.
+    const shares = withCut.map(r => r.cut / r.cycle);
+    const call = new Set();
+    if (withCut.length > 2 && Math.min(...shares) < Math.max(...shares)) {
+      call.add(withCut[shares.indexOf(Math.min(...shares))].a.id);
+      call.add(withCut[shares.indexOf(Math.max(...shares))].a.id);
+    }
+
+    const plot = el('div', 'mf-plot');
+    plot.setAttribute('role', 'img');
+    plot.setAttribute('aria-label',
+      'One column per tool on this op, each the tool\'s measured cycle, filled with the time it was ' +
+      'marked in cut; the empty part of a column is the waste. ' +
+      (opShare ? Math.round(opShare * 100) + '% of the marked cycle across the op is cutting. ' : '') +
+      'The same numbers are in the table below.');
+    const axis = el('div', 'mf-plot-axis');
+
+    for (const r of drawn) {
+      const slot = el('div', 'mf-plot-slot');
+      const col = el('div', 'mf-col');
+      col.dataset.tool = r.a.id;
+      col.tabIndex = 0;
+      col.style.height = (r.cycle / longest) * 100 + '%';
+
+      const name = (r.a.seq ? r.a.seq + '. ' : '') + jobName(r.a);
+      if (r.cut > 0) {
+        const share = r.cut / r.cycle;
+        const waste = r.cycle - r.cut;
+        col.title = name + ' — ' + fmtSec(r.cycle) + ' cycle, ' + fmtSec(r.cut) + ' in cut (' +
+          Math.round(share * 100) + '%), ' + fmtSec(waste) + ' waste, over ' + r.marked +
+          (r.marked === 1 ? ' marked cycle' : ' marked cycles');
+        // Waste sits above the cut, so the column fills from the baseline up.
+        // A cycle that is all cut has no waste segment to draw at all.
+        if (waste > 0) {
+          const top = el('div', 'mf-col-waste');
+          top.style.flexGrow = String(waste);
+          col.appendChild(top);
+        }
+        const fill = el('div', 'mf-col-cut' + (waste > 0 ? '' : ' mf-col-top'));
+        fill.style.flexGrow = String(r.cut);
+        col.appendChild(fill);
+      } else {
+        col.title = name + ' — ' + fmtSec(r.cycle) + ' cycle, nothing marked in cut';
+        col.appendChild(el('div', 'mf-col-empty'));
+      }
+      slot.appendChild(col);
+      plot.appendChild(slot);
+
+      const label = el('div', 'mf-axis-slot');
+      label.dataset.tool = r.a.id;
+      label.appendChild(el('div', 'mf-axis-n', r.a.seq ? String(r.a.seq) : '–'));
+      if (call.has(r.a.id)) {
+        label.appendChild(el('div', 'mf-axis-call', Math.round((r.cut / r.cycle) * 100) + '% cut'));
+      }
+      axis.appendChild(label);
+    }
+    box.appendChild(plot);
+    box.appendChild(axis);
+
+    const key = el('div', 'mf-cutkey');
+    const keyBit = (cls, text) => {
+      const s = el('span');
+      s.appendChild(el('i', cls));
+      s.appendChild(document.createTextNode(text));
+      return s;
+    };
+    key.appendChild(keyBit('mf-key-cut', 'in cut'));
+    key.appendChild(keyBit('mf-key-waste', 'everything else'));
+    if (drawn.some(r => !r.cut)) key.appendChild(keyBit('mf-key-unmarked', 'not marked'));
+    box.appendChild(key);
+
+    // The table is the accessible twin of the plot: every column's identity and
+    // all three of its numbers, as text, for every tool including the ones with
+    // no column to draw.
+    const table = el('div', 'mf-legend');
+    for (const r of rows) {
+      const row = el('div', 'mf-legend-row' + (r.cut ? '' : ' mf-legend-off'));
+      row.dataset.tool = r.a.id;
+      const swatch = el('span', 'mf-swatch');
+      if (r.cut) swatch.style.background = 'var(--mf-cut)';
+      row.appendChild(swatch);
+      row.appendChild(el('span', 'mf-legend-n', r.a.seq ? String(r.a.seq) : '–'));
+      const name = el('span', 'mf-legend-name');
+      if (r.a.station) name.appendChild(el('span', 'mf-chip mf-chip-sm', r.a.station));
+      name.appendChild(document.createTextNode(jobName(r.a)));
+      row.appendChild(name);
+      row.appendChild(el('span', 'mf-legend-v', r.cut ? fmtSec(r.cut) : '—'));
+      row.appendChild(el('span', 'mf-legend-w',
+        r.cut ? fmtSec(r.cycle - r.cut) + ' wasted' : (r.cycle ? 'not marked' : 'not timed')));
+      row.appendChild(el('span', 'mf-legend-p',
+        r.cut ? Math.round((r.cut / r.cycle) * 100) + '% cut' : ''));
+      row.addEventListener('click', () => selectJob(r.a.id));
+      table.appendChild(row);
+    }
+    box.appendChild(table);
+
+    const unmarked = drawn.filter(r => !r.cut).length;
+    if (unmarked) {
+      box.appendChild(el('div', 'mf-note', unmarked + ' of ' + drawn.length +
+        ' timed tools on this op ' + (unmarked === 1 ? 'has' : 'have') +
+        ' no cycle marked in and out of cut, so ' + (unmarked === 1 ? 'it is' : 'they are') +
+        ' drawn empty rather than counted as waste — nobody has said yet which it is.'));
+    } else if (withCut.length) {
+      box.appendChild(el('div', 'mf-note',
+        'Across the op that is ' + fmtSec(cycleTotal - cutTotal) + ' a part not cutting, out of ' +
+        fmtSec(cycleTotal) + '.'));
+    }
+
+    // Either half lights the other, so a narrow column is still reachable
+    // through its row in the table.
+    const link = (id, on) => {
+      for (const n of box.querySelectorAll('[data-tool="' + id + '"]')) n.classList.toggle('mf-on', on);
+    };
+    for (const type of ['mouseover', 'focusin']) {
+      box.addEventListener(type, e => {
+        const n = e.target.closest('[data-tool]');
+        if (n) link(n.dataset.tool, true);
+      });
+    }
+    for (const type of ['mouseout', 'focusout']) {
+      box.addEventListener(type, e => {
+        const n = e.target.closest('[data-tool]');
+        if (n) link(n.dataset.tool, false);
+      });
+    }
+  }
+
   function renderRuns() {
     const box = els.runs;
     box.innerHTML = '';
@@ -1486,6 +1675,7 @@
         renderStats();
         renderRuns();
         renderChart();
+        renderCutChart();
         renderParts();
         renderMachines();
       }, 'Delete this cycle'));
@@ -1497,8 +1687,8 @@
   /* ---------------- the forms ----------------
      One form panel, five things it can be editing. They are kept apart because
      the fields belong to different places: a tool's cutting edges are true
-     wherever it runs, an operation belongs to one part, and the cutting time
-     is true only of one tool, on one machine, on one op.
+     wherever it runs, an operation belongs to one part, and the tool life is
+     true only of one tool, on one machine, on one op.
   ---------------------------------------------------------------- */
   const MACHINE_FIELDS = [
     { key: 'name', label: 'Machine', placeholder: 'Haas ST-20', wide: true, hint: 'What it is called on the floor' },
@@ -1524,7 +1714,6 @@
   const JOB_FIELDS = [
     { key: 'station', label: 'Station', placeholder: 'T0303' },
     { key: 'seq', label: 'Seq', placeholder: '1', num: true, hint: 'Where it falls in the op — 1 cuts first' },
-    { key: 'cutSec', label: 'Cutting time', placeholder: '42.6', num: true, hint: 'Seconds in cut on one part, on this machine and this op' },
     { key: 'indexEdges', label: 'Indexable edges', placeholder: '4', num: true, hint: 'How many of the tool\'s edges get indexed through here' },
     { key: 'partsPerIndex', label: 'Parts per index', placeholder: '250', num: true, hint: 'Parts run between one edge index and the next' },
   ];
@@ -1563,7 +1752,7 @@
       if (!shop.tools.length) { flash('Add a tool first — a setup puts one on a machine.'); openForm('tool'); return; }
       if (!shop.machines.length) { flash('Add a machine first — a setup puts a tool on one.'); openForm('machine'); return; }
       if (!shop.operations.length) {
-        flash('Add the part and its operation first — the cutting time belongs to an op.');
+        flash('Add the part and its operation first — the cycle times belong to an op.');
         openForm(shop.parts.length ? 'operation' : 'part');
         return;
       }
@@ -1593,7 +1782,7 @@
     } else {
       draft = {
         id: '', toolId: '', machineId: '', operationId: '', station: '', seq: '',
-        cutSec: '', indexEdges: '', partsPerIndex: '', notes: '', ...(preset || {}),
+        indexEdges: '', partsPerIndex: '', notes: '', ...(preset || {}),
       };
       // Carry over from what is already on screen: the machine's last setup, or
       // the one being timed. Tools are set up a few at a time for the same op,
@@ -1639,9 +1828,6 @@
     const n = Number(cleanText(v));
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
-  // A cutting time is typed the way a time is read off a machine, so it takes
-  // 1:23.4 as well as 83.4.
-  const cleanTime = v => parseTime(v) || cleanNum(v);
 
   function saveForm() {
     const { kind, draft } = form;
@@ -1698,7 +1884,7 @@
             '. Nothing has been timed on it yet.'
           : name + ' is tooled like ' + from.name + ' — ' + copy.copied +
             (copy.copied === 1 ? ' tool' : ' tools') + ' copied' + tail +
-            '. Put each one on an operation to give it a cutting time.',
+            '. Put each one on an operation before timing it.',
       !!copy.copied);
     }
     // A machine with nothing on it does nothing, so go straight on to setting a
@@ -1715,14 +1901,15 @@
      tools, in the stations they sit in — one entry per tool per station,
      however many operations it happens to cut there — and leaves what each is
      cutting to whoever sets the machine up. Which ops a machine runs is a
-     decision, not a property of the machine, and the cutting time, the edges
-     indexed and the parts between indexes are facts about the op being cut.
+     decision, not a property of the machine, and the edges indexed and the
+     parts between indexes are facts about the op being cut.
 
      A second machine standing in for the first runs the same work, though, so
      the clone can be told to bring the operations too: each setup then arrives
-     whole, on the same op, with the cutting time and tool life worked out for
-     it. That is a claim about the new machine — that it cuts the same op in
-     the same time — so it is asked for rather than assumed.
+     whole, on the same op, with the tool life worked out for it. That is a
+     claim about the new machine — that it cuts the same op the same way — so
+     it is asked for rather than assumed. The cycles stay behind either way:
+     they were measured on the machine they were measured on.
 
      The recorded cycles are never copied either way. A cycle time is a
      measurement taken on one machine, and carrying it onto another would be
@@ -1749,7 +1936,6 @@
         operationId: withOps ? a.operationId : '',
         station: a.station,
         seq: withOps ? a.seq : ++seq,
-        cutSec: withOps ? a.cutSec : 0,
         indexEdges: withOps ? a.indexEdges : 0,
         partsPerIndex: withOps ? a.partsPerIndex : 0,
         notes: withOps ? a.notes : '',
@@ -1844,7 +2030,6 @@
           operationId: op.id,
           station: a.station,
           seq: a.seq,
-          cutSec: a.cutSec,
           indexEdges: a.indexEdges,
           partsPerIndex: a.partsPerIndex,
           notes: a.notes,
@@ -1943,7 +2128,7 @@
     // matter are the ones it gets on a machine.
     if (created) {
       if (shop.machines.length && shop.operations.length) openForm('assignment', '', { toolId: created.id });
-      else flash('Added to the crib. Set it up on a machine to give it a cutting time and a tool life.', true);
+      else flash('Added to the crib. Set it up on a machine to time it and give it a tool life.', true);
     }
   }
 
@@ -2028,7 +2213,7 @@
     if (!toolById(draft.toolId)) return fail('Choose the tool this is.');
     if (!machineById(draft.machineId)) return fail('Choose the machine it runs on.');
     if (!operationById(draft.operationId)) {
-      return fail('Choose the operation it is cutting — the cutting time and the tool life belong to one.');
+      return fail('Choose the operation it is cutting — the cycle times and the tool life belong to one.');
     }
     const assignment = {
       toolId: draft.toolId,
@@ -2036,7 +2221,6 @@
       operationId: draft.operationId,
       station: cleanText(draft.station),
       seq: Math.floor(cleanNum(draft.seq)),
-      cutSec: round(cleanTime(draft.cutSec), 3),
       indexEdges: Math.floor(cleanNum(draft.indexEdges)),
       partsPerIndex: Math.floor(cleanNum(draft.partsPerIndex)),
       notes: cleanText(draft.notes).slice(0, 400),
@@ -2122,7 +2306,7 @@
     const jobs = jobsOfOperation(id);
     if (!confirm(jobs.length
       ? 'Delete ' + operationLabel(o) + ', the ' + tally(jobs, 'tool set up for it', 'tools set up for it') +
-        '? The cutting times belong to this op, so they go with it; the tools stay in the crib.'
+        '? The cycles timed on it belong to this op, so they go with it; the tools stay in the crib.'
       : 'Delete ' + operationLabel(o) + '?')) return;
     const partId = o.partId;
     shop.assignments = shop.assignments.filter(a => a.operationId !== id);
@@ -2191,7 +2375,7 @@
           (setups
             ? ' copied, and the ' + setups + (setups === 1 ? ' setup' : ' setups') +
               ' on them — the same tools, on the same machines, in the same stations, with the ' +
-              'cutting times, indexable edges and tool life worked out for them'
+              'indexable edges and tool life worked out for them'
             : ' copied — no tools are set up for them yet') +
           '. The cycles timed on ' + partName(clonePartOf) + ' stay with it: they were measured ' +
           'making that part.'));
@@ -2204,13 +2388,13 @@
         : draft.withOps
           ? 'Saving this makes a second machine set up like ' + cloneOf.name + ': all ' + setups +
             (setups === 1 ? ' setup' : ' setups') + ' copied — the same tools, in the same stations, ' +
-            'on the same operations, with the cutting times, indexable edges and tool life worked out ' +
+            'on the same operations, with the indexable edges and tool life worked out ' +
             'for them. The cycles timed on ' + cloneOf.name + ' stay with it: they were measured on ' +
             'that machine.'
           : 'Saving this makes a second machine with the ' + tools +
             (tools === 1 ? ' tool' : ' tools') + ' on ' + cloneOf.name +
             ' copied onto it, in the same stations — the tools and nothing else. Which operations they ' +
-            'cut, and the cutting times and tool life that go with them, belong to the op, and the ' +
+            'cut, and the tool life that goes with them, belong to the op, and the ' +
             'cycles timed on ' + cloneOf.name + ' were measured on that machine.'));
       if (tools) {
         const opt = el('label', 'mf-check');
@@ -2221,7 +2405,7 @@
         opt.appendChild(box2);
         opt.appendChild(el('span', null,
           'Bring the operations too — each tool on the op it cuts on ' + cloneOf.name +
-          ', with that op\'s cutting time and tool life'));
+          ', with that op\'s tool life'));
         box.appendChild(opt);
       }
     }
@@ -2409,7 +2593,7 @@
 
     if (!shop.parts.length) {
       box.appendChild(el('div', 'mf-note',
-        'No parts yet. A part has operations, and an operation is what a tool is set up for — which is what gives a cutting time something to be true of.'));
+        'No parts yet. A part has operations, and an operation is what a tool is set up for — which is what gives a cycle time something to be true of.'));
       return;
     }
 
@@ -2609,7 +2793,7 @@
     const tool = jobTool(a);
     const meta = [];
     if (tool && tool.partNumber) meta.push(tool.partNumber);
-    if (a.cutSec) meta.push(fmtSec(a.cutSec) + ' cut');
+    if (s && s.avgCut) meta.push(fmtSec(s.avgCut) + ' in cut');
     if (a.indexEdges) meta.push(a.indexEdges + ' edges');
     if (a.partsPerIndex) meta.push(a.partsPerIndex + ' parts/index');
     if (meta.length) card.appendChild(el('div', 'mf-card-meta', meta.join(' · ')));
@@ -2620,7 +2804,7 @@
       (s ? s.count + (s.count === 1 ? ' cycle' : ' cycles') : 'not timed yet') +
       (life ? ' · index every ' + life.parts + ' parts' : '')));
     foot.appendChild(button('mf-link', 'Setup', e => { e.stopPropagation(); openForm('assignment', a.id); },
-      'The operation, cutting time, edges and tool life of this tool here'));
+      'The operation, edges and tool life of this tool here'));
     card.appendChild(foot);
 
     const choose = () => selectJob(a.id);
@@ -2643,6 +2827,7 @@
     order.forEach((x, i) => { x.seq = i + 1; touch(x); });
     save();
     renderChart();
+    renderCutChart();
     renderMachines();
   }
 
@@ -2685,9 +2870,10 @@
         // set up on, and what it is cutting there
         for (const a of jobs.sort((x, y) => machineName(x.machineId).localeCompare(machineName(y.machineId)))) {
           const label = machineName(a.machineId) + (a.station ? ' · ' + a.station : '');
+          const st = statsFor(a);
           tags.appendChild(button('mf-tag' + (a.id === shop.activeId ? ' mf-tag-on' : ''), label,
             () => selectJob(a.id),
-            [jobLabel(a), a.cutSec ? fmtSec(a.cutSec) + ' in cut' : '',
+            [jobLabel(a), st && st.avgCut ? fmtSec(st.avgCut) + ' in cut' : '',
               a.partsPerIndex ? a.partsPerIndex + ' parts per index' : 'no tool life set yet'].filter(Boolean).join(' · ')));
         }
       } else {
@@ -2734,7 +2920,7 @@
     'part', 'part_description', 'part_notes', 'op', 'op_notes',
     'seq', 'station',
     'tool_part_number', 'tool_description', 'cutting_edges', 'tool_cost', 'tool_notes',
-    'cutting_time_sec', 'indexable_edges', 'parts_per_index',
+    'indexable_edges', 'parts_per_index',
     'notes', 'cycle_seconds', 'cycle_cut_seconds', 'recorded_at',
   ];
   const DERIVED_COLUMNS = ['cycles_timed', 'average_seconds', 'parts_per_tool'];
@@ -2759,7 +2945,6 @@
     cutting_edges: 'cuttingEdges', edges: 'cuttingEdges',
     indexes_per_insert: 'cuttingEdges', indexes: 'cuttingEdges', // version 1
     indexable_edges: 'indexEdges', index_edges: 'indexEdges', indexable: 'indexEdges',
-    cutting_time_sec: 'cutSec', cutting_time: 'cutSec', cut_time: 'cutSec', cut_sec: 'cutSec',
     parts_per_index: 'partsPerIndex', parts_between_indexes: 'partsPerIndex',
     tool_life_parts: 'partsPerIndex', parts_per_edge: 'partsPerIndex',
     tool_life_min_per_edge: 'lifeMin', tool_life: 'lifeMin', tool_life_min: 'lifeMin', life_min: 'lifeMin',
@@ -2912,10 +3097,6 @@
         const n = readNumber(cell[f]);
         if (n) link.fields[f] = Math.floor(n);
       }
-      if (cell.cutSec) {
-        const cut = parseTime(cell.cutSec) || readNumber(cell.cutSec);
-        if (cut) link.fields.cutSec = round(cut, 3);
-      }
       if (cell.lifeMin) link.lifeMin = readNumber(cell.lifeMin) || link.lifeMin;
 
       if (cell.sec) {
@@ -2933,14 +3114,15 @@
     }
 
     // Version 1 files carry tool life as cutting minutes per edge. In parts,
-    // that is the life divided by the time one part takes — the cutting time if
-    // the file gives one, and otherwise the cycles in the file itself, which is
-    // the same division version 1 did on screen. With neither, there is nothing
-    // to divide by and the figure is left out rather than guessed at.
+    // that is the life divided by the time one part takes — the cycles in the
+    // file itself, which is the same division version 1 did on screen. With no
+    // cycles there is nothing to divide by, and the figure is left out rather
+    // than guessed at.
     for (const link of links.values()) {
       if (link.fields.partsPerIndex || !link.lifeMin) continue;
-      const base = link.fields.cutSec ||
-        (link.runs.length ? link.runs.reduce((sum, r) => sum + r.sec, 0) / link.runs.length : 0);
+      const base = link.runs.length
+        ? link.runs.reduce((sum, r) => sum + r.sec, 0) / link.runs.length
+        : 0;
       if (base > 0) {
         link.fields.partsPerIndex = Math.floor((link.lifeMin * 60) / base);
         converted++;
@@ -3128,7 +3310,7 @@
       const job = {
         id: newId('a'), toolId: tool.id, machineId: machine.id,
         operationId: operation ? operation.id : '',
-        station: '', seq: 0, cutSec: 0, indexEdges: 0, partsPerIndex: 0, notes: '',
+        station: '', seq: 0, indexEdges: 0, partsPerIndex: 0, notes: '',
         ...a.link.fields,
         runs: a.runs.sort((x, y) => y.at - x.at).slice(0, limits.maxRuns),
         createdAt: now, updatedAt: now,
@@ -3175,7 +3357,7 @@
       ' given in cutting minutes per edge ' + (read.converted === 1 ? 'was' : 'were') +
       ' turned into parts between indexes, at the cycle time in the file.');
     if (read.unconverted) notes.push(read.unconverted + ' tool life' + (read.unconverted === 1 ? '' : 's') +
-      ' in minutes had no cutting time or cycle to convert against, and ' +
+      ' in minutes had no cycle to convert against, and ' +
       (read.unconverted === 1 ? 'was' : 'were') + ' left out.');
     if (plan.dupeRuns) notes.push(plan.dupeRuns + ' cycle' + (plan.dupeRuns === 1 ? ' is' : 's are') +
       ' already recorded and will be left alone.');
@@ -3284,7 +3466,7 @@
         ...opCells(jobOperation(a)),
         ...toolCells(jobTool(a)),
         seq: a.seq || '', station: a.station,
-        cutting_time_sec: a.cutSec || '', indexable_edges: a.indexEdges || '',
+        indexable_edges: a.indexEdges || '',
         parts_per_index: a.partsPerIndex || '', notes: a.notes,
         cycles_timed: s ? s.count : 0,
         average_seconds: s ? round(s.avg, 2) : '',
@@ -3408,6 +3590,8 @@
     els.form.hidden = true;
     els.chart = el('div', 'mf-chart');
     els.chart.hidden = true;
+    els.cutchart = el('div', 'mf-cutchart');
+    els.cutchart.hidden = true;
     els.search = el('div', 'mf-searchbox');
     els.search.hidden = true;
     els.parts = el('div', 'mf-parts');
@@ -3418,6 +3602,7 @@
     page.appendChild(els.runs);
     page.appendChild(els.form);
     page.appendChild(els.chart);
+    page.appendChild(els.cutchart);
     page.appendChild(els.search);
     page.appendChild(els.parts);
     page.appendChild(els.machines);
