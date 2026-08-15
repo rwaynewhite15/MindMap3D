@@ -95,6 +95,15 @@ and turns on **AI generation** simply by setting environment variables.
   against it — and columns are read by name, not position. Nothing happens until you have
   seen what the file would do, an import never deletes anything, and importing the same
   file twice adds nothing the second time.
+- **Work cells, and the value stream that falls out of them.** Machines group into
+  **cells** — an area of the floor, its machines in the order the work reaches them —
+  and each cell says what runs through it: every part's operations in the order they
+  are cut there. A part's operations in order, the machine each runs on and the cell
+  that machine stands in are a route, and every step of it already has a measured
+  cycle underneath it, so the **Value stream** panel draws the part's route as
+  process boxes banded by cell, with the process time by step and a printable page.
+  It draws only what has been measured: inventory, changeover and lead time are not
+  in the record, so they are not on the map, and it says so.
 - **Tool layouts, numbered and charted.** A layout appears the moment the first tool is
   set up on a machine for an operation, already carrying the next free number; **TL 4** is
   a button wherever it shows, and pressing it is where the number becomes whatever the
@@ -126,11 +135,14 @@ and turns on **AI generation** simply by setting environment variables.
   original comes across once and waits for one. Tick **bring the operations too** and each
   setup arrives whole instead, on the same op with its tool life. The
   recorded cycles stay with the original either way, where they were measured.
-- **Fold away what you are not looking at.** Every list heading in Shopwatch opens and
-  closes what is under it — the three lists, and each part and each machine inside them.
-  A closed heading still carries its counts and its **+** button, and what is folded is
-  remembered on that device rather than saved to the account. Searching opens everything,
-  so a filter can never be answered by a closed heading.
+- **The screen opens closed.** Every heading in Shopwatch folds — the three lists and
+  everything inside them, the tool layout panel, the cut-and-waste panel, the value
+  stream, the recorded cycles and the stopwatch itself — and all of them start closed,
+  so a floor opens as a page of headings rather than as a wall. A closed heading still
+  carries the answer without the working: the layout's number and its cycle, the share
+  in cut, the part's process time, a cell's machines. What is kept on the device is what
+  you have **opened**, so records added later arrive closed too. Searching opens
+  everything, so a filter can never be answered by a closed heading.
 - **The top bar carries no title.** It is the account's toolbar and its notification bell,
   aligned to the right; the screen underneath says what it is.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map

@@ -3,11 +3,15 @@
 A cycle-time stopwatch for the shop floor, arranged around the **tool layout** —
 one machine, one part, one operation, numbered the way the floor asks for it —
 over the records the times belong to: the parts being made and their operations,
-the machines, and the tool crib.
+the cells and machines they run on, and the tool crib. What it measures adds up
+into a **value stream** for each part: its route across the floor, and the
+process time at every step of it.
 
 **A cycle time is only ever true of one tool, on one machine, doing one
 operation.** That is the shape of the record:
 
+- a **cell** is an area of the floor: the machines that work together, in the
+  order the work moves through them. A machine belongs to one cell or to none
 - a **tool** carries what is true of it wherever it runs — its own part number,
   what it is, how many cutting edges it has, and optionally what it costs
 - a **part** carries its **operations**, and an operation belongs to exactly one
@@ -92,7 +96,19 @@ spreadsheet out of one and importing it into another.
 | Operation | What the traveller calls the step: `Op 20` |
 | Step | Where that op falls in making the part — 1 runs first |
 
-**Add a machine.** A name is all it is: whatever it is called on the floor.
+**Add a cell**, if the floor is laid out in them. A cell is an area — *Cell 1 —
+turning*, *the mill cell*, *the deburr bench* — and it holds the machines that
+work together:
+
+| Field | What it is |
+| --- | --- |
+| Cell | What that area of the floor is called |
+| Flow order | Where the cell falls in the flow across the floor — 1 is first |
+
+**Add a machine**, and say which cell it stands in and where the work reaches it
+in that cell. Both are optional: a floor that is not laid out in cells works
+exactly as it did, and a machine that belongs to no cell is listed on its own at
+the end rather than being put in one it is not in.
 
 **Add a tool.** A tool is described once, however many machines it ends up on:
 
@@ -298,24 +314,41 @@ as **not marked**, and counted in a line under the chart.
 
 **Read it from three ends.** **Parts and operations** lists each part with its
 ops, and each op with the tool layouts it runs as — *TL 3 Haas ST-20, TL 7
-Doosan* — how many tools are set up for it and what they measure. **Machines**
-lists each machine with its tool layouts, each under its number, and the tools of
-each in the order they cut. **Tools** lists the crib, each tool with the layouts
-it is on as chips — click one to point the watch at that tool, on that layout.
-One filter box narrows all three, and it knows the numbers: typing **TL 12**, or
-just **12**, is a way of asking for everything on that layout.
+Doosan* — how many tools are set up for it and what they measure. **Cells and
+machines** lists the floor by area: each cell in flow order, the machines in it
+in the order the work reaches them, and under each machine its tool layouts with
+the tools of each in the order they cut. **Tools** lists the crib, each tool with
+the layouts it is on as chips — click one to point the watch at that tool, on
+that layout. One filter box narrows all three, and it knows the names things are
+asked for by: typing **TL 12** (or just **12**) asks for everything on that
+layout, and typing a **cell's name** asks for everything in that cell.
 
-**Fold away what you are not looking at.** Every heading opens and closes what is
-under it — each of the three lists, and each part and each machine inside them —
-as does the stopwatch. A closed heading still carries what it holds (a machine's
-tool count and measured cycle, a part's ops) and keeps its **+** button, so a
-shop with forty tools and a dozen machines can be read one block at a time, which
-is the difference between usable and not on a phone at the machine. What is
-folded is remembered on that device — it is a view preference, not part of the
-shop record, so it is not saved to the account and never reaches anyone else. **A
-filter outranks a fold**: searching opens everything, because a screen that hid
-the answer it was just asked for would be worse than useless. The watch is the
-one exception, since a running stopwatch is never the answer to a search.
+**Each cell says what runs through it.** Under a cell's heading are its routes —
+one line per part, that part's operations in the order they are cut in this cell,
+with the machine each runs on: *12345-A · Op 10 · Haas ST-20 / Doosan 2600SY →
+Op 20 · Haas ST-20*. Where two machines in the cell can cut the same operation,
+both are named on the one step, because that is a choice about where to run it
+and not two steps. That line is the order of operations for the cell, and it is
+one lane of the value stream below.
+
+**The screen opens closed.** Every heading on it folds — the three lists, each
+part and each machine inside them, the tool layout panel, the cut-and-waste
+panel, the value stream, the recorded cycles and the stopwatch itself — and all
+of them start closed, so a floor of a dozen machines and four hundred cycles
+opens as a page of headings rather than as a wall. What a closed heading carries
+is the answer without the working: the layout's number and its measured cycle,
+what share of that cycle is in cut, the part's process time, a machine's tool
+count, a cell's machines and the routes through it. The stopwatch closed is still
+a stopwatch — the time, and the presses a cycle needs.
+
+What is kept on the device is what you have **opened**, not what you have closed,
+so it stays that way: a machine or a part added next week arrives closed like
+everything else, instead of the screen quietly getting longer every week. It is a
+view preference, not part of the shop record, so it is not saved to the account
+and never reaches anyone else. **A filter outranks a fold**: searching opens
+everything, because a screen that hid the answer it was just asked for would be
+worse than useless. The watch is the one exception, since a running stopwatch is
+never the answer to a search.
 
 Deleting a machine takes its setups and leaves the tools in the crib; deleting a
 tool takes it out of every setup it was in; deleting an operation takes the
@@ -372,6 +405,44 @@ that part, on parts that were actually cut, and a number nobody has run yet has
 nothing to show. So the clone reads as ops and tools with no measured time
 against them, which is exactly what it is until somebody stands at the machine.
 
+## The value stream
+
+A part is made by its operations in order; each of those runs on a machine, which
+stands in a cell; and every one of those steps has a measured cycle underneath
+it, because the tools on it have been timed. Put end to end, that is the value
+stream — where the part goes, in what order, and how long each step takes — and
+the **Value stream** panel draws it from what the record already holds. Nothing
+is entered for it.
+
+**The map** is a box per operation in the order they run, banded by the cell the
+step happens in, with an arrow between boxes and the handover from one cell to
+the next where the band changes. Each box carries the step number, the operation,
+the tool layout it runs as, the machine, the **measured cycle** for that layout,
+how many tools are on it, what share of that cycle is in cut and what share of
+the part it is. Under the boxes, the part's process time divided between its
+steps on the same light→dark ramp the tool layout bar uses, and a table giving
+every step as text — including the ones with nothing measured and the ones with
+no machine set up yet.
+
+**Where an operation runs on more than one machine**, those are alternative
+routings rather than two steps: the boxes sit side by side in the one step, the
+one the total takes is outlined, and the total takes the **fastest measured** of
+them. The panel says so rather than leaving you to work out which it used.
+
+**It draws only what has been measured.** A value stream map normally carries
+inventory between the boxes, changeover, uptime and a lead-time ladder — none of
+which is in this record, so none of which is drawn. Inventing it would make the
+map look finished and be wrong, which is worse than a map that says plainly what
+it is: **process time**, step by step, cell by cell, measured at the machine.
+Steps with nothing timed against them are listed as such, with a line saying how
+many, so the total reads as the process time measured so far rather than as the
+whole part.
+
+**🖨 PDF** on the panel prints it: the route across its cells, the process time by
+step, the table, and a **Scope** block spelling out what the map does not claim —
+which matters more on paper than on screen, because a page with no caveat on it
+gets read as the whole picture.
+
 ## The tool layout, on paper
 
 A shop runs off a **tool layout sheet**: one page, one layout, every pocket on it
@@ -383,17 +454,20 @@ the tooling, which a typed-up sheet never does.
 one out:
 
 - the **number** and the whole address — the machine, the part, the op — across
-  the top, with the layout's measured cycle beside them
-- **the cycle, tool by tool**: the stacked bar dividing that cycle between the
+  the top, under a *Tool layout sheet* label
+- **Cycle by tool**: the stacked bar dividing the measured cycle between the
   tools in the order they cut, on the same light→dark ramp the screen uses, with
   the table under it naming each one and giving its average and its share
-- **in cut, and the waste**: the same tools as columns, each the tool's measured
+- **Cutting time and waste**: the same tools as columns, each the tool's measured
   cycle with only the marked-in-cut part filled in, every column on one scale
-- **the tools, in the order they cut**: a row per **pocket** — the tool in it,
-  its own part number, cycles timed, average, time in cut and what share that is,
+- **Tooling, in cutting order**: a row per **pocket** — the tool in it, its own
+  part number, cycles timed, average, time in cut and what share that is,
   indexable edges, parts per index, parts per tool and minutes per edge — with
   whatever was written about that setup underneath its row
-- and the **notes** on the layout, the op, the part and the machine at the foot
+- the **Notes** on the layout, the op, the part and the machine
+- and a footer carrying the mark, the shopwatch, the layout it is a sheet of and
+  when it was issued — so a page that ends up taped to a machine can be traced
+  back to the record it came off, and told from the one printed last month
 
 The 🖨 PDF on the top bar prints **every** layout in the shopwatch; the **PDF**
 on the Tool layout panel prints the one you are looking at. Both open a
@@ -519,14 +593,15 @@ that came out of here goes back in unchanged — and a tool list somebody alread
 keeps in a spreadsheet can be brought in by putting these headers on it:
 
 ```
-tool_layout, machine, machine_notes, part, part_description, part_notes,
+cell, tool_layout, machine, machine_notes, part, part_description, part_notes,
 op, op_notes, seq, station, tool_part_number, tool_description, cutting_edges,
 tool_cost, tool_notes, indexable_edges, parts_per_index, notes,
 cycle_seconds, cycle_cut_seconds, recorded_at
 ```
 
 Columns are read **by name, not by position** — reorder them, leave out the ones
-that do not apply, or use a common alternative (`tl`, `layout`, `machine name`,
+that do not apply, or use a common alternative (`tl`, `layout`, `work cell`,
+`area`, `machine name`,
 `part number`, `operation`, `turret`, `pocket`, `tool no`, `description`,
 `edges`, `cut time`, `parts between indexes`, `seconds`, `date`) and it still
 reads. A row makes
@@ -557,9 +632,9 @@ already there, how many cycles would be added — and nothing happens until you 
 Import. A part is matched by number, an operation by its name within that part, a
 machine by name, a tool by its part number and description, and a setup by the
 machine, tool and operation it joins plus the pocket it sits in; each gains any
-field the file fills in and keeps everything it leaves blank. **`tool_layout`**
-belongs to the machine-and-op pair a row names rather than to any one record, and
-is taken where it is free — so a file exported from here goes back in with its
+field the file fills in and keeps everything it leaves blank. **`cell`** is matched by name and made if it is not there, and the machine on
+that row is put in it. **`tool_layout`** belongs to the machine-and-op pair a row
+names rather than to any one record, and is taken where it is free — so a file exported from here goes back in with its
 layouts still called what they were called, while a number another layout already
 answers to is left alone rather than taken off it. Cycles are
 recognized by when they were recorded and how long they took, so **importing the
@@ -591,6 +666,12 @@ the machine. Two answers to one question, only one of them evidence: the typed
 one goes into that setup's notes rather than being thrown away, and the measured
 one stands alone.
 
+**Version 5** had no cells: a machine stood on its own and the floor had no
+areas. Nothing is invented for it — a record read in comes back with no cells and
+every machine outside one, which is exactly the floor it described, and the lists
+read as they did. Making a cell and putting machines in it is the only thing that
+changes that.
+
 **Version 4** had no tool layouts, because the machine-and-operation pair was
 only ever implied by the setups on it. Every pair with a tool on it becomes a
 numbered layout — machine by machine, and within a machine in the order the ops
@@ -602,13 +683,15 @@ are yours to change from that point on.
 ## The record, as a relational schema
 
 The record is stored as one JSON document per shopwatch (see below), but it is
-relational in shape and worth reading that way. Seven entities inside the
+relational in shape and worth reading that way. Eight entities inside the
 shopwatch, and one junction doing most of the work:
 
 ```mermaid
 erDiagram
     ACCOUNT     ||--o{ SHOPWATCH   : owns
     ACCOUNT     }o--o{ SHOPWATCH   : "may edit"
+    SHOPWATCH   ||--o{ CELL        : holds
+    CELL        |o--o{ MACHINE     : "is worked by"
     SHOPWATCH   ||--o{ MACHINE     : holds
     SHOPWATCH   ||--o{ TOOL        : holds
     SHOPWATCH   ||--o{ PART        : holds
@@ -651,15 +734,29 @@ CREATE TABLE shopwatch_message (    -- the chat, and what was done to the floor
 );
 CREATE INDEX ON shopwatch_message (shopwatch_id, at DESC);
 
+CREATE TABLE cell (                 -- an area of the floor
+  id           text PRIMARY KEY,
+  shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
+  name         text NOT NULL CHECK (length(name) <= 60),
+  seq          int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),  -- flow order
+  notes        text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
+  created_at   timestamptz NOT NULL,
+  updated_at   timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX ON cell (shopwatch_id, lower(name));
+
 CREATE TABLE machine (              -- what is on the floor
   id           text PRIMARY KEY,
   shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
+  cell_id      text     NULL REFERENCES cell(id) ON DELETE SET NULL,
+  cell_seq     int  NOT NULL DEFAULT 0 CHECK (cell_seq BETWEEN 0 AND 999),
   name         text NOT NULL CHECK (length(name) <= 60),
   notes        text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX ON machine (shopwatch_id, lower(name));
+CREATE INDEX ON machine (cell_id, cell_seq);   -- the flow through a cell
 
 CREATE TABLE tool (                 -- the crib: true wherever the tool runs
   id            text PRIMARY KEY,
@@ -789,9 +886,19 @@ shopwatch, which is the point of having two questions. Nothing below `shopwatch`
 carries a permission of its own, so there is no way for a machine or a cycle to
 end up visible to somebody the shopwatch is not.
 
+**Nothing about the value stream is stored**, because all of it is already here:
+a part's steps are its operations by `seq`, where each runs is `tool_layout`,
+which cell that is in is `machine.cell_id`, and how long the step takes is the
+sum of the averages of the cycles on that layout. The map is a read of those four
+tables, which is why it can never disagree with the times it was drawn from.
+
+`cell_id` is nullable for the same reason `operation_id` is: not every floor is
+laid out in cells, a machine can stand outside them, and deleting a cell takes
+the grouping rather than the machines.
+
 Row caps, enforced on every write: 40 shopwatches per account, 20 editors and 400
-messages per shopwatch, and within one shopwatch 60 machines, 200 tools, 120
-parts, 300 operations, 200 setups, 200 tool layouts, 300 cycles per setup.
+messages per shopwatch, and within one shopwatch 40 cells, 60 machines, 200 tools,
+120 parts, 300 operations, 200 setups, 200 tool layouts, 300 cycles per setup.
 
 ## What it stores, and where
 
@@ -818,7 +925,10 @@ screen is about, in one shape — drawn as an inline SVG in `client.js` rather t
 shipped as a file: nothing to fetch, nothing to keep a second copy of at another
 size, and it takes the palette with it, since the mark is `currentColor` and the
 pivot is punched out in the page colour. The name beside it splits the way the
-app's own does, **Shop**·*watch*.
+app's own does, **Shop**·*watch*, and it appears twice: top left on the screen,
+and in the footer of every printed tool layout sheet. Nothing sits under it —
+a line of copy saying what the screen is for is for somebody who has not opened
+it yet.
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —

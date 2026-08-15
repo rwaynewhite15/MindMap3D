@@ -47,20 +47,17 @@
 .mf-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 
 /* ---------------- the mark, top left ----------------
-   The stopwatch and its insert hand, then the name: one lockup, the mark
-   centred against both lines of it rather than against the first. The mark
-   carries the accent as its own colour, so the SVG's currentColor is the app's
-   accent and the pivot punched out of the middle is the page behind it. */
-.mf-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+   The stopwatch and its insert hand, then the name. The mark carries the accent
+   as its own colour, so the SVG's currentColor is the app's accent and the pivot
+   punched out of the middle is the page behind it. */
+.mf-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mf-mark { flex: none; display: block; color: var(--accent); }
-.mf-logo { display: block; width: 32px; height: 32px; }
-.mf-brand-text { min-width: 0; }
+.mf-logo { display: block; width: 30px; height: 30px; }
 /* The page breaks any word that would not fit (see .mf-root) — which is right
    for a sixty-character part number and wrong for the name of the app, where it
    reads as Shopwa/tch on a phone. */
 .mf-h1 { font-size: 20px; margin: 0; letter-spacing: 0.01em; white-space: nowrap; overflow-wrap: normal; }
 .mf-h1-b { color: var(--accent); }
-.mf-sub { color: var(--dim); font-size: 13px; margin-top: 2px; }
 .mf-top-btns { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .mf-flash {
@@ -539,6 +536,72 @@
 .mf-key-unmarked { border: 1px solid var(--mf-unmarked); }
 .mf-legend-w { font-family: var(--mf-mono); font-variant-numeric: tabular-nums; color: var(--dim); }
 
+/* ---------------- the value stream ----------------
+   A part's route, left to right: a box per operation in the order they run,
+   banded by the cell the step happens in, with an arrow between boxes. The
+   bands wrap on a narrow screen rather than scrolling sideways — a map you have
+   to drag is not a map you can read at a glance. Only measured process time is
+   drawn; the record holds nothing about waiting, batches or changeovers, so the
+   map does not pretend to. */
+.mf-stream {
+  margin-top: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.mf-flow { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 12px; }
+.mf-band { border-left: 2px solid var(--accent); padding-left: 10px; }
+.mf-band-k {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.mf-band-lane { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; }
+.mf-step { display: flex; align-items: center; gap: 8px; }
+.mf-step-arrow { color: var(--dim); font-size: 15px; flex: none; }
+.mf-step-boxes { display: flex; flex-direction: column; gap: 6px; }
+.mf-box {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 148px;
+}
+/* Where an op runs on two machines, the one the total takes is the one drawn
+   as the route: alternatives, not steps. */
+.mf-box-best { border-color: var(--accent); }
+.mf-box-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mf-box-n {
+  font-family: var(--mf-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--dim);
+  background: var(--line);
+  border-radius: 50%;
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.mf-box-op { font-family: var(--mf-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.mf-box-machine { font-size: 12px; margin-top: 3px; }
+.mf-box-time {
+  font-family: var(--mf-mono);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.mf-box-meta { font-size: 10.5px; color: var(--dim); margin-top: 1px; }
+.mf-stream .mf-bar { height: 20px; }
+.mf-stream .mf-seg-n { font-family: var(--mf-mono); font-size: 10px; }
+
 /* ---------------- the three lists ----------------
    The same records from three ends: parts with the operations that make them,
    machines with the tools set up on them, and the crib with the machines each
@@ -622,6 +685,27 @@
 .mf-chip-sm { font-size: 10.5px; padding: 1px 5px; }
 .mf-card-crib .mf-chip { white-space: normal; max-width: 100%; }
 
+/* ---------------- a cell ----------------
+   An area of the floor, above the machines in it: what it is called, what is in
+   it, and the routes that run through it — each part's operations in the order
+   they are cut there, which is the order of operations for that cell and one
+   lane of the value stream. */
+.mf-cell { margin: 18px 0 8px; }
+.mf-cell-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mf-cell-k {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.mf-cell-v { font-size: 11.5px; color: var(--dim); }
+.mf-cell-btns { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.mf-route { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 11.5px; }
+.mf-route-k { font-family: var(--mf-mono); color: var(--ink); flex: none; }
+.mf-route-v { font-family: var(--mf-mono); color: var(--dim); min-width: 0; }
+.mf-section-acts { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+
 .mf-group { display: flex; align-items: center; gap: 8px; margin: 16px 0 6px; flex-wrap: wrap; }
 .mf-group-k {
   font-family: var(--mf-mono);
@@ -678,11 +762,11 @@
 @media (max-width: 520px) {
   .mf-page { padding: 12px 10px 40px; }
   /* On a phone the buttons take their own row under the name rather than
-     squeezing it into a column: four words a line is not a subtitle. */
-  .mf-top { flex-wrap: wrap; }
+     squeezing the name into a column beside them. */
+  .mf-top { flex-wrap: wrap; align-items: center; }
   .mf-brand { flex: 1 1 100%; gap: 9px; }
   .mf-top-btns { margin-left: 0; justify-content: flex-start; }
-  .mf-logo { width: 27px; height: 27px; }
+  .mf-logo { width: 26px; height: 26px; }
   /* Four presses do not fit across a phone, and wrapping three-then-one
      leaves the last one stranded. Two by two instead: even rows, and a target
      big enough for a thumb at the machine. */

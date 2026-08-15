@@ -9,8 +9,11 @@
      GET  /   the whole shop record, plus the limits the client should respect
      PUT  /   whole-record replace, sanitized here before it is stored
 
-   The record is five lists and the links between them:
+   The record is six lists and the links between them:
 
+     cells         an area of the floor: the machines that work together, in the
+                   order the work flows through them. A machine belongs to one
+                   cell or to none
      machines      one per machine on the floor
      tools         the crib: a tool's own part number, what it is, and how many
                    cutting edges it has — true wherever the tool is used
@@ -47,6 +50,7 @@
    over per-account storage, so there is no auth and no database here.
 ================================================================ */
 
+const MAX_CELLS = 40;             // work cells on one floor
 const MAX_MACHINES = 60;          // machines on one account
 const MAX_TOOLS = 200;            // tools in the crib
 const MAX_PARTS = 120;            // part numbers being made
@@ -108,13 +112,32 @@ module.exports = function (ctx) {
     };
   }
 
-  function sanitizeMachine(raw) {
+  // One cell: an area of the floor. Its seq is where it falls in the flow, so a
+  // part moving cell to cell reads in the order it actually moves.
+  function sanitizeCell(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const name = text(raw.name, 60);
-    if (!name) return null; // a machine is known by its name; there is nothing else to call it
+    if (!name) return null;
     return stamp(raw, {
       id: text(raw.id, 24) || newId(),
       name,
+      seq: num(raw.seq, MAX_SEQ, true),
+      notes: text(raw.notes, 400),
+    });
+  }
+
+  function sanitizeMachine(raw, cellIds) {
+    if (!raw || typeof raw !== 'object') return null;
+    const name = text(raw.name, 60);
+    if (!name) return null; // a machine is known by its name; there is nothing else to call it
+    const cellId = text(raw.cellId, 24);
+    return stamp(raw, {
+      id: text(raw.id, 24) || newId(),
+      name,
+      // A machine can stand on its own: not every floor is in cells, and one
+      // whose cell has been deleted stays on the floor rather than going with it.
+      cellId: cellIds.has(cellId) ? cellId : '',
+      cellSeq: num(raw.cellSeq, MAX_SEQ, true),  // where it falls in the cell's flow
       notes: text(raw.notes, 400),
     });
   }
@@ -299,8 +322,8 @@ module.exports = function (ctx) {
 
   function emptyShop() {
     return {
-      version: 5,
-      machines: [], tools: [], parts: [], operations: [], assignments: [],
+      version: 6,
+      cells: [], machines: [], tools: [], parts: [], operations: [], assignments: [],
       layouts: [], activeId: '', updatedAt: 0,
     };
   }
@@ -538,7 +561,9 @@ module.exports = function (ctx) {
       return true;
     };
 
-    for (const raw of list(s.machines)) keep(shop.machines, sanitizeMachine(raw), MAX_MACHINES);
+    for (const raw of list(s.cells)) keep(shop.cells, sanitizeCell(raw), MAX_CELLS);
+    const cellIds = new Set(shop.cells.map(c => c.id));
+    for (const raw of list(s.machines)) keep(shop.machines, sanitizeMachine(raw, cellIds), MAX_MACHINES);
     for (const raw of list(s.tools)) keep(shop.tools, sanitizeTool(raw), MAX_TOOLS);
     for (const raw of list(s.parts)) keep(shop.parts, sanitizePart(raw), MAX_PARTS);
     const partIds = new Set(shop.parts.map(p => p.id));
@@ -568,6 +593,7 @@ module.exports = function (ctx) {
   }
 
   const limits = {
+    maxCells: MAX_CELLS,
     maxMachines: MAX_MACHINES,
     maxTools: MAX_TOOLS,
     maxParts: MAX_PARTS,
@@ -589,6 +615,7 @@ module.exports = function (ctx) {
     const timed = shop.assignments.reduce((n, a) => n + a.runs.length, 0);
     const bits = [];
     if (shop.parts.length) bits.push(shop.parts.length + (shop.parts.length === 1 ? ' part' : ' parts'));
+    if (shop.cells.length) bits.push(shop.cells.length + (shop.cells.length === 1 ? ' cell' : ' cells'));
     if (shop.machines.length) bits.push(shop.machines.length + (shop.machines.length === 1 ? ' machine' : ' machines'));
     if (shop.tools.length) bits.push(shop.tools.length + (shop.tools.length === 1 ? ' tool' : ' tools'));
     if (shop.layouts.length) {
