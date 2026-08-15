@@ -809,9 +809,16 @@ deleted with the account — including for the people they were shared with.
 plugin.json          the manifest the app reads at startup
 server.js            what an empty floor is, and what a stored one may contain
                      (no routes — the host serves every document itself)
-public/client.js     the Shopwatch screen
+public/client.js     the Shopwatch screen, and the mark in its top left corner
 public/client.css    its styles, scoped under .mf-root
 ```
+
+The mark is a stopwatch whose hand is a cutting insert — the two things the
+screen is about, in one shape — drawn as an inline SVG in `client.js` rather than
+shipped as a file: nothing to fetch, nothing to keep a second copy of at another
+size, and it takes the palette with it, since the mark is `currentColor` and the
+pivot is punched out in the page colour. The name beside it splits the way the
+app's own does, **Shop**·*watch*.
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —

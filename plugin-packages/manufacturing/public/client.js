@@ -4191,6 +4191,52 @@
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); reset(); }
   }
 
+  /* ---------------- the mark ----------------
+     A stopwatch whose hand is a cutting insert: the two things this screen is
+     about, in one shape. The dial and the crown say what it is from across a
+     bench; the rhombus sweeping out of the middle is an 80° insert, which is
+     the hand of a watch that only ever times metal being cut.
+
+     It is drawn rather than fetched — an inline SVG needs no file, no request
+     and no second copy at another size, and it takes the palette with it: the
+     mark is currentColor, so it is the app's accent wherever the app's accent
+     is, and the pivot is punched out in the page colour rather than painted in
+     a colour that would be wrong on another background.
+
+     The wordmark beside it splits the way the app's own does — MindMap**Share**,
+     Shop**watch** — because the two halves are the two halves of the idea.
+  ---------------------------------------------------------------- */
+  const LOGO = '<svg viewBox="0 0 24 24" class="mf-logo" aria-hidden="true" focusable="false">' +
+    // the crown: the button, and a neck run far enough down to meet the dial —
+    // the two are one shape at any size, and a gap there reads as a loose dot
+    '<rect x="10.2" y="0.9" width="3.6" height="2.3" rx="1.1" fill="currentColor"/>' +
+    '<rect x="11.1" y="2.6" width="1.8" height="3.6" fill="currentColor"/>' +
+    '<circle cx="12" cy="13.6" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/>' +
+    // the hand: a rhombus, the shape of the insert it is timing, swept out of
+    // the middle to where a second hand sits
+    '<polygon points="16.17,9.43 15.05,13.61 10.87,14.73 11.99,10.55" fill="currentColor"/>' +
+    '<circle cx="12" cy="13.6" r="1" fill="var(--bg)"/>' +
+    '</svg>';
+
+  function brand() {
+    const box = el('div', 'mf-brand');
+    // The mark is set as markup because an SVG built with createElement lands in
+    // the HTML namespace and never draws. It is a constant with nothing
+    // interpolated into it.
+    const mark = el('span', 'mf-mark');
+    mark.innerHTML = LOGO;
+    box.appendChild(mark);
+
+    const text = el('div', 'mf-brand-text');
+    const title = el('h1', 'mf-h1');
+    title.appendChild(document.createTextNode('Shop'));
+    title.appendChild(el('span', 'mf-h1-b', 'watch'));
+    text.appendChild(title);
+    text.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, layout by layout'));
+    box.appendChild(text);
+    return box;
+  }
+
   /* ---------------- the shell's hooks ---------------- */
   function mount(section, context) {
     ctx = context;
@@ -4200,10 +4246,7 @@
     const page = el('div', 'mf-page');
 
     const top = el('div', 'mf-top');
-    const heading = el('div');
-    heading.appendChild(el('h1', 'mf-h1', 'Shopwatch'));
-    heading.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, layout by layout'));
-    top.appendChild(heading);
+    top.appendChild(brand());
     const actions = el('div', 'mf-top-btns');
     // Everything that adds to a floor is left off a screen that cannot write to
     // one. Export stays: reading it and downloading it are the same permission.
