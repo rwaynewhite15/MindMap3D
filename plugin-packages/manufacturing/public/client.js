@@ -112,38 +112,44 @@
   const cutElapsed = () =>
     watch.cutAccum + (watch.inCut && watch.running ? Date.now() - watch.cutSince : 0);
 
-  /* ---------------- what is folded away ----------------
-     Which lists are collapsed is a view preference, not a shop record: it is
+  /* ---------------- what is open ----------------
+     Which headings are open is a view preference, not a shop record: it is
      about this screen on this device, so it lives beside the watch in local
      storage rather than being saved to the account and pushed onto every other
-     device signed into it. It is held in memory too, because the lists are rebuilt from
-     scratch on every save and a fold kept only in the DOM would spring open.
-  ---------------------------------------------------------------- */
-  let folded = new Set();
+     device signed into it. It is held in memory too, because the lists are
+     rebuilt from scratch on every save and a fold kept only in the DOM would
+     spring open.
 
-  const foldKey = () => 'mf.folded.' + whoAmI();
-  function saveFolded() {
-    try { localStorage.setItem(foldKey(), JSON.stringify([...folded])); } catch { /* private mode */ }
+     What is stored is what has been *opened*, not what has been closed, so
+     closed is the default and the screen opens as a page of headings — the
+     floor at a glance, opened where you are working rather than everything at
+     once. It also means a machine or a part added later arrives closed like
+     everything else, instead of a list that quietly gets longer every week.
+  ---------------------------------------------------------------- */
+  let opened = new Set();
+
+  const viewKey = () => 'mf.open.' + whoAmI();
+  function saveOpened() {
+    try { localStorage.setItem(viewKey(), JSON.stringify([...opened])); } catch { /* private mode */ }
   }
-  function restoreFolded() {
+  function restoreOpened() {
     try {
-      const raw = JSON.parse(localStorage.getItem(foldKey()) || '[]');
-      if (Array.isArray(raw)) folded = new Set(raw.filter(k => typeof k === 'string').slice(0, 400));
-    } catch { /* nothing saved, or unreadable: everything open */ }
+      const raw = JSON.parse(localStorage.getItem(viewKey()) || '[]');
+      opened = new Set(Array.isArray(raw) ? raw.filter(k => typeof k === 'string').slice(0, 400) : []);
+    } catch { /* nothing saved, or unreadable: everything closed */ }
   }
 
   // A filter outranks a fold. Searching for something and being shown a closed
   // heading that contains it would be the screen hiding the answer it was just
   // asked for, so while a filter is on, everything is open.
-  const isFolded = key => !filter && folded.has(key);
+  const isFolded = key => !filter && !opened.has(key);
 
-  // The stopwatch folds away through the same device-local store, because it is
-  // the same kind of preference: about this screen on this device, not about the
-  // floor. It is read directly rather than through isFolded, though — a filter
-  // opens the lists because a closed heading could be hiding the answer to the
-  // search, and the watch is never the answer to one.
-  const WATCH_MIN = 'watch:min';
-  const minimized = () => folded.has(WATCH_MIN);
+  // The stopwatch folds through the same store and the same rule: closed until
+  // somebody opens it, and it stays open from then on. The one difference is
+  // that a filter does not open it — a running stopwatch is never the answer to
+  // a search, and the clock is the tallest thing on the screen.
+  const WATCH_OPEN = 'watch:open';
+  const minimized = () => !opened.has(WATCH_OPEN);
 
   /* ---------------- whose device state this is ----------------
      Both of the above are kept under the signed-in name, and the shell hands
@@ -165,14 +171,14 @@
     if (localFor === who) return;
     localFor = who;
     if (!watch.running && !watch.accum && !watch.laps) restoreWatch();
-    restoreFolded();
+    restoreOpened();
     if (watch.running) startTick();   // a watch read back running has to tick
   }
 
   function toggleFold(key, redraw) {
-    if (folded.has(key)) folded.delete(key);
-    else folded.add(key);
-    saveFolded();
+    if (opened.has(key)) opened.delete(key);
+    else opened.add(key);
+    saveOpened();
     redraw();
   }
 
@@ -275,6 +281,7 @@
      machine and an operation; an operation names the part it is a step of.
      Every reader below goes through these to get from one to another.
   ---------------------------------------------------------------- */
+  const cellById = id => (shop && Array.isArray(shop.cells) ? shop.cells.find(c => c.id === id) || null : null);
   const toolById = id => (shop ? shop.tools.find(t => t.id === id) || null : null);
   const machineById = id => (shop ? shop.machines.find(m => m.id === id) || null : null);
   const partById = id => (shop ? shop.parts.find(p => p.id === id) || null : null);
@@ -299,6 +306,38 @@
 
   // Every assignment of one tool, every assignment on one machine, and every
   // assignment doing one operation — the relations read from each end.
+  /* ---------------- cells ----------------
+     An area of the floor: the machines that work together, in the order the work
+     flows through them. A machine belongs to one cell or to none — not every
+     floor is laid out in cells, and one that is has machines standing outside
+     them. The cell is where the value stream starts: a part crosses cells in the
+     order its operations run, and that crossing is the map.
+  ---------------------------------------------------------------- */
+  const cellList = () => (shop && Array.isArray(shop.cells) ? shop.cells : []);
+  const cellName = c => (c ? c.name : 'No cell');
+  const byFlow = (a, b) => {
+    const as = a.seq || Infinity, bs = b.seq || Infinity;
+    if (as !== bs) return as - bs;
+    return (a.name || '').localeCompare(b.name || '');
+  };
+  const allCells = () => [...cellList()].sort(byFlow);
+  const cellOfMachine = id => {
+    const m = machineById(id);
+    return m && m.cellId ? cellById(m.cellId) : null;
+  };
+  const cellOfLayout = l => (l ? cellOfMachine(l.machineId) : null);
+  // The machines of one cell, in the order the work moves through them.
+  const machinesOfCell = id => (shop
+    ? shop.machines.filter(m => m.cellId === id).sort((a, b) => {
+      const as = a.cellSeq || Infinity, bs = b.cellSeq || Infinity;
+      if (as !== bs) return as - bs;
+      return a.name.localeCompare(b.name);
+    })
+    : []);
+  const jobsOfCell = id => (shop
+    ? shop.assignments.filter(a => { const c = cellOfMachine(a.machineId); return c && c.id === id; })
+    : []);
+
   const jobsOfTool = id => (shop ? shop.assignments.filter(a => a.toolId === id) : []);
   const jobsOnMachine = id => (shop ? shop.assignments.filter(a => a.machineId === id) : []);
   const jobsOfOperation = id => (shop ? shop.assignments.filter(a => a.operationId === id) : []);
@@ -359,8 +398,12 @@
   // What it is called, and what it is: the number is the name it is asked for by
   // on the floor, and the machine, the part and the op are the address behind it.
   const tlName = l => 'TL ' + (l && l.number ? l.number : '–');
-  const layoutWhere = l =>
-    (l ? [machineName(l.machineId), operationLabel(operationById(l.operationId))].join(' · ') : '');
+  const layoutWhere = l => {
+    if (!l) return '';
+    const cell = cellOfMachine(l.machineId);
+    return [cell && cell.name, machineName(l.machineId),
+      operationLabel(operationById(l.operationId))].filter(Boolean).join(' · ');
+  };
 
   // Running order within a layout. An assignment with no sequence yet sorts
   // after the ones that have one, oldest first, so an unplaced tool lands at the
@@ -836,8 +879,9 @@
     saveNow();
     renderStats();
     renderRuns();
-    renderChart();    // this tool's share of the operation just moved
+    renderChart();    // this tool's share of the layout just moved
     renderCutChart(); // and so did how much of its cycle was cutting
+    renderStream();   // and the step that layout is in the part's route
     renderParts();    // as did the operation's measured cycle
     renderMachines(); // and its average, on its card
   }
@@ -1177,6 +1221,7 @@
     renderForm();
     renderChart();
     renderCutChart();
+    renderStream();
     renderSearch();
     renderParts();
     renderMachines();
@@ -1249,7 +1294,7 @@
         'The operation, edges and tool life of this tool on this machine'));
       // Folding the watch away is only offered to whoever has one. It keeps
       // running either way — see minimized() for where the state lives.
-      head.appendChild(button('mf-min', small ? '▸' : '▾', () => toggleFold(WATCH_MIN, renderWatch),
+      head.appendChild(button('mf-min', small ? '▸' : '▾', () => toggleFold(WATCH_OPEN, renderWatch),
         small ? 'Open the stopwatch' : 'Fold the stopwatch down to a bar — it keeps running'));
     }
     box.appendChild(head);
@@ -1558,7 +1603,7 @@
     const head = el('div', 'mf-chart-head');
     const heading = el('div', 'mf-chart-heading');
     const titleRow = el('div', 'mf-tl-row');
-    titleRow.appendChild(el('div', 'mf-section-title', 'Tool layout'));
+    titleRow.appendChild(foldToggle('sec:chart', 'Tool layout', 'mf-section-title', renderChart));
     if (layout) titleRow.appendChild(tlChip(layout));
     heading.appendChild(titleRow);
     heading.appendChild(el('div', 'mf-chart-op', layout ? layoutWhere(layout) : opLabel(active)));
@@ -1580,6 +1625,9 @@
       : 'nothing timed yet'));
     head.appendChild(figure);
     box.appendChild(head);
+    // Closed, the heading still carries the layout's number and its measured
+    // cycle: a fold hides the working, not the answer.
+    if (isFolded('sec:chart')) return;
 
     // A tool in a machine with no operation named is half of a pair, and half a
     // pair is not a layout: there is nothing for the number to be the number of.
@@ -1709,7 +1757,7 @@
     const layout = layoutOf(active);
     const head = el('div', 'mf-chart-head');
     const heading = el('div');
-    heading.appendChild(el('div', 'mf-section-title', 'In cut, and the waste'));
+    heading.appendChild(foldToggle('sec:cut', 'In cut, and the waste', 'mf-section-title', renderCutChart));
     heading.appendChild(el('div', 'mf-chart-op',
       layout ? tlName(layout) + ' · ' + layoutWhere(layout) : opLabel(active)));
     head.appendChild(heading);
@@ -1726,6 +1774,7 @@
       : 'nothing marked in cut yet'));
     head.appendChild(figure);
     box.appendChild(head);
+    if (isFolded('sec:cut')) return;
 
     if (!drawn.length) {
       box.appendChild(el('div', 'mf-note',
@@ -1867,6 +1916,248 @@
     }
   }
 
+
+  /* ---------------- the value stream ----------------
+     A part is made by its operations in order; each of those runs on a machine,
+     which stands in a cell; and every one of those steps has a measured cycle
+     underneath it, because the tools on it have been timed. Put end to end,
+     that is the value stream: where the part goes, in what order, and how long
+     each step takes.
+
+     What is drawn is only what has been measured. A value stream map normally
+     carries inventory between the boxes, changeover, uptime and a lead-time
+     ladder, and none of that is in this record — so none of it is drawn.
+     Inventing it would make the map look finished and be wrong, which is worse
+     than a map that says plainly which steps have been timed and which have
+     not. What this shows is the process time: step by step, cell by cell, and
+     what share of the part's total each one is.
+
+     Where an operation runs on more than one machine those are alternative
+     routings rather than two steps, so they are drawn side by side in one step
+     and the total takes the fastest measured of them — and says so.
+  ---------------------------------------------------------------- */
+  let streamPartId = '';   // the part the map is of, on this screen only
+
+  // The part the map opens on: whatever was last chosen, else the one being
+  // timed, else the first part with operations on it.
+  function streamPart() {
+    if (!shop) return null;
+    const chosen = partById(streamPartId);
+    if (chosen) return chosen;
+    const timing = jobPart(activeJob());
+    if (timing) return timing;
+    return [...shop.parts].sort((a, b) => partName(a).localeCompare(partName(b)))
+      .find(p => opsOfPart(p.id).length) || null;
+  }
+
+  /* One part's route, as steps. A step is an operation; under it are the tool
+     layouts that can run it, each with its cell, its machine and its measured
+     cycle — the sum of its tools' averages, which is what the tool layout panel
+     shows for that layout. */
+  function streamSteps(part) {
+    if (!part) return [];
+    return opsOfPart(part.id).map(op => {
+      const routes = layoutsOfOperation(op.id).map(l => {
+        const jobs = layoutJobsOf(l);
+        let cycle = 0, timed = 0, cut = 0, cutCycle = 0;
+        for (const a of jobs) {
+          const st = statsFor(a);
+          if (!st) continue;
+          cycle += st.avg;
+          timed++;
+          if (st.avgCut) { cut += st.avgCut; cutCycle += st.avgCutCycle; }
+        }
+        return {
+          layout: l,
+          cell: cellOfMachine(l.machineId),
+          machineId: l.machineId,
+          tools: jobs.length,
+          timed,
+          cycle,
+          // the share of the measured cycle that was marked in cut, over the
+          // cycles it was marked in
+          cutShare: cutCycle ? cut / cutCycle : 0,
+        };
+      });
+      const measured = routes.filter(r => r.cycle > 0);
+      // alternatives, not steps: the quickest measured one is what the part
+      // takes when it goes that way
+      const best = measured.length
+        ? measured.reduce((a, b) => (b.cycle < a.cycle ? b : a))
+        : null;
+      return { op, routes, best, cycle: best ? best.cycle : 0 };
+    });
+  }
+
+  function renderStream() {
+    const box = els.stream;
+    box.innerHTML = '';
+    if (!shop || !shop.parts.length) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const part = streamPart();
+    const steps = streamSteps(part);
+    const measured = steps.filter(st => st.cycle > 0);
+    const total = measured.reduce((sum, st) => sum + st.cycle, 0);
+
+    const head = el('div', 'mf-chart-head');
+    const heading = el('div', 'mf-chart-heading');
+    heading.appendChild(foldToggle('sec:stream', 'Value stream', 'mf-section-title', renderStream));
+    heading.appendChild(el('div', 'mf-chart-op', part
+      ? partName(part) + (part.desc && part.number ? ' · ' + part.desc : '')
+      : 'no parts yet'));
+    if (part && steps.length) {
+      const acts = el('div', 'mf-tl-acts');
+      acts.appendChild(button('mf-link', '🖨 PDF', () => exportStreamPdf(part.id),
+        'This value stream on a page of its own, ready to print or save as PDF'));
+      heading.appendChild(acts);
+    }
+    head.appendChild(heading);
+    const figure = el('div', 'mf-chart-figure');
+    figure.appendChild(el('div', 'mf-chart-total', total ? fmtSec(total) : '—'));
+    figure.appendChild(el('div', 'mf-chart-sub', measured.length
+      ? 'process time over ' + measured.length + (measured.length === 1 ? ' step' : ' steps')
+      : 'nothing measured yet'));
+    head.appendChild(figure);
+    box.appendChild(head);
+    if (isFolded('sec:stream')) return;
+
+    // Which part the map is of. Only worth a control where there is more than
+    // one part to be of.
+    if (shop.parts.length > 1) {
+      box.appendChild(dropdown('mf-pick',
+        [...shop.parts].sort((a, b) => partName(a).localeCompare(partName(b)))
+          .map(p => ({ value: p.id, label: partName(p) + ' — ' +
+            opsOfPart(p.id).length + (opsOfPart(p.id).length === 1 ? ' op' : ' ops') })),
+        part ? part.id : '', v => { streamPartId = v; renderStream(); }, 'Part the value stream is of'));
+    }
+
+    if (!steps.length) {
+      box.appendChild(el('div', 'mf-note', part
+        ? partName(part) + ' has no operations yet, so there is no route to map.'
+        : 'Add a part and its operations, and the route they run appears here.'));
+      return;
+    }
+
+    /* The map itself: a box per step in the order the operations run, banded by
+       the cell each step happens in, with an arrow between boxes. A step whose
+       cell changes starts a new band, because that is the handover — the point
+       where the part is carried from one area of the floor to the next. */
+    const flow = el('div', 'mf-flow');
+    let bandCell = undefined, band = null;
+    steps.forEach((st, i) => {
+      const route = st.best || st.routes[0] || null;
+      const cell = route ? route.cell : null;
+      const cellId = cell ? cell.id : '';
+      if (bandCell === undefined || cellId !== bandCell) {
+        bandCell = cellId;
+        band = el('div', 'mf-band');
+        const label = el('div', 'mf-band-k', cell ? cell.name : (route ? 'Not in a cell' : 'No machine yet'));
+        band.appendChild(label);
+        const lane = el('div', 'mf-band-lane');
+        band.appendChild(lane);
+        band.lane = lane;
+        flow.appendChild(band);
+      }
+      band.lane.appendChild(streamBox(st, i, total));
+    });
+    box.appendChild(flow);
+
+    // Where the process time goes, across the steps that have been measured —
+    // the same ramp the tool layout bar uses, so a step reads the same way here
+    // as a tool does there.
+    if (measured.length > 1) {
+      const bar = el('div', 'mf-bar');
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label', 'The part’s measured process time, ' + fmtSec(total) +
+        ', divided between ' + measured.length + ' steps. The same numbers are in the table below.');
+      measured.forEach((st, n) => {
+        const share = st.cycle / total;
+        const step = rampStep(n, measured.length);
+        const seg = el('div', 'mf-seg');
+        seg.style.flexGrow = String(share);
+        seg.style.background = step.fill;
+        seg.style.color = step.ink;
+        if (n === measured.length - 1) seg.classList.add('mf-seg-end');
+        seg.title = st.op.name + ' — ' + fmtSec(st.cycle) + ', ' + Math.round(share * 100) + '% of the process time';
+        if (share >= 0.08) seg.appendChild(el('span', 'mf-seg-n', st.op.name));
+        bar.appendChild(seg);
+      });
+      box.appendChild(bar);
+    }
+
+    // The table under it: every step as text, including the ones with nothing
+    // measured and the ones with nowhere to run yet.
+    const table = el('div', 'mf-legend');
+    steps.forEach((st, i) => {
+      const route = st.best || st.routes[0] || null;
+      const row = el('div', 'mf-legend-row' + (st.cycle ? '' : ' mf-legend-off'));
+      row.appendChild(el('span', 'mf-legend-n', String(i + 1)));
+      const name = el('span', 'mf-legend-name');
+      if (route && route.layout) name.appendChild(tlChip(route.layout, 'mf-tl-sm'));
+      name.appendChild(document.createTextNode(st.op.name +
+        (route ? ' · ' + machineName(route.machineId) : '')));
+      row.appendChild(name);
+      row.appendChild(el('span', 'mf-legend-v', st.cycle ? fmtSec(st.cycle) : '—'));
+      row.appendChild(el('span', 'mf-legend-p', st.cycle
+        ? Math.round((st.cycle / total) * 100) + '%'
+        : (route ? 'not timed' : 'no machine')));
+      if (route && route.layout) row.addEventListener('click', () => {
+        const first = layoutJobsOf(route.layout)[0];
+        if (first) selectJob(first.id);
+      });
+      table.appendChild(row);
+    });
+    box.appendChild(table);
+
+    const untimed = steps.length - measured.length;
+    const unrouted = steps.filter(st => !st.routes.length).length;
+    if (untimed) {
+      box.appendChild(el('div', 'mf-note', untimed + ' of ' + steps.length +
+        (steps.length === 1 ? ' step ' : ' steps ') + (untimed === 1 ? 'has' : 'have') +
+        ' nothing measured against ' + (untimed === 1 ? 'it' : 'them') +
+        (unrouted ? ' — ' + unrouted + ' of those ' + (unrouted === 1 ? 'has' : 'have') +
+          ' no machine set up yet' : '') +
+        ', so the total is the process time measured so far rather than the whole part.'));
+    }
+    if (steps.some(st => st.routes.length > 1)) {
+      box.appendChild(el('div', 'mf-note',
+        'Where an operation runs on more than one machine, those are alternative routings rather ' +
+        'than two steps: they are drawn side by side and the total takes the fastest measured.'));
+    }
+    box.appendChild(el('div', 'mf-note',
+      'This is process time — what the part spends being cut and handled at each step. ' +
+      'Waiting between steps, batch sizes and changeovers are not in this record, so they are ' +
+      'not drawn.'));
+  }
+
+  // One process box: the step, where it happens, and what it measures.
+  function streamBox(st, i, total) {
+    const wrap = el('div', 'mf-step');
+    if (i) wrap.appendChild(el('div', 'mf-step-arrow', '→'));
+    const boxes = el('div', 'mf-step-boxes');
+    const routes = st.routes.length ? st.routes : [null];
+    for (const route of routes) {
+      const b = el('div', 'mf-box' + (route && st.best === route && st.routes.length > 1 ? ' mf-box-best' : ''));
+      const top = el('div', 'mf-box-top');
+      top.appendChild(el('span', 'mf-box-n', String(i + 1)));
+      top.appendChild(el('span', 'mf-box-op', st.op.name));
+      if (route && route.layout) top.appendChild(el('span', 'mf-tl mf-tl-sm', tlName(route.layout)));
+      b.appendChild(top);
+      b.appendChild(el('div', 'mf-box-machine', route ? machineName(route.machineId) : 'No machine set up'));
+      const time = el('div', 'mf-box-time', route && route.cycle ? fmtSec(route.cycle) : '—');
+      b.appendChild(time);
+      const meta = [];
+      if (route) meta.push(route.tools + (route.tools === 1 ? ' tool' : ' tools'));
+      if (route && route.cutShare) meta.push(Math.round(route.cutShare * 100) + '% in cut');
+      if (route && route.cycle && total) meta.push(Math.round((route.cycle / total) * 100) + '% of total');
+      b.appendChild(el('div', 'mf-box-meta', meta.join(' · ') || 'nothing measured'));
+      boxes.appendChild(b);
+    }
+    wrap.appendChild(boxes);
+    return wrap;
+  }
+
   function renderRuns() {
     const box = els.runs;
     box.innerHTML = '';
@@ -1874,7 +2165,8 @@
     if (!a) return;
 
     const head = el('div', 'mf-section-head');
-    head.appendChild(el('div', 'mf-section-title', 'Recorded cycles'));
+    head.appendChild(foldToggle('sec:runs', 'Recorded cycles', 'mf-section-title', renderRuns));
+    head.appendChild(el('span', 'mf-fold-count', String(a.runs.length)));
     const add = el('div', 'mf-addtime');
     const input = el('input', 'mf-input mf-input-time');
     input.placeholder = 'mm:ss.t';
@@ -1890,6 +2182,7 @@
     add.appendChild(button('mf-btn mf-btn-sm', 'Add', commit, 'Record a time measured somewhere else'));
     if (canEdit()) head.appendChild(add);
     box.appendChild(head);
+    if (isFolded('sec:runs')) return;
 
     if (!a.runs.length) {
       box.appendChild(el('div', 'mf-note', 'Nothing timed against this setup yet.'));
@@ -1931,6 +2224,15 @@
   ---------------------------------------------------------------- */
   const MACHINE_FIELDS = [
     { key: 'name', label: 'Machine', placeholder: 'Haas ST-20', wide: true, hint: 'What it is called on the floor' },
+    { key: 'cellSeq', label: 'Position in cell', placeholder: '1', num: true,
+      hint: 'Where the work reaches this machine in its cell — 1 is first' },
+  ];
+
+  const CELL_FIELDS = [
+    { key: 'name', label: 'Cell', placeholder: 'Cell 1 — turning', wide: true,
+      hint: 'What this area of the floor is called' },
+    { key: 'seq', label: 'Flow order', placeholder: '1', num: true,
+      hint: 'Where the cell falls in the flow across the floor — 1 is first' },
   ];
 
   const TOOL_FIELDS = [
@@ -1963,10 +2265,11 @@
   ];
 
   const FORM_FIELDS = {
-    machine: MACHINE_FIELDS, tool: TOOL_FIELDS, part: PART_FIELDS,
+    cell: CELL_FIELDS, machine: MACHINE_FIELDS, tool: TOOL_FIELDS, part: PART_FIELDS,
     operation: OPERATION_FIELDS, assignment: JOB_FIELDS, layout: LAYOUT_FIELDS,
   };
   const FORM_TITLES = {
+    cell: ['New cell', 'Edit cell'],
     machine: ['New machine', 'Edit machine'],
     tool: ['New tool', 'Edit tool'],
     part: ['New part', 'Edit part'],
@@ -1975,7 +2278,7 @@
     layout: ['Tool layout', 'Number this tool layout'],
   };
   const FINDER = {
-    machine: machineById, tool: toolById, part: partById,
+    cell: cellById, machine: machineById, tool: toolById, part: partById,
     operation: operationById, assignment: jobById, layout: layoutById,
   };
 
@@ -2018,8 +2321,18 @@
     let draft;
     if (found) {
       draft = { ...found, runs: undefined };
+    } else if (kind === 'cell') {
+      draft = { id: '', name: '', seq: '', notes: '', ...(preset || {}) };
+      draft.seq = String(cellList().reduce((max, c) => Math.max(max, c.seq || 0), 0) + 1);
     } else if (kind === 'machine') {
-      draft = { id: '', name: '', notes: '', ...(preset || {}) };
+      draft = { id: '', name: '', cellId: '', cellSeq: '', notes: '', ...(preset || {}) };
+      // A floor with one cell has no question to ask; with more, the machine
+      // being added is usually going where the last one went.
+      if (!draft.cellId && cellList().length === 1) draft.cellId = cellList()[0].id;
+      if (draft.cellId) {
+        draft.cellSeq = String(machinesOfCell(draft.cellId)
+          .reduce((max, m) => Math.max(max, m.cellSeq || 0), 0) + 1);
+      }
     } else if (kind === 'tool') {
       draft = { id: '', partNumber: '', desc: '', cuttingEdges: '', cost: '', notes: '' };
     } else if (kind === 'part') {
@@ -2083,6 +2396,7 @@
 
   function saveForm() {
     const { kind, draft } = form;
+    if (kind === 'cell') return saveCell(draft);
     if (kind === 'machine') return saveMachine(draft);
     if (kind === 'tool') return saveTool(draft);
     if (kind === 'part') return savePart(draft);
@@ -2107,23 +2421,61 @@
     render();
   }
 
+  /* ---------------- a cell ----------------
+     The machines that work together, and where the cell falls in the flow. A
+     cell holds nothing of its own beyond that: which machines are in it is a
+     field on the machine, and what runs through it is read off the operations
+     those machines cut.
+  ---------------------------------------------------------------- */
+  function saveCell(draft) {
+    const name = cleanText(draft.name);
+    if (!name) return fail('A cell needs a name — whatever that area of the floor is called.');
+    const clash = cellList().find(c => c.id !== draft.id && c.name.toLowerCase() === name.toLowerCase());
+    if (clash) return fail('There is already a cell called ' + clash.name + '.');
+    const cell = { name, seq: Math.floor(cleanNum(draft.seq)), notes: cleanText(draft.notes).slice(0, 400) };
+    const existing = cellById(draft.id);
+    let created = null;
+    if (existing) {
+      Object.assign(existing, cell);
+      touch(existing);
+    } else {
+      if (!Array.isArray(shop.cells)) shop.cells = [];
+      if (shop.cells.length >= (limits.maxCells || 40)) {
+        return fail('That is as many cells as one floor keeps (' + (limits.maxCells || 40) + ').');
+      }
+      created = { id: newId('c'), ...cell, createdAt: Date.now(), updatedAt: Date.now() };
+      shop.cells.push(created);
+    }
+    done();
+    // A cell with no machines in it is an empty area of the floor; the next
+    // thing to do is put a machine in it.
+    if (created && !machinesOfCell(created.id).length) {
+      openForm('machine', '', { cellId: created.id });
+    }
+  }
+
   function saveMachine(draft) {
     const name = cleanText(draft.name);
     if (!name) return fail('A machine needs a name — whatever it is called on the floor.');
     const clash = shop.machines.find(m => m.id !== draft.id && m.name.toLowerCase() === name.toLowerCase());
     if (clash) return fail('There is already a machine called ' + clash.name + '.');
     const notes = cleanText(draft.notes).slice(0, 400);
+    const cellId = cellById(draft.cellId) ? draft.cellId : '';
+    const cellSeq = cellId ? Math.floor(cleanNum(draft.cellSeq)) : 0;
     const existing = machineById(draft.id);
     let created = null;
     if (existing) {
       existing.name = name;
       existing.notes = notes;
+      existing.cellId = cellId;
+      existing.cellSeq = cellSeq;
       touch(existing);
     } else {
       if (shop.machines.length >= limits.maxMachines) {
         return fail('That is as many machines as one account keeps (' + limits.maxMachines + ').');
       }
-      created = { id: newId('m'), name, notes, createdAt: Date.now(), updatedAt: Date.now() };
+      created = { id: newId('m'), name, cellId, cellSeq, notes,
+        createdAt: Date.now(), updatedAt: Date.now() };
       shop.machines.push(created);
     }
     const from = created && draft.cloneOf ? machineById(draft.cloneOf) : null;
@@ -2539,6 +2891,22 @@
       (runs ? ' and the ' + runs + (runs === 1 ? ' cycle' : ' cycles') + ' timed there' : '');
   }
 
+  // A cell is a name for a group of machines, so deleting it takes the grouping
+  // and nothing else: the machines stay on the floor, out of any cell.
+  function deleteCell(id) {
+    const c = cellById(id);
+    if (!c) return;
+    const machines = machinesOfCell(id);
+    if (!confirm(machines.length
+      ? 'Delete ' + c.name + '? The ' + machines.length +
+        (machines.length === 1 ? ' machine in it stays' : ' machines in it stay') +
+        ' on the floor, out of any cell.'
+      : 'Delete ' + c.name + '?')) return;
+    for (const m of machines) { m.cellId = ''; m.cellSeq = 0; touch(m); }
+    shop.cells = cellList().filter(x => x.id !== id);
+    afterDelete();
+  }
+
   function deleteMachine(id) {
     const m = machineById(id);
     if (!m) return;
@@ -2616,11 +2984,11 @@
   }
 
   const DELETERS = {
-    machine: deleteMachine, tool: deleteTool, part: deletePart,
+    cell: deleteCell, machine: deleteMachine, tool: deleteTool, part: deletePart,
     operation: deleteOperation, assignment: deleteAssignment,
   };
   const DELETE_LABELS = {
-    machine: 'Delete machine', tool: 'Delete tool', part: 'Delete part',
+    cell: 'Delete cell', machine: 'Delete machine', tool: 'Delete tool', part: 'Delete part',
     operation: 'Delete operation', assignment: 'Take off this machine',
   };
 
@@ -2731,6 +3099,23 @@
         [{ value: '', label: 'Choose an operation…' }].concat(operationOptions()),
         draft.operationId, v => { draft.operationId = v; }));
     }
+    // Which cell a machine stands in — the one relation a machine has, and what
+    // the value stream is drawn from.
+    if (kind === 'machine') {
+      grid.appendChild(pickField('Cell',
+        [{ value: '', label: cellList().length ? 'No cell' : 'No cells yet' }]
+          .concat(allCells().map(c => ({ value: c.id, label: c.name }))),
+        draft.cellId, v => {
+          draft.cellId = v;
+          // taking the next free place in the cell it has just joined
+          if (v && !cleanNum(draft.cellSeq)) {
+            draft.cellSeq = String(machinesOfCell(v)
+              .filter(m => m.id !== draft.id)
+              .reduce((max, m) => Math.max(max, m.cellSeq || 0), 0) + 1);
+          }
+          renderForm();
+        }));
+    }
     if (kind === 'operation') {
       grid.appendChild(pickField('Part',
         [{ value: '', label: 'Choose a part…' }].concat(
@@ -2740,6 +3125,8 @@
     }
 
     for (const f of FORM_FIELDS[kind]) {
+      // A position in a cell says nothing about a machine that is in none
+      if (f.key === 'cellSeq' && !draft.cellId) continue;
       const wrap = el('label', 'mf-field' + (f.wide ? ' mf-field-wide' : ''));
       wrap.appendChild(el('span', 'mf-field-k', f.label));
       const input = el('input', 'mf-input');
@@ -2764,6 +3151,7 @@
       machine: 'Control, spindle, anything the next setup should know',
       part: 'Material, stock size, anything the whole job depends on',
       operation: 'Fixture, orientation, what this op leaves for the next',
+      cell: 'What runs in this cell, how it is manned, what feeds it',
       layout: 'Fixture, offsets, work stops — anything the next person setting this layout should know',
     }[kind];
     area.addEventListener('input', () => { draft.notes = area.value; });
@@ -2823,7 +3211,8 @@
   const hay = (...parts) => parts.filter(Boolean).join(' ').toLowerCase();
 
   function matchesMachine(m) {
-    return !filter || hay(m.name, m.notes).includes(filter);
+    const cell = m.cellId ? cellById(m.cellId) : null;
+    return !filter || hay(m.name, m.notes, cell && cell.name, cell && cell.notes).includes(filter);
   }
   function matchesTool(t) {
     return !filter || hay(t.partNumber, t.desc, t.notes).includes(filter);
@@ -2837,11 +3226,13 @@
     const part = jobPart(a);
     const op = jobOperation(a);
     const layout = layoutOf(a);
+    const cell = cellOfMachine(a.machineId);
     // A layout is asked for by its number on the floor, so typing TL 12 — or
-    // just 12 — is a way of asking for everything on it.
+    // just 12 — is a way of asking for everything on it; typing a cell's name
+    // is a way of asking for every layout in that cell.
     return hay(a.station, a.notes, machineName(a.machineId), op && op.name,
       part && part.number, part && part.desc,
-      layout && tlName(layout), layout && layout.notes,
+      layout && tlName(layout), layout && layout.notes, cell && cell.name,
       tool && tool.partNumber, tool && tool.desc).includes(filter);
   }
 
@@ -2861,7 +3252,7 @@
     }
     const search = el('input', 'mf-input mf-search');
     search.type = 'search';
-    search.placeholder = 'Filter by tool layout, part, op, machine, tool…';
+    search.placeholder = 'Filter by cell, tool layout, part, op, machine, tool…';
     search.value = filter;
     search.addEventListener('input', () => {
       filter = search.value.trim().toLowerCase();
@@ -2980,13 +3371,27 @@
     if (!shownAny) box.appendChild(el('div', 'mf-note', 'No part matches that.'));
   }
 
+  /* ---------------- the machines, cell by cell ----------------
+     A floor is read by area before it is read by machine: which cell, then
+     which machine in it, then what is set up on that machine. Cells come in
+     flow order and their machines in the order the work reaches them, so the
+     list reads the way the part moves. Machines in no cell are a group of their
+     own at the end rather than being hidden or invented a cell for.
+  ---------------------------------------------------------------- */
   function renderMachines() {
     const box = els.machines;
     box.innerHTML = '';
     if (!shop) return;
 
-    box.appendChild(sectionHead('sec:machines', 'Machines', shop.machines.length, renderMachines,
-      wBtn('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
+    const head = el('div', 'mf-section-head');
+    head.appendChild(foldToggle('sec:machines', 'Cells and machines', 'mf-section-title', renderMachines));
+    head.appendChild(el('span', 'mf-fold-count', String(shop.machines.length)));
+    const acts = el('div', 'mf-section-acts');
+    put(acts, wBtn('mf-btn mf-btn-sm', '+ Cell', () => openForm('cell'),
+      'An area of the floor, holding the machines that work together'));
+    put(acts, wBtn('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine')));
+    head.appendChild(acts);
+    box.appendChild(head);
     if (isFolded('sec:machines')) return;
 
     if (!shop.machines.length) {
@@ -2994,15 +3399,108 @@
       return;
     }
 
-    const machines = [...shop.machines].sort((a, b) => a.name.localeCompare(b.name));
-    let shownAny = false;
+    // every cell in flow order, then whatever stands outside them
+    const groups = allCells().map(c => ({ cell: c, machines: machinesOfCell(c.id) }));
+    const loose = shop.machines.filter(m => !m.cellId || !cellById(m.cellId))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (loose.length) groups.push({ cell: null, machines: loose });
+
+    let shownAnyCell = false;
+    for (const group of groups) {
+      const drawn = group.machines.filter(m => matchesMachine(m) || jobsOnMachine(m.id).some(matchesJob));
+      const cell = group.cell;
+      // A cell whose own name matches shows everything in it
+      const cellMatches = cell && !!filter && hay(cell.name, cell.notes).includes(filter);
+      const shown = cellMatches ? group.machines : drawn;
+      if (filter && !shown.length) continue;
+      shownAnyCell = true;
+      if (cell) box.appendChild(cellHead(cell));
+      else if (groups.length > 1) box.appendChild(cellHead(null));
+      renderMachineBlocks(box, shown);
+    }
+    if (!shownAnyCell) box.appendChild(el('div', 'mf-note', 'Nothing on the floor matches that.'));
+  }
+
+  /* The heading of one cell: what it is called, what is in it, and — because a
+     cell is only worth naming for what runs through it — the routes it carries,
+     each part's operations in the order they run. */
+  function cellHead(cell) {
+    const wrap = el('div', 'mf-cell');
+    const head = el('div', 'mf-cell-head');
+    head.appendChild(el('div', 'mf-cell-k', cell ? cell.name : 'Not in a cell'));
+    const machines = cell ? machinesOfCell(cell.id) : shop.machines.filter(m => !m.cellId);
+    const jobs = cell ? jobsOfCell(cell.id) : [];
+    const bits = [machines.length + (machines.length === 1 ? ' machine' : ' machines')];
+    if (cell && jobs.length) bits.push(jobs.length + (jobs.length === 1 ? ' tool' : ' tools'));
+    head.appendChild(el('div', 'mf-cell-v', bits.join(' · ')));
+    if (cell) {
+      const acts = el('div', 'mf-cell-btns');
+      put(acts, wBtn('mf-link', 'Edit', () => openForm('cell', cell.id)));
+      head.appendChild(acts);
+    }
+    wrap.appendChild(head);
+
+    if (cell) {
+      const routes = routesThroughCell(cell.id);
+      if (routes.length) {
+        for (const route of routes) {
+          const line = el('div', 'mf-route');
+          line.appendChild(el('span', 'mf-route-k', partName(route.part)));
+          line.appendChild(el('span', 'mf-route-v',
+            route.steps.map(st => st.op.name + ' · ' + st.machineIds.map(machineName).join(' / '))
+              .join('  →  ')));
+          wrap.appendChild(line);
+        }
+      } else {
+        wrap.appendChild(el('div', 'mf-note', machines.length
+          ? 'Nothing is set up in this cell yet, so nothing runs through it.'
+          : 'No machines in this cell yet.'));
+      }
+    }
+    return wrap;
+  }
+
+  /* What runs through a cell, and in what order: for each part with operations
+     cut in this cell, those operations in the order they are run — which is the
+     order of operations for that cell, and one lane of the value stream. */
+  function routesThroughCell(cellId) {
+    if (!shop) return [];
+    const byPart = new Map();
+    for (const l of layoutList()) {
+      const c = cellOfMachine(l.machineId);
+      if (!c || c.id !== cellId) continue;
+      const op = operationById(l.operationId);
+      if (!op) continue;
+      if (!byPart.has(op.partId)) byPart.set(op.partId, new Map());
+      // One step per operation, however many machines in the cell can run it —
+      // two machines cutting the same op are a choice, not two steps, so both
+      // are named on the one step.
+      const steps = byPart.get(op.partId);
+      if (!steps.has(op.id)) steps.set(op.id, { op, machineIds: [] });
+      steps.get(op.id).machineIds.push(l.machineId);
+    }
+    const flowOf = id => {
+      const m = machineById(id);
+      return m && m.cellSeq ? m.cellSeq : Infinity;
+    };
+    return [...byPart.entries()]
+      .map(([partId, steps]) => ({
+        part: partById(partId),
+        steps: [...steps.values()]
+          .map(st => ({ ...st, machineIds: st.machineIds.sort((x, y) => flowOf(x) - flowOf(y)) }))
+          .sort((x, y) => byStep(x.op, y.op)),
+      }))
+      .filter(r => r.part)
+      .sort((a, b) => partName(a.part).localeCompare(partName(b.part)));
+  }
+
+  function renderMachineBlocks(box, machines) {
     for (const m of machines) {
       const all = jobsOnMachine(m.id);
       // a machine whose own name matches shows everything on it; otherwise only
       // the tools that match are listed under it
       const jobs = matchesMachine(m) ? all : all.filter(matchesJob);
       if (filter && !jobs.length && !matchesMachine(m)) continue;
-      shownAny = true;
 
       const fold = 'machine:' + m.id;
       const block = el('div', 'mf-machine');
@@ -3069,7 +3567,6 @@
       }
       box.appendChild(block);
     }
-    if (!shownAny) box.appendChild(el('div', 'mf-note', 'No machine matches that.'));
   }
 
   function jobCard(a, group, pos, canMove) {
@@ -3231,7 +3728,7 @@
   // Each record that can carry notes has its own notes column, so none can
   // swallow another's and a file that came out of here goes back in whole.
   const IMPORT_COLUMNS = [
-    'tool_layout',
+    'cell', 'tool_layout',
     'machine', 'machine_notes',
     'part', 'part_description', 'part_notes', 'op', 'op_notes',
     'seq', 'station',
@@ -3246,6 +3743,7 @@
   const COLUMN_ALIASES = {
     tool_layout: 'layout', tool_layout_number: 'layout', layout: 'layout',
     layout_number: 'layout', tl: 'layout',
+    cell: 'cell', work_cell: 'cell', cell_name: 'cell', area: 'cell',
     machine: 'machine', machine_name: 'machine', machine_no: 'machine',
     machine_notes: 'machineNotes', machine_note: 'machineNotes',
     tool_notes: 'toolNotes', tool_note: 'toolNotes',
@@ -3362,8 +3860,9 @@
       const toolKey = toolKeyOf(cell.toolPartNumber, cell.desc);
 
       if (machineName) {
-        if (!machines.has(machineKey)) machines.set(machineKey, { name: machineName, notes: '' });
+        if (!machines.has(machineKey)) machines.set(machineKey, { name: machineName, notes: '', cell: '' });
         if (cell.machineNotes) machines.get(machineKey).notes = cell.machineNotes;
+        if (cell.cell) machines.get(machineKey).cell = cell.cell;
       }
       if (toolKey) {
         if (!tools.has(toolKey)) tools.set(toolKey, { key: toolKey, fields: {} });
@@ -3456,7 +3955,7 @@
     return {
       parts: [...parts.values()],
       operations: [...operations.values()],
-      machines: [...machines.entries()].map(([key, m]) => ({ key, name: m.name, notes: m.notes })),
+      machines: [...machines.entries()].map(([key, m]) => ({ key, name: m.name, notes: m.notes, cell: m.cell })),
       tools: [...tools.values()],
       links: [...links.values()],
       layoutNumbers: [...links.values()].filter(l => l.layout).length,
@@ -3468,7 +3967,7 @@
   // preview and the import itself both read this, so what is shown is what runs.
   function planImport(read) {
     const plan = {
-      parts: [], operations: [], machines: [], tools: [], add: [], update: [],
+      parts: [], operations: [], machines: [], tools: [], cells: [], add: [], update: [],
       newRuns: 0, dupeRuns: 0,
       overflowParts: 0, overflowOperations: 0, overflowMachines: 0, overflowTools: 0,
       overflowJobs: 0, overflowRuns: 0,
@@ -3515,7 +4014,11 @@
     }
     const newMachines = new Set();
     for (const m of read.machines) {
-      if (machineByKey.has(m.key)) continue;
+      if (machineByKey.has(m.key)) {
+        // an existing machine still learns which cell it is in
+        if (m.cell) plan.cells.push({ machine: machineByKey.get(m.key), name: m.cell });
+        continue;
+      }
       if (machineRoom > 0) { machineRoom--; plan.machines.push(m); newMachines.add(m.key); }
       else plan.overflowMachines++;
     }
@@ -3599,10 +4102,45 @@
       shop.operations.push(operation);
       opByKey.set(o.key, operation);
     }
+    if (!Array.isArray(shop.cells)) shop.cells = [];
+    // A cell named in the file is matched by name and made if it is not there.
+    const cellByName = new Map(shop.cells.map(c => [lower(c.name), c]));
+    const cellFor = name => {
+      const key = lower(name);
+      if (!key) return '';
+      if (cellByName.has(key)) return cellByName.get(key).id;
+      if (shop.cells.length >= (limits.maxCells || 40)) return '';
+      const made = {
+        id: newId('c'), name: String(name).trim().slice(0, 60),
+        seq: shop.cells.reduce((max, c) => Math.max(max, c.seq || 0), 0) + 1,
+        notes: '', createdAt: now, updatedAt: now,
+      };
+      shop.cells.push(made);
+      cellByName.set(key, made);
+      return made.id;
+    };
     for (const m of plan.machines) {
-      const machine = { id: newId('m'), name: m.name, notes: m.notes || '', createdAt: now, updatedAt: now };
+      const machine = {
+        id: newId('m'), name: m.name, notes: m.notes || '',
+        cellId: cellFor(m.cell), cellSeq: 0, createdAt: now, updatedAt: now,
+      };
+      if (machine.cellId) {
+        machine.cellSeq = machinesOfCell(machine.cellId)
+          .reduce((max, x) => Math.max(max, x.cellSeq || 0), 0) + 1;
+      }
       shop.machines.push(machine);
       machineByKey.set(m.key, machine);
+    }
+    // machines already on the floor that the file puts in a cell
+    for (const c of plan.cells) {
+      const cellId = cellFor(c.name);
+      if (!cellId || c.machine.cellId === cellId) continue;
+      c.machine.cellId = cellId;
+      if (!c.machine.cellSeq) {
+        c.machine.cellSeq = machinesOfCell(cellId)
+          .reduce((max, x) => Math.max(max, x.cellSeq || 0), 0) + 1;
+      }
+      touch(c.machine);
     }
     for (const t of plan.tools) {
       if (t.existing) {
@@ -3697,6 +4235,8 @@
     if (read.unconverted) notes.push(read.unconverted + ' tool life' + (read.unconverted === 1 ? '' : 's') +
       ' in minutes had no cycle to convert against, and ' +
       (read.unconverted === 1 ? 'was' : 'were') + ' left out.');
+    const cells = read.machines.filter(m => m.cell).length;
+    if (cells) notes.push('Machines are put in the cells the file names; a cell that is not there yet is made.');
     if (read.layoutNumbers) notes.push('Tool layout numbers in the file are kept where they are free; ' +
       'one that another layout already answers to is left alone.');
     if (plan.dupeRuns) notes.push(plan.dupeRuns + ' cycle' + (plan.dupeRuns === 1 ? ' is' : 's are') +
@@ -3786,7 +4326,9 @@
 
     const machineCells = id => {
       const m = machineById(id);
-      return m ? { machine: m.name, machine_notes: m.notes } : {};
+      if (!m) return {};
+      const c = m.cellId ? cellById(m.cellId) : null;
+      return { cell: c ? c.name : '', machine: m.name, machine_notes: m.notes };
     };
     const partCells = p => (p ? { part: p.number, part_description: p.desc, part_notes: p.notes } : {});
     const opCells = o => (o ? { ...partCells(partById(o.partId)), op: o.name, op_notes: o.notes } : {});
@@ -3966,6 +4508,31 @@
     .rownote td { border-bottom: 1px solid var(--line); color: var(--dim); font-size: 9.5px; padding-top: 0; }
     .empty { color: var(--dim); font-size: 10.5px; }
 
+    /* the value stream page: the route across its cells, then the boxes */
+    .no.vsm { font-size: 20px; letter-spacing: 0.06em; }
+    .vband { border-left: 2px solid var(--accent); padding-left: 8px; margin-bottom: 8px; }
+    .vband:last-child { margin-bottom: 0; }
+    .vband-k {
+      font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--accent); font-weight: 600; margin-bottom: 4px;
+    }
+    .vlane { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; }
+    .vstep { display: flex; align-items: center; gap: 6px; }
+    .varrow { color: var(--dim); font-size: 12px; }
+    .vboxes { display: flex; flex-direction: column; gap: 4px; }
+    .vbox { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; min-width: 116px; }
+    .vbox.best { border-color: var(--accent); }
+    .vtop { display: flex; align-items: center; gap: 5px; }
+    .vn { font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--dim); }
+    .vop { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; }
+    .vtl {
+      font-family: var(--mono); font-size: 8.5px; font-weight: 700; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px;
+    }
+    .vmachine { font-size: 10px; margin-top: 2px; }
+    .vtime { font-family: var(--mono); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .vmeta { font-size: 8.5px; color: var(--dim); }
+
     .notes { margin-top: 8px; page-break-inside: avoid; }
     .note { font-size: 10px; color: var(--dim); margin-top: 4px; }
     .note b { color: var(--ink); font-weight: 600; }
@@ -3990,6 +4557,7 @@
     const op = operationById(l.operationId);
     const part = op ? partById(op.partId) : null;
     const machine = machineById(l.machineId);
+    const cell = cellOfMachine(l.machineId);
     const rows = jobs.map((a, i) => {
       const s = statsFor(a);
       return {
@@ -4018,7 +4586,8 @@
       '<div class="head">' +
         '<div class="no">' + escHtml(tlName(l)) + '</div>' +
         '<div class="who">' +
-          '<div class="doctype">Tool layout sheet</div>' +
+          '<div class="doctype">Tool layout sheet' +
+            (cell ? ' · ' + escHtml(cell.name) : '') + '</div>' +
           '<div class="machine">' + escHtml(machine ? machine.name : 'No machine') + '</div>' +
           '<div class="op">' + escHtml(operationLabel(op)) +
             (part && part.desc && part.number ? ' — ' + escHtml(part.desc) : '') + '</div>' +
@@ -4131,6 +4700,7 @@
       [op ? op.name : 'Operation', op && op.notes],
       [part ? partName(part) : 'Part', part && part.notes],
       [machine ? machine.name : 'Machine', machine && machine.notes],
+      [cell ? cell.name : 'Cell', cell && cell.notes],
     ].filter(([, text]) => text);
     const notesBlock = notes.length
       ? '<div class="notes panel">' +
@@ -4152,30 +4722,160 @@
     return '<section class="tl">' + head + cycle + cut + table + notesBlock + foot + '</section>';
   }
 
-  // Every tool layout, or one of them, as a print-ready document handed to the
-  // browser's own print dialog — where "Save as PDF" is one of the choices.
-  function exportPdf(onlyId) {
-    if (!shop) return;
-    const pages = onlyId ? [layoutById(onlyId)].filter(Boolean) : allLayouts();
-    if (!pages.length) {
-      flash(shop.assignments.length
-        ? 'None of the tools set up here are on an operation yet, so there is no tool layout to print.'
-        : 'Set a tool up on a machine for an operation first — a tool layout is what a page is.');
+
+  /* One part's value stream, on a page: the same map the screen draws, in the
+     same order, with the steps as boxes across the cells they run in and the
+     process time under them. It prints through the same document as the tool
+     layout sheets, so a job can go to the floor as one file — the stream first,
+     then a sheet per layout on it. */
+  function streamPage(part, when) {
+    const steps = streamSteps(part);
+    const measured = steps.filter(st => st.cycle > 0);
+    const total = measured.reduce((sum, st) => sum + st.cycle, 0);
+
+    const head =
+      '<div class="head">' +
+        '<div class="no vsm">VS</div>' +
+        '<div class="who">' +
+          '<div class="doctype">Value stream</div>' +
+          '<div class="machine">' + escHtml(partName(part)) + '</div>' +
+          '<div class="op">' + escHtml(part.desc || '') +
+            (part.desc ? ' · ' : '') + steps.length +
+            (steps.length === 1 ? ' operation' : ' operations') + '</div>' +
+        '</div>' +
+        '<div class="figure">' +
+          '<div class="total">' + (total ? fmtSec(total) : '—') + '</div>' +
+          '<div class="sub">' + (measured.length
+            ? 'process time over ' + measured.length + (measured.length === 1 ? ' step' : ' steps')
+            : 'no cycles recorded') + '</div>' +
+        '</div>' +
+      '</div>';
+
+    // the boxes, banded by cell the way the screen bands them
+    const bands = [];
+    steps.forEach((st, i) => {
+      const route = st.best || st.routes[0] || null;
+      const cell = route ? route.cell : null;
+      const key = cell ? cell.id : (route ? 'none' : 'nomachine');
+      const label = cell ? cell.name : (route ? 'Not in a cell' : 'No machine set up');
+      if (!bands.length || bands[bands.length - 1].key !== key) bands.push({ key, label, steps: [] });
+      bands[bands.length - 1].steps.push({ st, i });
+    });
+    const boxHtml = (st, i) => {
+      const routes = st.routes.length ? st.routes : [null];
+      return '<div class="vstep">' + (i ? '<div class="varrow">&rarr;</div>' : '') +
+        '<div class="vboxes">' + routes.map(route =>
+          '<div class="vbox' + (route && st.best === route && routes.length > 1 ? ' best' : '') + '">' +
+            '<div class="vtop"><span class="vn">' + (i + 1) + '</span>' +
+              '<span class="vop">' + escHtml(st.op.name) + '</span>' +
+              (route && route.layout ? '<span class="vtl">' + escHtml(tlName(route.layout)) + '</span>' : '') +
+            '</div>' +
+            '<div class="vmachine">' + escHtml(route ? machineName(route.machineId) : 'No machine set up') + '</div>' +
+            '<div class="vtime">' + (route && route.cycle ? fmtSec(route.cycle) : '—') + '</div>' +
+            '<div class="vmeta">' + escHtml([
+              route ? route.tools + (route.tools === 1 ? ' tool' : ' tools') : '',
+              route && route.cutShare ? Math.round(route.cutShare * 100) + '% in cut' : '',
+              route && route.cycle && total ? Math.round((route.cycle / total) * 100) + '% of total' : '',
+            ].filter(Boolean).join(' · ') || 'nothing measured') + '</div>' +
+          '</div>').join('') +
+        '</div></div>';
+    };
+    // the cells it actually crosses — a band for steps with no cell, or no
+    // machine at all, is not one of them
+    const crossed = new Set(bands.map(b => b.key).filter(k => k !== 'none' && k !== 'nomachine')).size;
+    const flow = '<div class="panel"><div class="panel-head"><span class="k">Route</span>' +
+      '<span class="v">' + (crossed
+        ? 'through ' + crossed + (crossed === 1 ? ' cell' : ' cells')
+        : 'no cells set') + '</span></div>' +
+      bands.map(b => '<div class="vband"><div class="vband-k">' + escHtml(b.label) + '</div>' +
+        '<div class="vlane">' + b.steps.map(x => boxHtml(x.st, x.i)).join('') + '</div></div>').join('') +
+      '</div>';
+
+    const bar = measured.length > 1
+      ? '<div class="bar">' + measured.map((st, n) => {
+        const step = rampStep(n, measured.length);
+        const share = st.cycle / total;
+        return '<div class="seg" style="flex-grow:' + share.toFixed(4) +
+          ';background:' + step.fill + ';color:' + step.ink + '">' +
+          (share >= 0.08 ? escHtml(st.op.name) : '') + '</div>';
+      }).join('') + '</div>'
+      : '';
+
+    const rows = steps.map((st, i) => {
+      const route = st.best || st.routes[0] || null;
+      return '<tr>' +
+        '<td class="num">' + (i + 1) + '</td>' +
+        '<td class="pocket">' + escHtml(route && route.layout ? tlName(route.layout) : '—') + '</td>' +
+        '<td class="tool">' + escHtml(st.op.name) + '</td>' +
+        '<td>' + escHtml(route && route.cell ? route.cell.name : '—') + '</td>' +
+        '<td>' + escHtml(route ? machineName(route.machineId) : 'no machine set up') + '</td>' +
+        '<td class="num">' + escHtml(route ? route.tools : '—') + '</td>' +
+        '<td class="num">' + (st.cycle ? fmtSec(st.cycle) : '—') + '</td>' +
+        '<td class="num">' + (route && route.cutShare ? Math.round(route.cutShare * 100) + '%' : '—') + '</td>' +
+        '<td class="num">' + (st.cycle && total ? Math.round((st.cycle / total) * 100) + '%' : '—') + '</td>' +
+        '</tr>';
+    }).join('');
+    const table = '<div class="panel"><div class="panel-head"><span class="k">Process time by step</span>' +
+      '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'no cycles recorded') + '</span></div>' +
+      bar +
+      '<table><thead><tr>' +
+      ['#', 'Layout', 'Operation', 'Cell', 'Machine', 'Tools', 'Cycle', 'In cut', 'Share']
+        .map(h => '<th>' + escHtml(h) + '</th>').join('') +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    // What the map does not claim. On a printed sheet this matters more than on
+    // screen: a page with no caveat on it gets read as the whole picture.
+    const untimed = steps.length - measured.length;
+    const scope = '<div class="notes panel"><div class="panel-head"><span class="k">Scope</span></div>' +
+      '<div class="note">Process time only — measured at the machine, tool by tool. Waiting between ' +
+      'steps, batch sizes and changeovers are not held in this record and are not shown.</div>' +
+      (untimed ? '<div class="note">' + untimed + ' of ' + steps.length +
+        (steps.length === 1 ? ' step ' : ' steps ') + (untimed === 1 ? 'has' : 'have') +
+        ' nothing measured yet, so the total is the process time measured so far rather than ' +
+        'the whole part.</div>' : '') +
+      (steps.some(st => st.routes.length > 1)
+        ? '<div class="note">Where an operation runs on more than one machine, those are alternative ' +
+          'routings: they are shown side by side and the total takes the fastest measured.</div>'
+        : '') +
+      '</div>';
+
+    const foot = '<div class="foot">' +
+      '<span class="brand">' + LOGO + '<span class="name">Shop<i>watch</i></span></span>' +
+      '<span class="ref">' + escHtml(doc ? doc.title : '') + ' · Value stream · ' +
+      escHtml(partName(part)) + '</span>' +
+      '<span class="issued">Issued ' + escHtml(when) + '</span></div>';
+
+    return '<section class="tl">' + head + flow + table + scope + foot + '</section>';
+  }
+
+  // The value stream for one part, printed on its own.
+  function exportStreamPdf(partId) {
+    const part = partById(partId) || streamPart();
+    if (!part) { flash('Add a part and its operations first — a value stream is a part’s route.'); return; }
+    if (!opsOfPart(part.id).length) {
+      flash(partName(part) + ' has no operations yet, so there is no route to map.');
       return;
     }
-    // A date and a time, without the seconds: this stamps a document, it does
-    // not time anything.
-    const when = new Date().toLocaleString(undefined, {
-      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-    const title = (doc ? doc.title : 'Shopwatch') +
-      (onlyId ? ' — ' + tlName(pages[0]) : ' — tool layouts');
-    const html = '<!doctype html><html><head><meta charset="utf-8"><title>' + escHtml(title) +
-      '</title><style>' + PDF_STYLE + '</style></head><body>' +
-      pages.map(l => layoutPage(l, when)).join('') + '</body></html>';
+    if (!printDoc(partName(part) + ' — value stream', [streamPage(part, issuedNow())])) return;
+    flash('The value stream for ' + partName(part) + ' — choose “Save as PDF” in the print dialog.', true);
+  }
 
+  // Every tool layout, or one of them, as a print-ready document handed to the
+  // browser's own print dialog — where "Save as PDF" is one of the choices.
+  // A date and a time, without the seconds: this stamps a document, it does not
+  // time anything.
+  const issuedNow = () => new Date().toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+
+  // Hand a set of pages to the browser's own print dialog, where Save as PDF is
+  // one of the choices and a printer is the other. Returns false if the window
+  // never opened, so a caller does not announce a document nobody has.
+  function printDoc(title, pages) {
+    const html = '<!doctype html><html><head><meta charset="utf-8"><title>' + escHtml(title) +
+      '</title><style>' + PDF_STYLE + '</style></head><body>' + pages.join('') + '</body></html>';
     const win = window.open('', '_blank');
-    if (!win) { flash('Allow pop-ups on this site to make the PDF.'); return; }
+    if (!win) { flash('Allow pop-ups on this site to make the PDF.'); return false; }
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -4189,6 +4889,22 @@
     };
     win.onload = () => setTimeout(firePrint, 120);
     setTimeout(firePrint, 350);
+    return true;
+  }
+
+  function exportPdf(onlyId) {
+    if (!shop) return;
+    const pages = onlyId ? [layoutById(onlyId)].filter(Boolean) : allLayouts();
+    if (!pages.length) {
+      flash(shop.assignments.length
+        ? 'None of the tools set up here are on an operation yet, so there is no tool layout to print.'
+        : 'Set a tool up on a machine for an operation first — a tool layout is what a page is.');
+      return;
+    }
+    const when = issuedNow();
+    const title = (doc ? doc.title : 'Shopwatch') +
+      (onlyId ? ' — ' + tlName(pages[0]) : ' — tool layouts');
+    if (!printDoc(title, pages.map(l => layoutPage(l, when)))) return;
 
     // A tool on a machine with no operation named is on no layout, so it is on
     // no page. Better said than quietly left out of a sheet somebody is about
@@ -4334,6 +5050,8 @@
     els.chart.hidden = true;
     els.cutchart = el('div', 'mf-cutchart');
     els.cutchart.hidden = true;
+    els.stream = el('div', 'mf-stream');
+    els.stream.hidden = true;
     els.search = el('div', 'mf-searchbox');
     els.search.hidden = true;
     els.parts = el('div', 'mf-parts');
@@ -4345,6 +5063,7 @@
     page.appendChild(els.form);
     page.appendChild(els.chart);
     page.appendChild(els.cutchart);
+    page.appendChild(els.stream);
     page.appendChild(els.search);
     page.appendChild(els.parts);
     page.appendChild(els.machines);
