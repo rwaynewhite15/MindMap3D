@@ -685,6 +685,84 @@
 .mf-chip-sm { font-size: 10.5px; padding: 1px 5px; }
 .mf-card-crib .mf-chip { white-space: normal; max-width: 100%; }
 
+/* ---------------- the floor ----------------
+   Cells, the operations that run in each, and under every operation the tool
+   layout it is run as: its number, the machines it is set on, and the pockets
+   on it. Everything is a heading that folds, so the floor opens as a page of
+   cells and you walk down into the one you are standing in. */
+.mf-floor { margin-bottom: 6px; }
+.mf-cell-machines { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.mf-machine-tag {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+}
+.mf-machine-tag-k { font-weight: 600; }
+.mf-machine-tag-v { color: var(--dim); font-family: var(--mf-mono); font-size: 10.5px; }
+.mf-machine-tag .mf-link { font-size: 11px; }
+
+.mf-op-block { margin: 10px 0 0 2px; padding-left: 10px; border-left: 1px solid var(--line); }
+.mf-op-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mf-op-part { font-family: var(--mf-mono); font-size: 11px; color: var(--dim); }
+.mf-op-head .mf-link { margin-left: auto; }
+
+.mf-tl-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  background: var(--panel);
+}
+.mf-tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mf-tl-name {
+  font-family: var(--mf-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.mf-tl-v { font-size: 11.5px; color: var(--dim); font-family: var(--mf-mono); }
+.mf-tl-btns { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.mf-tl-machines { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 4px; }
+/* A machine is a press: "I am at this one, on this layout" is what the watch
+   needs to know before it can time anything. */
+.mf-machine-chip {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+}
+.mf-machine-chip:hover { border-color: var(--accent); }
+.mf-machine-chip.mf-on { border-color: var(--accent); color: var(--accent); }
+.mf-machine-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mf-pockets { margin-top: 4px; }
+.mf-pocket {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 6px 6px 0;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.mf-pocket:hover .mf-pocket-name { color: var(--accent); }
+.mf-pocket:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.mf-pocket-on .mf-pocket-name { color: var(--accent); font-weight: 700; }
+.mf-pocket-name { font-size: 13px; flex: 1; min-width: 6em; }
+.mf-pocket-v { font-family: var(--mf-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.mf-pocket-off { color: var(--dim); font-family: inherit; font-size: 11.5px; }
+.mf-tl-foot { margin-top: 6px; }
+.mf-checks { margin-top: 4px; max-height: 220px; overflow-y: auto; }
+/* the watch's own close, at the end of its heading */
+.mf-close { font-size: 15px; }
+
 /* ---------------- a cell ----------------
    An area of the floor, above the machines in it: what it is called, what is in
    it, and the routes that run through it — each part's operations in the order
