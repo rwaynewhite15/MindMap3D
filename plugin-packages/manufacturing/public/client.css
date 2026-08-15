@@ -44,15 +44,22 @@
 
 .mf-page { max-width: 820px; margin: 0 auto; padding: 16px 14px 48px; }
 
-.mf-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+/* With the name in the bar, this row is the screen's buttons and nothing else,
+   so it sits to the right and stops taking a line of its own. */
+.mf-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; min-height: 0; }
+.mf-top:empty { display: none; }
 
 /* ---------------- the mark, top left ----------------
    The stopwatch and its insert hand, then the name. The mark carries the accent
    as its own colour, so the SVG's currentColor is the app's accent and the pivot
    punched out of the middle is the page behind it. */
-.mf-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mf-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .mf-mark { flex: none; display: block; color: var(--accent); }
-.mf-logo { display: block; width: 30px; height: 30px; }
+.mf-logo { display: block; width: 26px; height: 26px; }
+/* In the shell's top bar it sits against the toolbar, so it takes the bar's
+   scale rather than a page heading's. */
+.nav-brand .mf-h1 { font-size: 16px; }
+.nav-brand .mf-logo { width: 22px; height: 22px; }
 /* The page breaks any word that would not fit (see .mf-root) — which is right
    for a sixty-character part number and wrong for the name of the app, where it
    reads as Shopwa/tch on a phone. */

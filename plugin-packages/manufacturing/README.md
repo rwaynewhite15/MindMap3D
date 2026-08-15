@@ -925,10 +925,15 @@ screen is about, in one shape — drawn as an inline SVG in `client.js` rather t
 shipped as a file: nothing to fetch, nothing to keep a second copy of at another
 size, and it takes the palette with it, since the mark is `currentColor` and the
 pivot is punched out in the page colour. The name beside it splits the way the
-app's own does, **Shop**·*watch*, and it appears twice: top left on the screen,
-and in the footer of every printed tool layout sheet. Nothing sits under it —
-a line of copy saying what the screen is for is for somebody who has not opened
-it yet.
+app's own does, **Shop**·*watch*.
+
+It goes **in the app's top bar**, at the left of the account's toolbar, through
+the slot the host offers the screen that is open (`ctx.brand`) — the bar has the
+room and the screen has better things to do with a row of its own. A host that
+offers no such slot gets it drawn on the page instead, exactly as before, so the
+add-on still runs on one. The same mark signs the footer of every printed tool
+layout sheet. Nothing sits under it either way: a line of copy saying what the
+screen is for is for somebody who has not opened it yet.
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —

@@ -4999,6 +4999,9 @@
     '<circle cx="12" cy="13.6" r="1" fill="var(--bg)"/>' +
     '</svg>';
 
+  // The mark and the name. It goes in the shell's top bar where the host has a
+  // slot for it — the bar has the room and the screen has better things to do
+  // with a row of its own — and stays on the page where it does not.
   function brand() {
     const box = el('div', 'mf-brand');
     // The mark is set as markup because an SVG built with createElement lands in
@@ -5027,7 +5030,8 @@
     const page = el('div', 'mf-page');
 
     const top = el('div', 'mf-top');
-    top.appendChild(brand());
+    // An older host has no slot to put it in, so the page keeps it.
+    if (!(ctx && typeof ctx.brand === 'function')) top.appendChild(brand());
     const actions = el('div', 'mf-top-btns');
     // Everything that adds to a floor is left off a screen that cannot write to
     // one. Export stays: reading it and downloading it are the same permission.
@@ -5114,6 +5118,9 @@
   // #/p/manufacturing/t/<id> points the watch at a particular setup.
   function open(sub) {
     restoreLocal();
+    // The bar is cleared on the way out of the screen, so the name goes back up
+    // every time it is opened rather than once at mount.
+    if (ctx && typeof ctx.brand === 'function') ctx.brand(brand());
     startTick();
     const path = String(sub || '');
     const asDoc = path.match(/^d\/([A-Za-z0-9]{1,40})$/);

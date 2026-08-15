@@ -151,8 +151,12 @@ and turns on **AI generation** simply by setting environment variables.
   in cut, the part's process time, a cell's machines. What is kept on the device is what
   you have **opened**, so records added later arrive closed too. Searching opens
   everything, so a filter can never be answered by a closed heading.
-- **The top bar carries no title.** It is the account's toolbar and its notification bell,
-  aligned to the right; the screen underneath says what it is.
+- **The open screen puts its name in the top bar.** The bar has no title of its own — it
+  is the account's toolbar and its notification bell, aligned right — but a screen that has
+  a name and a mark can hand them to the slot at its left, and Shopwatch does. It is
+  cleared on the way out, so a screen's name never sits over somebody else's, and a screen
+  that sets none leaves the bar exactly as it was. That is a row the screen underneath no
+  longer spends on saying what it is.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request

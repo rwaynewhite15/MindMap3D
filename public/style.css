@@ -50,6 +50,12 @@ input, textarea { font-family: inherit; }
   border-bottom: 1px solid var(--line);
   z-index: 30;
 }
+/* The open screen's own name, at the left of the bar. Empty for the screens
+   that do not set one, where it collapses to nothing and the toolbar sits where
+   it always did. */
+.nav-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.nav-brand:not(:empty) { margin-right: auto; }
+
 .auth-logo { font-weight: 700; letter-spacing: 0.06em; font-size: 15px; white-space: nowrap; }
 .auth-logo span { color: var(--accent); }
 .auth-logo em { color: var(--dim); font-weight: 400; font-style: normal; }
