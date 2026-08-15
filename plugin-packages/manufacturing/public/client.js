@@ -1188,11 +1188,12 @@
     box.innerHTML = '';
     if (!shop && !doc) {
       const empty = el('div', 'mf-empty');
-      empty.appendChild(el('div', 'mf-empty-title', 'Start a shopwatch'));
+      // What it is and what to do, in two lines. An empty screen is not the
+      // place to make a case for the thing the operator has already opened.
+      empty.appendChild(el('div', 'mf-empty-title', 'No shopwatch open'));
       empty.appendChild(el('div', 'mf-empty-text',
-        'A shopwatch holds one floor: its parts and their operations, its machines, its tool crib, ' +
-        'and every cycle timed against them. It is yours and private until you say otherwise, and ' +
-        'it can be shared with the people running the job — to watch, or to work in alongside you.'));
+        'A shopwatch holds one floor: its parts and their operations, its machines, its tool crib ' +
+        'and every cycle timed against them. New ones are private until shared.'));
       empty.appendChild(button('mf-btn mf-btn-go', '+ New shopwatch', () => newDoc()));
       box.appendChild(empty);
       return;
@@ -1207,8 +1208,8 @@
         ? 'Pick a tool to time'
         : (started ? 'Set a tool up on a machine' : 'Start with a part, a machine and a tool')));
       empty.appendChild(el('div', 'mf-empty-text', shop.assignments.length
-        ? 'Every cycle time is recorded against one tool, on one machine, doing one operation — so choose the one at the spindle before you start the watch.'
-        : 'A part has operations; a tool has a part number and cutting edges. Setting a tool up on a machine for one of those operations is what carries the edges indexed there and the parts between indexes — and what the stopwatch records against.'));
+        ? 'A cycle time is recorded against one tool, on one machine, on one operation. Choose the one at the spindle before starting the watch.'
+        : 'A tool set up on a machine for one operation is what the watch records against, and what carries the edges indexed there and the parts run between indexes.'));
       const row = el('div', 'mf-form-btns');
       if (!shop.parts.length) row.appendChild(button('mf-btn mf-btn-go', '+ Add a part', () => openForm('part')));
       if (!shop.machines.length) row.appendChild(button('mf-btn', '+ Add a machine', () => openForm('machine')));
@@ -3905,6 +3906,11 @@
       padding: 6px 10px; white-space: nowrap;
     }
     .who { flex: 1; min-width: 0; }
+    /* What the page is, said once, the way a controlled document says it */
+    .doctype {
+      font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--dim); font-weight: 600; margin-bottom: 2px;
+    }
     .machine { font-size: 17px; font-weight: 700; }
     .op { font-family: var(--mono); font-size: 12px; color: var(--dim); margin-top: 2px; }
     .figure { text-align: right; white-space: nowrap; }
@@ -3963,8 +3969,19 @@
     .notes { margin-top: 8px; page-break-inside: avoid; }
     .note { font-size: 10px; color: var(--dim); margin-top: 4px; }
     .note b { color: var(--ink); font-weight: 600; }
-    .foot { display: flex; gap: 10px; margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 9px; color: var(--dim); }
-    .foot .right { margin-left: auto; }
+    /* The mark, what the sheet is a sheet of, and when it was taken off the
+       record — a page that ends up on a machine has to be traceable back. */
+    .foot {
+      display: flex; align-items: center; gap: 10px; margin-top: 10px;
+      padding-top: 6px; border-top: 1px solid var(--line);
+      font-size: 9px; color: var(--dim);
+    }
+    .foot .brand { display: flex; align-items: center; gap: 5px; flex: none; color: var(--accent); }
+    .foot .brand svg { display: block; width: 14px; height: 14px; }
+    .foot .name { font-size: 10px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink); }
+    .foot .name i { font-style: normal; color: var(--accent); }
+    .foot .ref { min-width: 0; }
+    .foot .issued { margin-left: auto; white-space: nowrap; }
   `;
 
   // One page: everything the shopwatch holds about one tool layout.
@@ -4001,6 +4018,7 @@
       '<div class="head">' +
         '<div class="no">' + escHtml(tlName(l)) + '</div>' +
         '<div class="who">' +
+          '<div class="doctype">Tool layout sheet</div>' +
           '<div class="machine">' + escHtml(machine ? machine.name : 'No machine') + '</div>' +
           '<div class="op">' + escHtml(operationLabel(op)) +
             (part && part.desc && part.number ? ' — ' + escHtml(part.desc) : '') + '</div>' +
@@ -4009,7 +4027,7 @@
           '<div class="total">' + (total ? fmtSec(total) : '—') + '</div>' +
           '<div class="sub">' + (timed.length
             ? 'measured across ' + timed.length + (timed.length === 1 ? ' tool' : ' tools')
-            : 'nothing timed yet') + '</div>' +
+            : 'no cycles recorded') + '</div>' +
         '</div>' +
       '</div>';
 
@@ -4033,10 +4051,10 @@
 
     const cycle =
       '<div class="panel">' +
-        '<div class="panel-head"><span class="k">The cycle, tool by tool</span>' +
-          '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'nothing timed yet') + '</span></div>' +
+        '<div class="panel-head"><span class="k">Cycle by tool</span>' +
+          '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'no cycles recorded') + '</span></div>' +
         (timed.length ? bar + legend
-          : '<div class="empty">No cycles have been timed on this layout yet.</div>') +
+          : '<div class="empty">No cycles recorded.</div>') +
       '</div>';
 
     // A column is a tool's measured cycle; what is filled in is the part of it
@@ -4058,17 +4076,17 @@
         (r.cut ? '<b>' + Math.round((r.cut / r.cycle) * 100) + '%</b>' : '') + '</div>').join('') + '</div>' +
       '<div class="key">' +
         '<span><i style="background:var(--cut)"></i>in cut</span>' +
-        '<span><i style="background:var(--waste)"></i>everything else</span>' +
-        (drawn.some(r => !r.cut) ? '<span><i style="border:1px solid var(--unmarked)"></i>not marked</span>' : '') +
+        '<span><i style="background:var(--waste)"></i>not cutting</span>' +
+        (drawn.some(r => !r.cut) ? '<span><i style="border:1px solid var(--unmarked)"></i>not measured</span>' : '') +
       '</div>'
-      : '<div class="empty">Nothing has been marked in and out of cut on this layout yet.</div>';
+      : '<div class="empty">No cutting time recorded.</div>';
 
     const cut =
       '<div class="panel">' +
-        '<div class="panel-head"><span class="k">In cut, and the waste</span>' +
+        '<div class="panel-head"><span class="k">Cutting time and waste</span>' +
           '<span class="v">' + (share
-            ? Math.round(share * 100) + '% of the marked cycle is cutting'
-            : 'nothing marked in cut') + '</span></div>' +
+            ? Math.round(share * 100) + '% of the measured cycle in cut'
+            : 'no cutting time recorded') + '</span></div>' +
         plot +
       '</div>';
 
@@ -4100,16 +4118,16 @@
     }).join('');
     const table =
       '<div class="panel">' +
-        '<div class="panel-head"><span class="k">The tools, in the order they cut</span>' +
+        '<div class="panel-head"><span class="k">Tooling, in cutting order</span>' +
           '<span class="v">' + jobs.length + (jobs.length === 1 ? ' pocket' : ' pockets') + '</span></div>' +
         (jobs.length
           ? '<table><thead><tr>' + columns.map(h => '<th>' + escHtml(h) + '</th>').join('') +
             '</tr></thead><tbody>' + body + '</tbody></table>'
-          : '<div class="empty">No tools are set up on this layout.</div>') +
+          : '<div class="empty">No tools set up.</div>') +
       '</div>';
 
     const notes = [
-      ['This layout', l.notes],
+      ['Tool layout', l.notes],
       [op ? op.name : 'Operation', op && op.notes],
       [part ? partName(part) : 'Part', part && part.notes],
       [machine ? machine.name : 'Machine', machine && machine.notes],
@@ -4122,9 +4140,14 @@
         '</div>'
       : '';
 
-    const foot = '<div class="foot"><span>' + escHtml(doc ? doc.title : 'Shopwatch') +
-      ' · ' + escHtml(tlName(l)) + ' · ' + escHtml(layoutWhere(l)) + '</span>' +
-      '<span class="right">' + escHtml(when) + '</span></div>';
+    // The mark, then what this sheet is a sheet of and when it was taken —
+    // which is what makes a printed page traceable back to the record it came
+    // out of once it is on a machine and out of date.
+    const foot = '<div class="foot">' +
+      '<span class="brand">' + LOGO + '<span class="name">Shop<i>watch</i></span></span>' +
+      '<span class="ref">' + escHtml(doc ? doc.title : '') + ' · ' + escHtml(tlName(l)) +
+      ' · ' + escHtml(layoutWhere(l)) + '</span>' +
+      '<span class="issued">Issued ' + escHtml(when) + '</span></div>';
 
     return '<section class="tl">' + head + cycle + cut + table + notesBlock + foot + '</section>';
   }
@@ -4140,7 +4163,11 @@
         : 'Set a tool up on a machine for an operation first — a tool layout is what a page is.');
       return;
     }
-    const when = new Date().toLocaleString();
+    // A date and a time, without the seconds: this stamps a document, it does
+    // not time anything.
+    const when = new Date().toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
     const title = (doc ? doc.title : 'Shopwatch') +
       (onlyId ? ' — ' + tlName(pages[0]) : ' — tool layouts');
     const html = '<!doctype html><html><head><meta charset="utf-8"><title>' + escHtml(title) +
@@ -4227,13 +4254,13 @@
     mark.innerHTML = LOGO;
     box.appendChild(mark);
 
-    const text = el('div', 'mf-brand-text');
+    // The mark and the name, and nothing under them. A line of copy explaining
+    // what the screen is for is for somebody who has not opened it yet; on the
+    // screen itself it is one more thing between the operator and the watch.
     const title = el('h1', 'mf-h1');
     title.appendChild(document.createTextNode('Shop'));
     title.appendChild(el('span', 'mf-h1-b', 'watch'));
-    text.appendChild(title);
-    text.appendChild(el('div', 'mf-sub', 'Cycle times, tool by tool, layout by layout'));
-    box.appendChild(text);
+    box.appendChild(title);
     return box;
   }
 

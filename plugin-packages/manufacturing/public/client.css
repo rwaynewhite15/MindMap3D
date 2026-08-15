@@ -47,20 +47,17 @@
 .mf-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 
 /* ---------------- the mark, top left ----------------
-   The stopwatch and its insert hand, then the name: one lockup, the mark
-   centred against both lines of it rather than against the first. The mark
-   carries the accent as its own colour, so the SVG's currentColor is the app's
-   accent and the pivot punched out of the middle is the page behind it. */
-.mf-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+   The stopwatch and its insert hand, then the name. The mark carries the accent
+   as its own colour, so the SVG's currentColor is the app's accent and the pivot
+   punched out of the middle is the page behind it. */
+.mf-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mf-mark { flex: none; display: block; color: var(--accent); }
-.mf-logo { display: block; width: 32px; height: 32px; }
-.mf-brand-text { min-width: 0; }
+.mf-logo { display: block; width: 30px; height: 30px; }
 /* The page breaks any word that would not fit (see .mf-root) — which is right
    for a sixty-character part number and wrong for the name of the app, where it
    reads as Shopwa/tch on a phone. */
 .mf-h1 { font-size: 20px; margin: 0; letter-spacing: 0.01em; white-space: nowrap; overflow-wrap: normal; }
 .mf-h1-b { color: var(--accent); }
-.mf-sub { color: var(--dim); font-size: 13px; margin-top: 2px; }
 .mf-top-btns { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .mf-flash {
@@ -678,11 +675,11 @@
 @media (max-width: 520px) {
   .mf-page { padding: 12px 10px 40px; }
   /* On a phone the buttons take their own row under the name rather than
-     squeezing it into a column: four words a line is not a subtitle. */
-  .mf-top { flex-wrap: wrap; }
+     squeezing the name into a column beside them. */
+  .mf-top { flex-wrap: wrap; align-items: center; }
   .mf-brand { flex: 1 1 100%; gap: 9px; }
   .mf-top-btns { margin-left: 0; justify-content: flex-start; }
-  .mf-logo { width: 27px; height: 27px; }
+  .mf-logo { width: 26px; height: 26px; }
   /* Four presses do not fit across a phone, and wrapping three-then-one
      leaves the last one stranded. Two by two instead: even rows, and a target
      big enough for a thumb at the machine. */

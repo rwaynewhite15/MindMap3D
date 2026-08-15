@@ -383,17 +383,20 @@ the tooling, which a typed-up sheet never does.
 one out:
 
 - the **number** and the whole address — the machine, the part, the op — across
-  the top, with the layout's measured cycle beside them
-- **the cycle, tool by tool**: the stacked bar dividing that cycle between the
+  the top, under a *Tool layout sheet* label
+- **Cycle by tool**: the stacked bar dividing the measured cycle between the
   tools in the order they cut, on the same light→dark ramp the screen uses, with
   the table under it naming each one and giving its average and its share
-- **in cut, and the waste**: the same tools as columns, each the tool's measured
+- **Cutting time and waste**: the same tools as columns, each the tool's measured
   cycle with only the marked-in-cut part filled in, every column on one scale
-- **the tools, in the order they cut**: a row per **pocket** — the tool in it,
-  its own part number, cycles timed, average, time in cut and what share that is,
+- **Tooling, in cutting order**: a row per **pocket** — the tool in it, its own
+  part number, cycles timed, average, time in cut and what share that is,
   indexable edges, parts per index, parts per tool and minutes per edge — with
   whatever was written about that setup underneath its row
-- and the **notes** on the layout, the op, the part and the machine at the foot
+- the **Notes** on the layout, the op, the part and the machine
+- and a footer carrying the mark, the shopwatch, the layout it is a sheet of and
+  when it was issued — so a page that ends up taped to a machine can be traced
+  back to the record it came off, and told from the one printed last month
 
 The 🖨 PDF on the top bar prints **every** layout in the shopwatch; the **PDF**
 on the Tool layout panel prints the one you are looking at. Both open a
@@ -818,7 +821,10 @@ screen is about, in one shape — drawn as an inline SVG in `client.js` rather t
 shipped as a file: nothing to fetch, nothing to keep a second copy of at another
 size, and it takes the palette with it, since the mark is `currentColor` and the
 pivot is punched out in the page colour. The name beside it splits the way the
-app's own does, **Shop**·*watch*.
+app's own does, **Shop**·*watch*, and it appears twice: top left on the screen,
+and in the footer of every printed tool layout sheet. Nothing sits under it —
+a line of copy saying what the screen is for is for somebody who has not opened
+it yet.
 
 Sharing is not implemented here. `server.js` exports a `docs` contract — an empty
 record, a `sanitize` that rebuilds one, and a one-line `summary` for the feed —

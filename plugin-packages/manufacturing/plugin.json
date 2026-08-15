@@ -2,7 +2,7 @@
   "id": "manufacturing",
   "name": "Shopwatch",
   "version": "7.0.0",
-  "description": "A shop-floor cycle-time stopwatch arranged around the tool layout — one machine, one part, one operation, numbered the way the floor asks for it. Under each layout are the tools that cut it in order, each carrying its pocket, the edges indexed there and the parts run between indexes; the watch times one of them at a time and folds down to a bar while it runs. Cutting time is measured at the machine rather than typed, with the layout's cycle charted across its tools, a column per tool showing cut against waste, CSV in and out, and a PDF of every tool layout, one to a page.",
+  "description": "Cycle-time measurement for the shop floor, organized by tool layout: one machine, one part, one operation, each with a number of its own. A layout holds the tools that cut it in order, with the pocket each sits in, the edges indexed there and the parts run between indexes. The stopwatch times one tool at a time and folds down to a bar while it runs; cutting time is measured at the machine rather than typed. Charts the layout's cycle across its tools and the cutting time against the waste, prints each tool layout as a one-page sheet, and reads and writes the whole record as CSV.",
   "hostVersion": 2,
   "nav": {
     "label": "Shopwatch"
