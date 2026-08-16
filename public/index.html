@@ -13,7 +13,10 @@
 <header id="topbar" hidden>
   <!-- The screen that is open puts its own name here, if it has one to put. The
        bar itself still carries no title of its own: what fills this is whatever
-       is on show, and it is cleared on the way out of that screen. -->
+       is on show, and it is cleared on the way out of that screen. Every screen
+       that is a place in its own right — the desk, the feed, an add-on like
+       Shopwatch — names itself here rather than spending a row of its own page
+       on it; see VIEW_TITLES in app.js, and ctx.brand() for an add-on. -->
   <div id="navBrand" class="nav-brand"></div>
   <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
@@ -141,8 +144,9 @@
   <!-- ============ HOME FEED ============ -->
   <section id="view-home" hidden>
     <div class="page">
+      <!-- The screen's name is in the top bar; what is left here is the line
+           saying what the feed holds. -->
       <div class="feed-head">
-        <h1>Home</h1>
         <div class="muted">Recently shared by the people you follow</div>
       </div>
       <div id="feedList" class="feed-list"></div>
@@ -156,7 +160,6 @@
   <!-- ============ BROWSE ============ -->
   <section id="view-browse" hidden>
     <div class="page">
-      <h1>Browse people</h1>
       <input id="searchInput" class="search" type="search" placeholder="Search by username or name…" autocomplete="off">
       <div id="userList" class="user-list"></div>
     </div>
@@ -165,7 +168,6 @@
   <!-- ============ FRIENDS ============ -->
   <section id="view-friends" hidden>
     <div class="page">
-      <h1>Friends</h1>
       <div id="friendsContent"></div>
     </div>
   </section>
@@ -251,7 +253,6 @@
   <section id="view-features" hidden>
     <div class="page">
       <div class="lib-head">
-        <h1>Features</h1>
         <div class="muted">Everything MindMapShare can do. Add what you want to your toolbar; leave the rest out of your way.</div>
       </div>
       <div id="libContent"></div>
@@ -260,7 +261,6 @@
 
   <section id="view-settings" hidden>
     <div class="page narrow">
-      <h1>Settings</h1>
       <form id="formSettings">
         <label>Display name <input name="displayName" maxlength="40" placeholder="Optional"></label>
         <label class="check"><input type="checkbox" name="showDisplayName"> Share my display name with everyone <span class="muted">(off: friends only)</span></label>

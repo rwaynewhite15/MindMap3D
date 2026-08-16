@@ -1519,6 +1519,35 @@ let currentView = '';     // the name show() was last called with
 
 const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'features', 'privacy', 'terms', 'soul'];
 
+/* What each built-in screen is called, in the top bar.
+
+   Every screen that is a place of its own says so in the bar rather than
+   spending the first row of its own page on a heading — which on a phone is the
+   row that matters most. The bar still has no title of its own: this is the
+   open screen's name, and it is cleared on the way out (see show()).
+
+   A screen not named here puts nothing there and the bar collapses back to the
+   toolbar alone: someone's profile carries their name in its own bar, and the
+   legal pages are documents whose title belongs to the document. Add-ons name
+   themselves the same way through ctx.brand() — Shopwatch hands over its mark
+   and its wordmark — so a built-in screen and an installed one read alike. */
+const VIEW_TITLES = {
+  home: 'Home',
+  map: 'My Maps',
+  desk: 'Standing Desk',
+  browse: 'Browse people',
+  friends: 'Friends',
+  features: 'Features',
+  settings: 'Settings',
+};
+
+function navTitleNode(label) {
+  const h = document.createElement('h1');
+  h.className = 'nav-title';
+  h.textContent = label;
+  return h;
+}
+
 function show(name) {
   if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
   leaveActivePlugin(name);              // and give an add-on the same chance to flush
@@ -1531,8 +1560,13 @@ function show(name) {
   for (const [id, p] of pluginViews) p.section.hidden = name !== pluginViewName(id);
   // now that the active section is set, rebuild the outline against its map
   if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
-  // A name in the bar belongs to the screen that put it there
-  if (!activePluginId || name !== pluginViewName(activePluginId)) clearNavBrand('');
+  // A name in the bar belongs to the screen that put it there: an add-on sets
+  // its own on the way in, and every other screen is named here or not at all.
+  if (!activePluginId || name !== pluginViewName(activePluginId)) {
+    const title = VIEW_TITLES[name];
+    if (title) setNavBrand('view:' + name, navTitleNode(title));
+    else clearNavBrand('');
+  }
   // hide the top bar (and its hamburger) only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
   $('#navToggle').hidden = name === 'auth';
@@ -5760,14 +5794,14 @@ function renderDesk() {
   const ro = !!deskOwner;
   const whose = ro ? (deskOwner.name || '@' + deskOwner.username) : '';
 
+  // The board is named in the top bar, so the rig carries only what is true of
+  // this board today: whose it is or what the date is, how it is shared, and
+  // the tallies.
   deskRoot.innerHTML = `
   <header class="dk-rig">
-    <div>
-      <h1 class="dk-rig__title">Standing Desk</h1>
-      <div class="dk-rig__sub">${ro
-        ? `${escapeHtml(whose)} &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
-        : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
-    </div>
+    <div class="dk-rig__sub">${ro
+      ? `${escapeHtml(whose)} &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
+      : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     <div class="dk-tally">
       <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}</span></div>
       <div class="dk-tally__cell dk-tally__cell--waiting"><span class="dk-tally__k">Waiting</span><span class="dk-tally__v">${waiting.length}</span></div>
