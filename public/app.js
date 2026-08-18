@@ -1519,6 +1519,23 @@ let currentView = '';     // the name show() was last called with
 
 const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'features', 'privacy', 'terms', 'soul'];
 
+// What each screen is called, for the top bar. Two of them are named after a
+// person rather than themselves — a profile, and someone else's desk — and say
+// so once they know whose they are.
+const SCREEN_TITLES = {
+  home: 'Home',
+  map: 'My Maps',
+  desk: 'Standing Desk',
+  browse: 'Browse people',
+  friends: 'Friends',
+  profile: 'Profile',
+  settings: 'Settings',
+  features: 'Features',
+  privacy: 'Privacy Policy',
+  terms: 'Terms of Service',
+  soul: 'Privacy Policy (rejected first draft)',
+};
+
 function show(name) {
   if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
   leaveActivePlugin(name);              // and give an add-on the same chance to flush
@@ -1531,10 +1548,13 @@ function show(name) {
   for (const [id, p] of pluginViews) p.section.hidden = name !== pluginViewName(id);
   // now that the active section is set, rebuild the outline against its map
   if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
-  // A name in the bar belongs to the screen that put it there
-  if (!activePluginId || name !== pluginViewName(activePluginId)) clearNavBrand('');
-  // hide the top bar (and its hamburger) only on the full-screen auth card
+  // The bar says which screen you are looking at. An add-on hands over a name
+  // and a mark of its own when it opens; every other screen is named from here.
+  if (!activePluginId || name !== pluginViewName(activePluginId)) setScreenTitle(SCREEN_TITLES[name] || '');
+  // hide the top bar (and its hamburger) — and the app's own mark at the foot —
+  // only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
+  $('#siteFoot').hidden = name === 'auth';
   $('#navToggle').hidden = name === 'auth';
   $('#notifWrap').hidden = !me; // the bell lives outside the nav; toggle it too
   currentView = name;
@@ -1943,6 +1963,16 @@ function setNavBrand(ownerId, node) {
 function clearNavBrand(ownerId) {
   if (ownerId && navBrandOwner !== ownerId) return;
   setNavBrand('', null);
+}
+
+// The plain case: a screen with a name and no mark. The shell owns it, so an
+// add-on opening next replaces it and leaving puts the screen's name back.
+function setScreenTitle(text) {
+  if (!text) { clearNavBrand(''); return; }
+  const h = document.createElement('h1');
+  h.className = 'nav-title';
+  h.textContent = text;
+  setNavBrand('', h);
 }
 
 function leaveActivePlugin(nextName) {
@@ -4480,6 +4510,8 @@ async function openProfile(username) {
     currentProfile = data;
     const u = data.user;
     $('#profileName').textContent = (u.name || '@' + u.username) + (viewingSelf ? ' · preview' : '');
+    // the bar names the person, but only while their profile is still the screen on show
+    if (currentView === 'profile') setScreenTitle(u.name || '@' + u.username);
     const bits = ['@' + u.username];
     if (u.bio) bits.push(u.bio);
     $('#profileHandle').textContent = bits.join(' · ');
@@ -5085,6 +5117,8 @@ async function loadSharedDesk(username, code) {
   deskNoteId = null;
   deskOwner = data.owner;
   deskStaleDays = data.staleDays;
+  // a desk you are visiting says whose it is; your own is just the Standing Desk
+  if (currentView === 'desk') setScreenTitle((deskOwner.name || '@' + deskOwner.username) + '’s Desk');
   renderDesk();
 }
 
@@ -5763,7 +5797,6 @@ function renderDesk() {
   deskRoot.innerHTML = `
   <header class="dk-rig">
     <div>
-      <h1 class="dk-rig__title">Standing Desk</h1>
       <div class="dk-rig__sub">${ro
         ? `${escapeHtml(whose)} &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
         : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>

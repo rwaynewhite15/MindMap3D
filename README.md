@@ -151,12 +151,17 @@ and turns on **AI generation** simply by setting environment variables.
   in cut, the part's process time, a cell's machines. What is kept on the device is what
   you have **opened**, so records added later arrive closed too. Searching opens
   everything, so a filter can never be answered by a closed heading.
-- **The open screen puts its name in the top bar.** The bar has no title of its own — it
-  is the account's toolbar and its notification bell, aligned right — but a screen that has
-  a name and a mark can hand them to the slot at its left, and Shopwatch does. It is
-  cleared on the way out, so a screen's name never sits over somebody else's, and a screen
-  that sets none leaves the bar exactly as it was. That is a row the screen underneath no
-  longer spends on saying what it is.
+- **The top bar always says which page you are on.** Its left-hand slot is the name of the
+  screen in front of you — Home, My Maps, Standing Desk, Settings — next to the toolbar and
+  the notification bell. Two screens are named after a person rather than themselves: a
+  profile carries whose it is, and a desk you are visiting reads *Dana Okoye's Desk*. An
+  add-on can hand over a name and a mark of its own the way Shopwatch does, and it is taken
+  back the moment you leave. Nothing repeats the name in the page below it, so every screen
+  keeps the row it used to spend on saying what it is.
+- **The app's mark sits at the foot of every page** — the three bubbles and the name, small
+  and quiet, on every screen but the sign-in card. It is drawn rather than fetched, so it
+  takes the palette with it and costs no request, and it is not a link: it says whose app
+  this is and nothing else.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
@@ -812,7 +817,8 @@ window.MindMapPlugins.register({
 
 `ctx` is the whole of what a plugin gets from the shell: `ctx.api(path, method, body)` for
 its own routes, `ctx.me()` for who is signed in, `ctx.go(sub)` to move around inside its
-own screen.
+own screen, and `ctx.brand(node)` to put a name and a mark of its own in the top bar — the
+same slot the built-in screens are named in, handed back the moment the add-on is left.
 
 The server module is a factory, called once at startup:
 

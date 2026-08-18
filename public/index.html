@@ -11,9 +11,9 @@
 <body>
 
 <header id="topbar" hidden>
-  <!-- The screen that is open puts its own name here, if it has one to put. The
-       bar itself still carries no title of its own: what fills this is whatever
-       is on show, and it is cleared on the way out of that screen. -->
+  <!-- The name of the page being viewed. Every screen sets it — an add-on can
+       hand over a mark and a name of its own — and it is cleared and set again
+       on the way in and out, so it is always the screen you are looking at. -->
   <div id="navBrand" class="nav-brand"></div>
   <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
@@ -142,7 +142,6 @@
   <section id="view-home" hidden>
     <div class="page">
       <div class="feed-head">
-        <h1>Home</h1>
         <div class="muted">Recently shared by the people you follow</div>
       </div>
       <div id="feedList" class="feed-list"></div>
@@ -156,7 +155,6 @@
   <!-- ============ BROWSE ============ -->
   <section id="view-browse" hidden>
     <div class="page">
-      <h1>Browse people</h1>
       <input id="searchInput" class="search" type="search" placeholder="Search by username or name…" autocomplete="off">
       <div id="userList" class="user-list"></div>
     </div>
@@ -165,7 +163,6 @@
   <!-- ============ FRIENDS ============ -->
   <section id="view-friends" hidden>
     <div class="page">
-      <h1>Friends</h1>
       <div id="friendsContent"></div>
     </div>
   </section>
@@ -251,7 +248,6 @@
   <section id="view-features" hidden>
     <div class="page">
       <div class="lib-head">
-        <h1>Features</h1>
         <div class="muted">Everything MindMapShare can do. Add what you want to your toolbar; leave the rest out of your way.</div>
       </div>
       <div id="libContent"></div>
@@ -260,7 +256,6 @@
 
   <section id="view-settings" hidden>
     <div class="page narrow">
-      <h1>Settings</h1>
       <form id="formSettings">
         <label>Display name <input name="displayName" maxlength="40" placeholder="Optional"></label>
         <label class="check"><input type="checkbox" name="showDisplayName"> Share my display name with everyone <span class="muted">(off: friends only)</span></label>
@@ -291,7 +286,6 @@
   <!-- ============ PRIVACY POLICY (the real one) ============ -->
   <section id="view-privacy" hidden>
     <div class="page narrow legal-doc">
-      <h1>Privacy Policy</h1>
       <p class="legal-meta">Last updated: 23 July 2026</p>
 
       <p class="legal-intro">This Privacy Policy explains what information MindMapShare ("we," "us," or "the Service") collects, how we use it, and the choices you have. We aim to collect as little as possible and to be plain about it. If anything here is unclear, contact us (Section 10).</p>
@@ -356,7 +350,6 @@
   <!-- ============ TERMS OF SERVICE ============ -->
   <section id="view-terms" hidden>
     <div class="page narrow legal-doc">
-      <h1>Terms of Service</h1>
       <p class="legal-meta">Last updated: 23 July 2026</p>
 
       <p class="legal-intro">These Terms govern your use of MindMapShare (the "Service"). By creating an account or using the Service, you agree to these Terms. If you don't agree, please don't use the Service.</p>
@@ -404,7 +397,6 @@
   <!-- ============ THE "OLD DRAFT" (satire — easter egg) ============ -->
   <section id="view-soul" hidden>
     <div class="page narrow legal-doc">
-      <h1>Privacy Policy <span class="legal-draft">(rejected first draft)</span></h1>
       <p class="legal-meta">Last updated: the moment you started reading this. Effective: retroactively, across all timelines. <strong>This is not our actual policy</strong> — see the <a href="#/privacy">real one</a>.</p>
 
       <p class="legal-intro">Welcome to <strong>MindMapShare</strong> ("we," "us," "the Custodians of Your Essence"). We take your privacy extremely seriously, which is why we have written it down in a document you will not read before clicking "I agree." This Privacy Policy explains what we collect, why we collect it, and the several ethereal planes to which we will eventually upload you.</p>
@@ -455,6 +447,20 @@
   </section>
 
 </main>
+
+<!-- The app's own mark, small, at the foot of every page: three bubbles and the
+     lines between them, which is what the app is. It is drawn rather than
+     fetched, takes the palette with it, and is not a link — it says whose app
+     this is and nothing more. -->
+<footer id="siteFoot" class="site-foot" hidden>
+  <svg class="site-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M7.4 8.6 16 6.2M7.9 11.4 15.6 16.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+    <circle cx="5.6" cy="10" r="3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <circle cx="17.6" cy="5.6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <circle class="site-mark__dot" cx="17.2" cy="17.6" r="2.8"/>
+  </svg>
+  <span class="site-name">MindMap<span>Share</span></span>
+</footer>
 
 <!-- ============ BOTTOM SHEETS ============ -->
 <div id="sheetShade" hidden></div>
