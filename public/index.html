@@ -11,9 +11,11 @@
 <body>
 
 <header id="topbar" hidden>
-  <!-- The name of the page being viewed. Every screen sets it — an add-on can
-       hand over a mark and a name of its own — and it is cleared and set again
-       on the way in and out, so it is always the screen you are looking at. -->
+  <!-- The name of the page being viewed. The bar carries no title of its own:
+       what fills this is whatever is on show, set on the way in and cleared on
+       the way out. Every screen names itself here — the desk, the feed, a legal
+       page, an add-on like Shopwatch — rather than spending a row of its own
+       page on it; see VIEW_TITLES in app.js, and ctx.brand() for an add-on. -->
   <div id="navBrand" class="nav-brand"></div>
   <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
@@ -141,6 +143,8 @@
   <!-- ============ HOME FEED ============ -->
   <section id="view-home" hidden>
     <div class="page">
+      <!-- The screen's name is in the top bar; what is left here is the line
+           saying what the feed holds. -->
       <div class="feed-head">
         <div class="muted">Recently shared by the people you follow</div>
       </div>

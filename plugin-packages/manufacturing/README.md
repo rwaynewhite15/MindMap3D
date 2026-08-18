@@ -320,25 +320,51 @@ as **not marked**, and counted in a line under the chart.
 **cells** in flow order, the **machines** in each, the **operations** that run
 there in the order the part is made, and under every operation the **tool
 layout** it is run as — its number, its machines as buttons, and its pockets.
-Under it, **Parts and operations** is the short list of what is being made, and
-**Tools** is the crib. One filter box narrows all three, and it knows the names
-things are asked for by: typing **TL 12** (or just **12**) asks for everything on
-that layout, and typing a **cell's name** asks for everything in that cell.
+Under it, **Machines** is the same records read from one machine, **Parts and
+operations** is the short list of what is being made, and **Tools** is the crib.
+One filter box narrows all four, and it knows the names things are asked for by:
+typing **TL 12** (or just **12**) asks for everything on that layout, and typing
+a **cell's name** asks for everything in that cell.
+
+**Searching for a machine gives its tool layouts, sorted by operation.** A
+machine's name is the one word painted on the side of the iron, so it is what a
+floor gets asked for. Type it in the filter box — or press the name on any
+machine tag on the floor, which puts it there for you and takes you to the answer
+— and the **Machines** list comes back narrowed to it: every layout set on that
+machine, gathered under the **operation** it cuts, with the operations in the
+order the part is made and the parts in name order. Two layouts on the same op
+sit together under it in number order.
+
+Sorted by operation rather than by layout number, because the number is only how
+a layout is *called for* once you already know which one you want; what a machine
+does is a sequence of operations. Every cycle shown under a machine is the one
+measured **at that machine** rather than one averaged across every machine the
+layout runs on — the layout's, each pocket's, and the recorded cycles when you
+open one — and pressing a pocket there puts the watch on that tool, at that
+machine, the same sentence the floor's machine buttons say, arrived at from the
+other end. Read from the floor, where a layout is under its cell rather than
+under one of its machines, a pocket shows what it measures across all of them,
+which is the honest answer to a question asked of all of them. Ask with a part number, a tool number or **TL 12** instead and the
+list turns around and answers with the machines that cut it.
 
 **Each cell is its order of operations.** Opening a cell lists the operations
 that run in it in the order the part is made, and under each the layout that cuts
 it. That is the order of operations for that cell, and it is one lane of the
 value stream below.
 
-**The screen opens closed.** Every heading on it folds — the three lists, each
-part and each machine inside them, the tool layout panel, the cut-and-waste
-panel, the value stream, the recorded cycles and the stopwatch itself — and all
-of them start closed, so a floor of a dozen machines and four hundred cycles
-opens as a page of headings rather than as a wall. What a closed heading carries
-is the answer without the working: the layout's number and its measured cycle,
-what share of that cycle is in cut, the part's process time, a machine's tool
-count, a cell's machines and the routes through it. The stopwatch closed is still
-a stopwatch — the time, and the presses a cycle needs.
+**The screen opens closed.** Every heading on it folds — the four lists, each
+cell, each machine and each part inside them, the tool layout panel, the
+cut-and-waste panel, the value stream, the recorded cycles and the stopwatch
+itself — and all of them start closed, so a floor of a dozen machines and four
+hundred cycles opens as a page of headings rather than as a wall. What a closed
+heading carries is the answer without the working: the layout's number and its
+measured cycle, what share of that cycle is in cut, the part's process time, a
+machine's tool count, a cell's machines and the routes through it. The stopwatch
+closed is still a stopwatch — the time, and the presses a cycle needs.
+
+A layout is **one layout wherever it is read**, so opening TL 12 under its
+machine opens it on the floor too — the fold belongs to the layout, not to the
+list it was pressed in.
 
 What is kept on the device is what you have **opened**, not what you have closed,
 so it stays that way: a machine or a part added next week arrives closed like

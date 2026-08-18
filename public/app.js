@@ -1519,22 +1519,39 @@ let currentView = '';     // the name show() was last called with
 
 const sections = ['auth', 'home', 'map', 'desk', 'browse', 'friends', 'profile', 'settings', 'features', 'privacy', 'terms', 'soul'];
 
-// What each screen is called, for the top bar. Two of them are named after a
-// person rather than themselves — a profile, and someone else's desk — and say
-// so once they know whose they are.
-const SCREEN_TITLES = {
+/* What each built-in screen is called, in the top bar.
+
+   Every screen that is a place of its own says so in the bar rather than
+   spending the first row of its own page on a heading — which on a phone is the
+   row that matters most. The bar carries the name of whatever is in front of
+   you, and it is set again on the way in and cleared on the way out (see
+   show()).
+
+   Two screens are named after a person rather than after themselves and fill
+   this in once they know whose they are: a profile carries the person's name,
+   and a desk you are visiting says whose desk it is. Add-ons name themselves
+   the same way through ctx.brand() — Shopwatch hands over its mark and its
+   wordmark — so a built-in screen and an installed one read alike. */
+const VIEW_TITLES = {
   home: 'Home',
   map: 'My Maps',
   desk: 'Standing Desk',
   browse: 'Browse people',
   friends: 'Friends',
-  profile: 'Profile',
-  settings: 'Settings',
   features: 'Features',
+  settings: 'Settings',
+  profile: 'Profile',
   privacy: 'Privacy Policy',
   terms: 'Terms of Service',
   soul: 'Privacy Policy (rejected first draft)',
 };
+
+function navTitleNode(label) {
+  const h = document.createElement('h1');
+  h.className = 'nav-title';
+  h.textContent = label;
+  return h;
+}
 
 function show(name) {
   if (name !== 'desk') flushDeskSave(); // don't leave a board edit sitting in a timer
@@ -1548,9 +1565,9 @@ function show(name) {
   for (const [id, p] of pluginViews) p.section.hidden = name !== pluginViewName(id);
   // now that the active section is set, rebuild the outline against its map
   if (outlineOpen && (name === 'map' || name === 'profile')) buildOutline();
-  // The bar says which screen you are looking at. An add-on hands over a name
-  // and a mark of its own when it opens; every other screen is named from here.
-  if (!activePluginId || name !== pluginViewName(activePluginId)) setScreenTitle(SCREEN_TITLES[name] || '');
+  // A name in the bar belongs to the screen that put it there: an add-on hands
+  // over its own on the way in, and every other screen is named from here.
+  if (!activePluginId || name !== pluginViewName(activePluginId)) setScreenTitle(name, VIEW_TITLES[name]);
   // hide the top bar (and its hamburger) — and the app's own mark at the foot —
   // only on the full-screen auth card
   $('#topbar').hidden = name === 'auth';
@@ -1965,14 +1982,12 @@ function clearNavBrand(ownerId) {
   setNavBrand('', null);
 }
 
-// The plain case: a screen with a name and no mark. The shell owns it, so an
-// add-on opening next replaces it and leaving puts the screen's name back.
-function setScreenTitle(text) {
+// The plain case: a screen with a name and no mark. The name is the screen's
+// rather than the bar's, so it is set under that screen's own owner — an add-on
+// opening next replaces it, and leaving puts the screen's name back.
+function setScreenTitle(view, text) {
   if (!text) { clearNavBrand(''); return; }
-  const h = document.createElement('h1');
-  h.className = 'nav-title';
-  h.textContent = text;
-  setNavBrand('', h);
+  setNavBrand('view:' + view, navTitleNode(text));
 }
 
 function leaveActivePlugin(nextName) {
@@ -4511,7 +4526,7 @@ async function openProfile(username) {
     const u = data.user;
     $('#profileName').textContent = (u.name || '@' + u.username) + (viewingSelf ? ' · preview' : '');
     // the bar names the person, but only while their profile is still the screen on show
-    if (currentView === 'profile') setScreenTitle(u.name || '@' + u.username);
+    if (currentView === 'profile') setScreenTitle('profile', u.name || '@' + u.username);
     const bits = ['@' + u.username];
     if (u.bio) bits.push(u.bio);
     $('#profileHandle').textContent = bits.join(' · ');
@@ -5118,7 +5133,7 @@ async function loadSharedDesk(username, code) {
   deskOwner = data.owner;
   deskStaleDays = data.staleDays;
   // a desk you are visiting says whose it is; your own is just the Standing Desk
-  if (currentView === 'desk') setScreenTitle((deskOwner.name || '@' + deskOwner.username) + '’s Desk');
+  if (currentView === 'desk') setScreenTitle('desk', (deskOwner.name || '@' + deskOwner.username) + '’s Desk');
   renderDesk();
 }
 
@@ -5794,13 +5809,14 @@ function renderDesk() {
   const ro = !!deskOwner;
   const whose = ro ? (deskOwner.name || '@' + deskOwner.username) : '';
 
+  // The board is named in the top bar, so the rig carries only what is true of
+  // this board today: whose it is or what the date is, how it is shared, and
+  // the tallies.
   deskRoot.innerHTML = `
   <header class="dk-rig">
-    <div>
-      <div class="dk-rig__sub">${ro
-        ? `<span class="dk-rig__day">${escapeHtml(whose)}</span><span class="dk-rig__dot">·</span><span class="dk-ro">Read-only</span>`
-        : `<span class="dk-rig__day">${escapeHtml(today)}</span><span class="dk-rig__dot">·</span><button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
-    </div>
+    <div class="dk-rig__sub">${ro
+      ? `<span class="dk-rig__day">${escapeHtml(whose)}</span><span class="dk-rig__dot">·</span><span class="dk-ro">Read-only</span>`
+      : `<span class="dk-rig__day">${escapeHtml(today)}</span><span class="dk-rig__dot">·</span><button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     <div class="dk-tally">
       <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}</span></div>
       <div class="dk-tally__cell dk-tally__cell--waiting"><span class="dk-tally__k">Waiting</span><span class="dk-tally__v">${waiting.length}</span></div>

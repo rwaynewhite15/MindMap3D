@@ -327,6 +327,22 @@
   const looseMachines = () => (shop
     ? shop.machines.filter(m => !m.cellId || !cellById(m.cellId)).sort((a, b) => a.name.localeCompare(b.name))
     : []);
+  // Every machine in the order it stands on the floor: cell by cell in the order
+  // the work crosses them, then within a cell in the order the work reaches
+  // them, and the ones outside a cell after the ones inside one. It is the walk,
+  // so a list of machines read top to bottom is the floor read left to right.
+  function byPlace(a, b) {
+    const ca = cellOfMachine(a.id), cb = cellOfMachine(b.id);
+    if ((ca ? ca.id : '') !== (cb ? cb.id : '')) {
+      if (!ca) return 1;
+      if (!cb) return -1;
+      return byFlow(ca, cb);
+    }
+    const as = a.cellSeq || Infinity, bs = b.cellSeq || Infinity;
+    if (as !== bs) return as - bs;
+    return a.name.localeCompare(b.name);
+  }
+  const allMachines = () => (shop ? [...shop.machines].sort(byPlace) : []);
 
   /* ---------------- the tool layout ----------------
      The tooling for one operation, and the machines that run it. It is the
@@ -916,7 +932,7 @@
     renderChart();    // this tool's share of the layout just moved
     renderCutChart(); // and so did how much of its cycle was cutting
     renderStream();   // and the step that layout is in the part's route
-    renderFloor();    // as did the layout's measured cycle, on the floor
+    renderLists();    // as did the layout's measured cycle, wherever it is read
   }
 
   function startTick() {
@@ -1256,9 +1272,7 @@
     renderCutChart();
     renderStream();
     renderSearch();
-    renderFloor();
-    renderParts();
-    renderTools();
+    renderLists();
   }
 
   function renderWatch() {
@@ -2224,7 +2238,7 @@
         renderChart();
         renderCutChart();
         renderStream();   // the layout's step in the part's route just moved
-        renderFloor();
+        renderLists();    // and the cycle deleted was part of what they total
       }, shared ? 'Delete this cycle, taken on ' + machineName(on) : 'Delete this cycle'));
       list.appendChild(row);
     });
@@ -3313,11 +3327,12 @@
     render();
   }
 
-  /* ---------------- the three lists ----------------
-     The same records read from three ends: the parts with the operations that
-     make them, the machines with the tools set up on them, and the crib with
-     the machines each tool runs on. Which one you want depends on whether you
-     are holding a traveller, standing at a machine, or holding a tool.
+  /* ---------------- the lists ----------------
+     The same records read from four ends: the floor as it is laid out, the
+     machines with the tool layouts set on each, the parts with the operations
+     that make them, and the crib with the machines each tool runs on. Which one
+     you want depends on whether you are walking the floor, standing at one
+     machine, holding a traveller, or holding a tool.
   ---------------------------------------------------------------- */
   const hay = (...parts) => parts.filter(Boolean).join(' ').toLowerCase();
 
@@ -3347,35 +3362,68 @@
       tool && tool.partNumber, tool && tool.desc).includes(filter);
   }
 
-  // The filter narrows all three lists, so it sits above them rather than
-  // inside one of them — where folding that list away would take it with it.
+  // The filter narrows every list, so it sits above them rather than inside one
+  // of them — where folding that list away would take it with it.
   // It is built once and then left alone: typing in it redraws the lists under
   // it, and rebuilding the box you are typing in would lose the caret.
   function renderSearch() {
     const box = els.search;
-    const worth = shop && (shop.parts.length > 3 || shop.machines.length > 3 ||
+    // A filter that is on keeps its box on screen whatever the shop is sized at:
+    // the lists are narrowed, and the control that narrowed them has to be there
+    // to widen them again. So does one somebody is typing in, filter or no —
+    // clearing the last character is not a reason to take the field away.
+    const live = box.firstChild;
+    const worth = shop && (filter || (live && document.activeElement === live) ||
+      shop.parts.length > 3 || shop.machines.length > 3 ||
       shop.tools.length > 3 || shop.assignments.length > 3);
     box.hidden = !worth;
     if (!worth) { box.innerHTML = ''; return; }
     if (box.firstChild) {
-      if (box.firstChild.value !== filter) box.firstChild.value = filter;
+      if (box.firstChild.value.trim().toLowerCase() !== filter) box.firstChild.value = filter;
       return;
     }
     const search = el('input', 'mf-input mf-search');
     search.type = 'search';
-    search.placeholder = 'Filter by cell, tool layout, part, op, machine, tool…';
+    // A machine is what somebody asks for by name — it is the word painted on
+    // the side of the iron — so it is named first.
+    search.placeholder = 'Filter by machine, cell, tool layout, part, op, tool…';
     search.value = filter;
     search.addEventListener('input', () => {
       filter = search.value.trim().toLowerCase();
-      renderFloor();
-      renderParts();
-      renderTools();
+      renderLists();
     });
     box.appendChild(search);
   }
 
-  // Every list heading is a section head with a count and a fold on it, so the
-  // three of them read and behave alike.
+  // The four lists the filter narrows, redrawn together. Any of them can change
+  // what another shows — a fold opened under a machine is the same layout folded
+  // on the floor — so none of them is redrawn alone.
+  function renderLists() {
+    renderFloor();
+    renderMachines();
+    renderParts();
+    renderTools();
+  }
+
+  /* Putting something into the filter box from elsewhere on the screen: pressing
+     a machine's name on the floor is how you ask what that one runs, and the
+     answer is the Machines list below, narrowed to it.
+
+     The box is built once and then left alone — rebuilding the field you are
+     typing in loses the caret — so the value is set on the input already there,
+     and renderSearch stands one up first if the shop was too small to have had
+     one. */
+  function searchFor(term) {
+    const text = String(term || '').trim();
+    filter = text.toLowerCase();
+    renderSearch();
+    if (els.search.firstChild) els.search.firstChild.value = text;
+    renderLists();
+    if (els.machines.scrollIntoView) els.machines.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Every list heading is a section head with a count and a fold on it, so all
+  // of them read and behave alike.
   function sectionHead(key, title, count, redraw, action) {
     const head = el('div', 'mf-section-head');
     head.appendChild(foldToggle(key, title, 'mf-section-title', redraw));
@@ -3470,7 +3518,7 @@
       }
       // the operations that run here, in the order the part is made
       for (const group of layoutsByOperation(drawn)) {
-        block.appendChild(operationBlock(group, cell));
+        block.appendChild(operationBlock(group, { cell }));
       }
     }
     box.appendChild(block);
@@ -3495,7 +3543,11 @@
       });
   }
 
-  function operationBlock(group, cell) {
+  /* An operation and the layouts that cut it, under whatever is holding them.
+     `where` is where they are being read from — a cell on the floor, or one
+     machine in the Machines list — and it narrows each layout to the machines
+     that belong to that reading. */
+  function operationBlock(group, where) {
     const wrap = el('div', 'mf-op-block');
     const head = el('div', 'mf-op-head');
     const op = group.op;
@@ -3504,21 +3556,31 @@
     if (op) head.appendChild(el('span', 'mf-op-part', partName(partById(op.partId))));
     put(head, op ? wBtn('mf-link', 'Edit', () => openForm('operation', op.id)) : null);
     wrap.appendChild(head);
-    for (const l of group.layouts) wrap.appendChild(layoutBlock(l, cell));
+    for (const l of group.layouts) wrap.appendChild(layoutBlock(l, where));
     return wrap;
   }
 
   /* One tool layout under its operation: its number, the machines it is run on,
      and the pockets on it. The machines are buttons — pressing one is saying
      "I am at this machine on this layout", which is what the watch needs to
-     know before it can time anything. */
-  function layoutBlock(l, cell) {
+     know before it can time anything.
+
+     Read under one machine, that machine is the only one shown: you are already
+     standing at it, and the cycle beside the number is then the one measured
+     there rather than one averaged across every machine the layout runs on. */
+  function layoutBlock(l, where) {
+    const cell = (where && where.cell) || null;
+    const machine = (where && where.machine) || null;
     const key = 'tl:' + l.id;
     const wrap = el('div', 'mf-tl-block');
     const head = el('div', 'mf-tl-head');
-    head.appendChild(foldToggle(key, tlName(l), 'mf-tl-name', renderFloor));
+    // The same layout folded from the floor is folded in the Machines list too —
+    // it is one layout — so opening it in either redraws both.
+    head.appendChild(foldToggle(key, tlName(l), 'mf-tl-name', renderLists));
     const jobs = layoutJobs(l);
-    const machines = layoutMachines(l).filter(m => !cell || m.cellId === cell.id);
+    const machines = layoutMachines(l).filter(m => (machine
+      ? m.id === machine.id
+      : !cell || m.cellId === cell.id));
     const summary = [jobs.length + (jobs.length === 1 ? ' tool' : ' tools')];
     const timed = layoutCycle(l, machines.length === 1 ? machines[0].id : '');
     if (timed.cycle) summary.push(fmtSec(timed.cycle));
@@ -3557,7 +3619,9 @@
       return wrap;
     }
     const list = el('div', 'mf-pockets');
-    jobs.forEach((a, pos) => list.appendChild(pocketRow(a, jobs, pos, l)));
+    // Read under one machine, every pocket under it is read there too.
+    const at = machines.length === 1 ? machines[0].id : '';
+    jobs.forEach((a, pos) => list.appendChild(pocketRow(a, jobs, pos, l, at)));
     wrap.appendChild(list);
     const foot = el('div', 'mf-tl-foot');
     put(foot, wBtn('mf-link', '+ Tool', () => openForm('assignment', '', { layoutId: l.id }),
@@ -3581,14 +3645,19 @@
 
   // One pocket: what is in it, what it measures, and the press that puts the
   // watch on it.
-  function pocketRow(a, jobs, pos, l) {
+  function pocketRow(a, jobs, pos, l, machineId) {
     const row = el('div', 'mf-pocket' + (a.id === shop.activeId ? ' mf-pocket-on' : ''));
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.appendChild(el('span', 'mf-seq', a.seq ? String(a.seq) : '–'));
     if (a.station) row.appendChild(el('span', 'mf-chip', a.station));
     row.appendChild(el('span', 'mf-pocket-name', jobName(a)));
-    const st = statsFor(a, activeOnLayout(l) ? activeMachineId() : '');
+    // What this pocket measures where it is being read: at the machine the block
+    // is under, or at the one the watch is on, and otherwise across every
+    // machine the layout runs on — one number that describes none of them
+    // individually is still the honest answer to a question asked of all.
+    const at = machineId || (activeOnLayout(l) ? activeMachineId() : '');
+    const st = statsFor(a, at);
     if (st) row.appendChild(el('span', 'mf-pocket-v', fmtSec(st.avg)));
     else row.appendChild(el('span', 'mf-pocket-v mf-pocket-off', 'not timed'));
     if (canEdit() && jobs.length > 1 && !filter) {
@@ -3604,7 +3673,8 @@
     }
     put(row, wBtn('mf-link', 'Edit', e => { e.stopPropagation(); openForm('assignment', a.id); },
       'The tool in this pocket, its edges and its tool life'));
-    const choose = () => selectJob(a.id);
+    // pressing it puts the watch on this tool, at the machine it is read under
+    const choose = () => selectJob(a.id, false, machineId || '');
     row.addEventListener('click', choose);
     row.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
@@ -3614,11 +3684,15 @@
 
   const activeOnLayout = l => !!l && layoutOf(activeJob()) === l;
 
-  // A machine on the floor: what it is called, and what it is running.
+  // A machine on the floor: what it is called, and what it is running. The name
+  // is a press — it puts the machine in the filter box, which is how this screen
+  // is asked "what does this one run?", and the Machines list answers with its
+  // tool layouts in the order the operations run.
   function machineChip(m) {
     const layouts = layoutsOnMachine(m.id);
     const chip = el('span', 'mf-machine-tag');
-    chip.appendChild(el('span', 'mf-machine-tag-k', m.name));
+    chip.appendChild(button('mf-machine-tag-go', m.name, () => searchFor(m.name),
+      'Search for ' + m.name + ' — its tool layouts, by operation'));
     chip.appendChild(el('span', 'mf-machine-tag-v',
       layouts.length ? layouts.map(l => tlName(l)).join(' ') : 'no layout'));
     if (canEdit()) {
@@ -3636,6 +3710,92 @@
       layoutMachines(l).map(m => m.name).join(' '),
       layoutJobs(l).map(a => hay(a.station, a.notes, jobName(a),
         (jobTool(a) || {}).partNumber)).join(' ')).includes(filter);
+  }
+
+  /* ---------------- the machines ----------------
+     The floor above is the shop read as it is laid out — a cell, the operations
+     that run in it, the layouts that cut them. This is the same records read
+     from one machine: the question asked standing at it, or asked of it by name
+     from anywhere, which is what searching for a machine is.
+
+     A machine's name is the one word painted on the side of the iron, so it is
+     what a floor gets asked for. The answer is its tool layouts **sorted by
+     operation** — the part and the step of it, in the order the part is made —
+     rather than by layout number, because the number is only how a layout is
+     called for once you already know which one you want. Two layouts on the same
+     op sit together under it, in number order.
+  ---------------------------------------------------------------- */
+  function renderMachines() {
+    const box = els.machines;
+    box.innerHTML = '';
+    if (!shop) return;
+
+    box.appendChild(sectionHead('sec:machines', 'Machines', shop.machines.length, renderMachines,
+      wBtn('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
+    if (isFolded('sec:machines')) return;
+
+    if (!shop.machines.length) {
+      box.appendChild(el('div', 'mf-note',
+        'No machines yet. A machine stands in a cell and runs tool layouts; once there are ' +
+        'some, searching for one by name brings back everything it runs.'));
+      return;
+    }
+
+    // A machine shows if it matches, or if any layout on it does — which makes
+    // a part number or a tool number a way of asking which machines cut it.
+    const shown = allMachines().filter(m => matchesMachine(m) || layoutsOnMachine(m.id).some(matchesLayout));
+    if (!shown.length) {
+      box.appendChild(el('div', 'mf-note', 'No machine matches that.'));
+      return;
+    }
+    for (const m of shown) box.appendChild(machineBlock(m));
+  }
+
+  /* One machine: where it stands, what it runs, and how much of its work has
+     been timed. The layouts under it are gathered by operation and the
+     operations come in the order the parts are made, so the block reads as the
+     work this machine does rather than as a list of numbers that happen to be
+     set on it. */
+  function machineBlock(m) {
+    const key = 'machine:' + m.id;
+    const cell = cellOfMachine(m.id);
+    const layouts = layoutsOnMachine(m.id);
+    // A machine matched on its own name shows everything it runs; one reached
+    // through a layout shows the layouts that were being asked about.
+    const drawn = matchesMachine(m) ? layouts : layouts.filter(matchesLayout);
+    // The heading is the machine's own totals, filter or no — it is the answer a
+    // closed heading carries, and a count that moved with the search would be
+    // describing the search instead of the machine.
+    const jobs = layouts.flatMap(layoutJobs);
+
+    const block = el('div', 'mf-machine');
+    const head = el('div', 'mf-machine-head');
+    head.appendChild(foldToggle(key, m.name, 'mf-machine-k', renderMachines));
+    head.appendChild(el('div', 'mf-machine-v', [
+      cell ? cell.name : 'not in a cell',
+      layouts.length ? layouts.length + (layouts.length === 1 ? ' layout' : ' layouts') : 'no layout set',
+      jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : '',
+    ].filter(Boolean).join(' · ')));
+    const btns = el('div', 'mf-machine-btns');
+    put(btns, wBtn('mf-link', 'Clone', () => cloneMachine(m.id),
+      'A second machine of the same kind, on the layouts this one runs'));
+    put(btns, wBtn('mf-link', 'Edit', () => openForm('machine', m.id), 'This machine and its cell'));
+    head.appendChild(btns);
+    block.appendChild(head);
+
+    if (isFolded(key)) return block;
+
+    if (m.notes) block.appendChild(el('div', 'mf-note', m.notes));
+    if (!drawn.length) {
+      block.appendChild(el('div', 'mf-note', layouts.length
+        ? 'Nothing on this machine matches that.'
+        : 'No tool layout is set on this machine yet.'));
+      return block;
+    }
+    for (const group of layoutsByOperation(drawn)) {
+      block.appendChild(operationBlock(group, { machine: m }));
+    }
+    return block;
   }
 
   /* ---------------- parts and their operations ----------------
@@ -5253,6 +5413,7 @@
     els.search = el('div', 'mf-searchbox');
     els.search.hidden = true;
     els.floor = el('div', 'mf-floor');
+    els.machines = el('div', 'mf-machines');
     els.parts = el('div', 'mf-parts');
     els.tools = el('div', 'mf-tools');
     page.appendChild(els.watch);
@@ -5263,6 +5424,7 @@
     page.appendChild(els.cutchart);
     page.appendChild(els.search);
     page.appendChild(els.floor);
+    page.appendChild(els.machines);
     page.appendChild(els.parts);
     page.appendChild(els.tools);
     page.appendChild(els.stream);
