@@ -5798,8 +5798,8 @@ function renderDesk() {
   <header class="dk-rig">
     <div>
       <div class="dk-rig__sub">${ro
-        ? `${escapeHtml(whose)} &nbsp;·&nbsp; <span class="dk-ro">Read-only</span>`
-        : `${escapeHtml(today)} &nbsp;·&nbsp; <button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
+        ? `<span class="dk-rig__day">${escapeHtml(whose)}</span><span class="dk-rig__dot">·</span><span class="dk-ro">Read-only</span>`
+        : `<span class="dk-rig__day">${escapeHtml(today)}</span><span class="dk-rig__dot">·</span><button class="dk-share" data-act="share" title="Choose who can see this desk">${DESK_SHARE_LABEL[desk.visibility] || DESK_SHARE_LABEL.private}</button>`}</div>
     </div>
     <div class="dk-tally">
       <div class="dk-tally__cell dk-tally__cell--mine"><span class="dk-tally__k">Assigned</span><span class="dk-tally__v">${mine.length}</span></div>
