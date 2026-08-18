@@ -17,6 +17,15 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **A machine's cycles are its own.** Under a pocket on a tool layout that several
+  machines run, **Recorded cycles** is now one machine's list — the machine the watch is
+  on, named in the heading. What is timed there is timed on it, what is typed in by hand
+  is added to it, and the **✕** deletes a cycle taken on it; the other machine's history
+  is not on the screen to be deleted by mistake. Switching machines switches the list, its
+  count and its numbering. The cap is per machine too, so a machine run hard all week never
+  pushes the quiet one's history off the end, and a spreadsheet round trip writes a row
+  group per machine and reads it back onto the machines it was measured on — one layout
+  with both, not two that look alike.
 - **See what a cycle is not cutting.** Shopwatch's new **In cut, and the waste** chart is one
   column per tool of an operation, side by side. A column is that tool's measured cycle, and
   only the part of it marked in the cut is filled in — so the empty top of each column is the

@@ -138,6 +138,15 @@ second machine of the same kind joins by being ticked rather than by copying
 anything. The cycles stay apart: each is measured on a machine, each remembers
 which, and the screen shows the numbers for the machine you are standing at.
 
+**A machine's cycles are its own, all the way down.** Under a pocket, **Recorded
+cycles** is one machine's list — the machine the watch is on, named in the
+heading when there is more than one. What is timed there is timed on it, what is
+typed in by hand is added to it, and the **✕** deletes a cycle taken on it: the
+other machine's history is not on the screen to be removed by mistake. Switching
+machines switches the list, the count beside the heading and the numbering with
+it. The cap is per machine too, so a machine run hard all week never pushes the
+quiet one's history off the end.
+
 **Put tools in its pockets:**
 
 | Field | What it is |
@@ -573,9 +582,12 @@ anything happens, and matching records are filled in rather than duplicated.
 **⤓ Export** downloads every recorded cycle, one row each, carrying the tool
 layout it was measured on and the part, the operation, the machine, the tool and
 the setup that make up that layout — in layout order, and within a layout in the
-order the tools cut. A part with no operations, an operation nothing is set up
-for, a tool in the crib and an idle machine each get a row of their own, so the
-file is the whole record rather than only the parts that have been timed.
+order the tools cut. A pocket on a layout two machines run is **a row group per
+machine**, each carrying that machine's own cycles and its own average, because
+that is where they were measured; every cycle is written once. A part with no
+operations, an operation nothing is set up for, a tool in the crib and an idle
+machine each get a row of their own, so the file is the whole record rather than
+only the parts that have been timed.
 
 **⤒ Import** reads one back, into the open shopwatch — or, with none open, into a
 new one named after the file. It is the same shape the export writes, so a file
@@ -623,12 +635,17 @@ Import. A part is matched by number, an operation by its name within that part, 
 machine by name, a tool by its part number and description, and a setup by the
 machine, tool and operation it joins plus the pocket it sits in; each gains any
 field the file fills in and keeps everything it leaves blank. **`cell`** is matched by name and made if it is not there, and the machine on
-that row is put in it. **`tool_layout`** belongs to the machine-and-op pair a row
-names rather than to any one record, and is taken where it is free — so a file exported from here goes back in with its
-layouts still called what they were called, while a number another layout already
-answers to is left alone rather than taken off it. Cycles are
-recognized by when they were recorded and how long they took, so **importing the
-same file twice adds nothing the second time**.
+that row is put in it. **`tool_layout`** names the layout: rows carrying the same
+number, tool and pocket are **one pocket on one layout** however many machines
+they name, and each machine named for that number joins it. So a layout two
+machines run goes out as two row groups and comes back as the one layout with
+both machines on it, each keeping the cycles it was measured on — not two
+layouts that look alike. A number another layout already answers to on a
+different operation is left alone rather than taken off it, and a file with no
+layout numbers at all still reads, with each machine keeping a pocket of its own.
+Cycles are recognized by the machine they were taken on, when they were recorded
+and how long they took, so **importing the same file twice adds nothing the
+second time**.
 
 ## Coming from an earlier version
 
@@ -898,7 +915,10 @@ the grouping rather than the machines.
 Row caps, enforced on every write: 40 shopwatches per account, 20 editors and 400
 messages per shopwatch, and within one shopwatch 40 cells, 60 machines, 200 tools,
 120 parts, 300 operations, 200 tool layouts, 20 machines per layout, 200 pockets,
-300 cycles per pocket.
+300 cycles per pocket **per machine** — and 900 for a pocket across every machine
+it runs on. What drops when a machine is full is that machine's own oldest cycle;
+when the pocket is full it is the machines holding the most that give up first,
+down to an equal share, so a short history is never spent on a long one.
 
 ## What it stores, and where
 
@@ -956,7 +976,8 @@ any operation whose part is gone, any setup whose tool or machine is gone and an
 tool layout whose pair is gone or has no tools left on it, numbers every pair that
 has tools and none, gives a duplicated number away to the first layout claiming
 it, and holds the record to sensible limits (120 parts, 300 operations, 60
-machines, 200 tools, 200 setups, 200 tool layouts, 300 recorded cycles each) — the same guard whether the record
+machines, 200 tools, 200 setups, 200 tool layouts, 300 recorded cycles per machine
+on a pocket and 900 across it) — the same guard whether the record
 came from its owner or from somebody they invited. The client owns the state on
 screen and autosaves it; a recorded cycle is sent at once rather than on the
 debounce, because it is the one thing here that cannot be retyped from memory. A
