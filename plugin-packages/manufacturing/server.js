@@ -58,7 +58,8 @@ const MAX_ASSIGNMENTS = 200;      // tool-on-machine-for-an-operation links
 const MAX_LAYOUTS = 200;          // tool layouts on one floor
 const MAX_LAYOUT_MACHINES = 20;   // machines running one layout
 const MAX_LAYOUT_NUMBER = 9999;   // what a tool layout is called on the floor
-const MAX_RUNS = 300;             // recorded cycles kept per assignment, newest first
+const MAX_RUNS = 300;             // recorded cycles kept for one pocket on one machine
+const MAX_POCKET_RUNS = 900;      // and for that pocket across every machine it runs on
 const MAX_RUN_SEC = 86400;        // a single cycle longer than a day is a stuck timer
 const MAX_EDGES = 64;             // cutting edges on one tool
 const MAX_PARTS_PER_INDEX = 100000; // parts between one edge index and the next
@@ -89,6 +90,48 @@ module.exports = function (ctx) {
     out.createdAt = Number.isFinite(created) && created > 0 ? Math.min(created, Date.now()) : Date.now();
     out.updatedAt = Number.isFinite(updated) && updated > 0 ? Math.min(updated, Date.now()) : out.createdAt;
     return out;
+  }
+
+  /* How many cycles a pocket keeps, and whose drop when it is full.
+
+     The cap is per machine. A layout run on two machines has two histories
+     under the same pocket, and a busy machine must not push a quiet one's
+     cycles out: each keeps its own newest MAX_RUNS, and the oldest of that
+     machine are the ones that go. A pocket as a whole is still bounded, and
+     when it is over that ceiling the machines with the most give up cycles
+     first — down to an equal share before anybody below it loses one. Cycles
+     that name no machine are a machine of their own, since that is what they
+     are: measurements from a time before the layout could say. */
+  function fairShare(sizes, budget) {
+    const asc = [...sizes].sort((a, b) => a - b);
+    let left = budget;
+    for (let i = 0; i < asc.length; i++) {
+      const share = Math.floor(left / (asc.length - i));
+      if (asc[i] > share) return share;   // this machine and every bigger one keep `share`
+      left -= asc[i];                     // it fits whole; its slack goes to the rest
+    }
+    return Infinity;                      // the budget covers every machine in full
+  }
+
+  function trimRuns(runs) {
+    const byMachine = new Map();
+    for (const r of runs) {
+      const key = r.machineId || '';
+      if (!byMachine.has(key)) byMachine.set(key, []);
+      byMachine.get(key).push(r);
+    }
+    const groups = [...byMachine.values()];
+    for (const g of groups) {
+      g.sort((x, y) => y.at - x.at);      // newest first, so it is the oldest that drop
+      if (g.length > MAX_RUNS) g.length = MAX_RUNS;
+    }
+    if (groups.reduce((n, g) => n + g.length, 0) > MAX_POCKET_RUNS) {
+      const share = fairShare(groups.map(g => g.length), MAX_POCKET_RUNS);
+      for (const g of groups) if (g.length > share) g.length = share;
+    }
+    const kept = [].concat(...groups);
+    kept.sort((x, y) => y.at - x.at);
+    return kept;
   }
 
   // One recorded cycle: how long the part took, when it was timed, and — where
@@ -252,13 +295,14 @@ module.exports = function (ctx) {
       notes: text(raw.notes, 400),
       runs: [],
     });
+    const runs = [];
     for (const raw2 of list(raw.runs)) {
       const run = sanitizeRun(raw2, machineIds);
-      if (run) a.runs.push(run);
-      if (a.runs.length >= MAX_RUNS) break;
+      if (run) runs.push(run);
     }
-    // Newest first, so trimming to the limit above drops the oldest cycles.
-    a.runs.sort((x, y) => y.at - x.at);
+    // Sorted and trimmed together, so what drops is the oldest rather than
+    // whatever the client happened to send last.
+    a.runs = trimRuns(runs);
     return a;
   }
 
@@ -337,9 +381,8 @@ module.exports = function (ctx) {
       for (const raw2 of list(raw.runs)) {
         const run = sanitizeRun(raw2);
         if (run) runs.push(run);
-        if (runs.length >= MAX_RUNS) break;
       }
-      runs.sort((x, y) => y.at - x.at);
+      const kept = trimRuns(runs);
 
       // A record with no machine on it still ran somewhere; it is put on one
       // machine named for that, rather than dropped or left dangling.
@@ -376,7 +419,7 @@ module.exports = function (ctx) {
       }
 
       if (shop.assignments.length >= MAX_ASSIGNMENTS) continue;
-      const avg = runs.length ? runs.reduce((sum, r) => sum + r.sec, 0) / runs.length : 0;
+      const avg = kept.length ? kept.reduce((sum, r) => sum + r.sec, 0) / kept.length : 0;
       // Version 1 held tool life as cutting minutes per edge. In parts, that is
       // the life divided by the cycle it was measured against — so with nothing
       // timed there is no cycle to divide by, and the old figure is carried
@@ -401,7 +444,7 @@ module.exports = function (ctx) {
         indexEdges: old.indexes,
         partsPerIndex,
         notes,
-        runs,
+        runs: kept,
       });
       shop.assignments.push(assignment);
       const wasId = text(raw.id, 24);
@@ -630,6 +673,7 @@ module.exports = function (ctx) {
     maxLayoutMachines: MAX_LAYOUT_MACHINES,
     maxLayoutNumber: MAX_LAYOUT_NUMBER,
     maxRuns: MAX_RUNS,
+    maxPocketRuns: MAX_POCKET_RUNS,
     maxRunSec: MAX_RUN_SEC,
     maxEdges: MAX_EDGES,
     maxPartsPerIndex: MAX_PARTS_PER_INDEX,

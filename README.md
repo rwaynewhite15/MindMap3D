@@ -17,6 +17,15 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **A machine's cycles are its own.** Under a pocket on a tool layout that several
+  machines run, **Recorded cycles** is now one machine's list — the machine the watch is
+  on, named in the heading. What is timed there is timed on it, what is typed in by hand
+  is added to it, and the **✕** deletes a cycle taken on it; the other machine's history
+  is not on the screen to be deleted by mistake. Switching machines switches the list, its
+  count and its numbering. The cap is per machine too, so a machine run hard all week never
+  pushes the quiet one's history off the end, and a spreadsheet round trip writes a row
+  group per machine and reads it back onto the machines it was measured on — one layout
+  with both, not two that look alike.
 - **See what a cycle is not cutting.** Shopwatch's new **In cut, and the waste** chart is one
   column per tool of an operation, side by side. A column is that tool's measured cycle, and
   only the part of it marked in the cut is filled in — so the empty top of each column is the
@@ -159,15 +168,28 @@ and turns on **AI generation** simply by setting environment variables.
   in cut, the part's process time, a cell's machines. What is kept on the device is what
   you have **opened**, so records added later arrive closed too. Searching opens
   everything, so a filter can never be answered by a closed heading.
-- **The open screen puts its name in the top bar.** The bar has no title of its own — it
+- **Search by machine, and get its tool layouts sorted by operation.** A machine's name is
+  the one word painted on the side of the iron, so it is what a floor gets asked for.
+  Typing it in the filter box — or pressing the name on a machine tag on the floor, which
+  puts it there for you — brings back that machine and everything it runs, gathered under
+  the operation each layout cuts and in the order the part is made rather than in layout-
+  number order. Every cycle shown is the one measured **at that machine**, and pressing a
+  pocket there puts the watch on that tool, at that machine. Ask with a part number or a
+  tool instead and the list turns around: the machines that cut it.
+- **The top bar always says which page you are on.** The bar has no title of its own — it
   is the account's toolbar and its notification bell, aligned right — and the slot at its
-  left holds whatever is on show: **Home**, **My Maps**, **Standing Desk**, **Browse
-  people**, **Friends**, **Features**, **Settings**, and an add-on's own name and mark,
-  which is how **Shopwatch** puts its stopwatch up there. It is cleared on the way out, so
-  a screen's name never sits over somebody else's, and a screen that sets none — a
-  person's profile, which carries their name in its own bar, or a legal page, whose title
-  belongs to the document — leaves the bar exactly as it was. That is a row every screen
-  underneath gets back, which on a phone is the row that matters most.
+  left holds the name of whatever is on show: **Home**, **My Maps**, **Standing Desk**,
+  **Browse people**, **Friends**, **Features**, **Settings**, the legal pages, and an
+  add-on's own name and mark, which is how **Shopwatch** puts its stopwatch up there. Two
+  screens are named after a person rather than themselves: a profile carries whose it is,
+  and a desk you are visiting reads *Dana Okoye's Desk*. It is cleared on the way out, so
+  a screen's name never sits over somebody else's. Nothing repeats the name in the page
+  below it, so every screen gets that row back — which on a phone is the row that matters
+  most.
+- **The app's mark sits at the foot of every page** — the three bubbles and the name, small
+  and quiet, on every screen but the sign-in card. It is drawn rather than fetched, so it
+  takes the palette with it and costs no request, and it is not a link: it says whose app
+  this is and nothing else.
 - **The Standing Desk** — a second page for every account, next to your maps. Where a map
   holds ideas, the desk holds open work: items **assigned to you**, items you are **waiting
   on** from someone else, and the number of days since each was last updated — so a request
@@ -837,7 +859,8 @@ window.MindMapPlugins.register({
 
 `ctx` is the whole of what a plugin gets from the shell: `ctx.api(path, method, body)` for
 its own routes, `ctx.me()` for who is signed in, `ctx.go(sub)` to move around inside its
-own screen.
+own screen, and `ctx.brand(node)` to put a name and a mark of its own in the top bar — the
+same slot the built-in screens are named in, handed back the moment the add-on is left.
 
 The server module is a factory, called once at startup:
 

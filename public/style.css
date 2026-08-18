@@ -52,9 +52,9 @@ input, textarea { font-family: inherit; }
   border-bottom: 1px solid var(--line);
   z-index: 30;
 }
-/* The open screen's own name, at the left of the bar. Empty for the screens
-   that do not set one, where it collapses to nothing and the toolbar sits where
-   it always did. */
+/* The name of the screen on show, at the left of the bar — a plain title for
+   the app's own screens, a mark and a name for an add-on that hands one over.
+   Empty it collapses to nothing and the toolbar sits where it always did. */
 .nav-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .nav-brand:not(:empty) { margin-right: auto; }
 /* A built-in screen's name. It takes the bar's scale rather than a page
@@ -250,6 +250,30 @@ main > section { position: absolute; inset: 0; display: flex; flex-direction: co
 main > section > * { min-width: 0; }
 main > section[hidden] { display: none; }
 
+/* ---------------- the app's mark, at the foot ----------------
+   A quiet line under every screen: three bubbles and the name, kept short
+   enough that a full-bleed map loses almost nothing to it. Not a link — it
+   says whose app this is and nothing else. */
+.site-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 5px 12px;
+  padding-bottom: max(5px, env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  z-index: 30;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.site-mark { width: 17px; height: 17px; flex: none; }
+.site-mark__dot { fill: var(--accent); }
+.site-name { font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+.site-name span { color: var(--accent); }
+
 /* ---------------- auth ---------------- */
 #view-auth { align-items: center; justify-content: center; overflow-y: auto; padding: 20px 14px; }
 .auth-card {
@@ -285,7 +309,7 @@ main > section[hidden] { display: none; }
 .legal-nav a { color: var(--accent); }
 .legal-egg { color: var(--dim); opacity: 0.5; font-size: 12px; }
 .legal-egg a { color: inherit; }
-.legal-draft, .legal-meta strong { color: var(--danger); }
+.legal-meta strong { color: var(--danger); }
 .legal-doc code { background: var(--line); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 .auth-tabs { display: flex; gap: 6px; margin-bottom: 18px; }
 .auth-tabs button {
@@ -1517,8 +1541,11 @@ button.primary {
 }
 /* The board's name is in the top bar with every other screen's, so the rig
    opens on the line that is only true of this board: whose it is, or today's
-   date and how it is shared. */
+   date and how it is shared. The day carries that line — it is what the board
+   is as of, and the biggest thing left in the header. */
 .dk-rig__sub { font-family: var(--dk-mono); font-size: 11px; color: var(--dk-ink-3); letter-spacing: 0.04em; }
+.dk-rig__day { font-size: 19px; line-height: 1.15; letter-spacing: 0.02em; color: var(--dk-board); }
+.dk-rig__dot { color: var(--dk-ink-2); margin: 0 9px; }
 /* sharing state in the header: a button when the board is yours, plain text
    when you are reading someone else's */
 .dk-share {

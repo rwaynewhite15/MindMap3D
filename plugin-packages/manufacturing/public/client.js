@@ -44,7 +44,7 @@
   let shop = null;          // { machines, tools, parts, operations, assignments, activeId }
   let limits = {
     maxMachines: 60, maxTools: 200, maxParts: 120,
-    maxOperations: 300, maxAssignments: 200, maxRuns: 300,
+    maxOperations: 300, maxAssignments: 200, maxRuns: 300, maxPocketRuns: 900,
   };
   let dirty = false;
   let saveTimer = null;
@@ -470,18 +470,62 @@
     return m ? m.id : '';
   };
 
-  /* The numbers for one pocket, on one machine. A layout run on two machines
-     has two sets of cycles under the same pocket, and averaging them together
-     would describe neither — so the machine is part of the question. Passing no
-     machine asks about every cycle on the pocket, whichever machine it came
-     from, which is what a layout with one machine amounts to anyway.
+  /* The cycles on one pocket, on one machine, and the numbers they come to. A
+     layout run on two machines has two sets of cycles under the same pocket:
+     averaging them together would describe neither, and listing them together
+     would offer one machine's cycles to be deleted from the other's screen — so
+     the machine is part of the question. Passing no machine asks about every
+     cycle on the pocket, whichever machine it came from, which is what a layout
+     with one machine amounts to anyway.
 
      A cycle recorded before a layout could name its machine has none on it;
      those answer to any machine rather than to none, since at the time there
      was only one. */
-  function statsFor(a, machineId) {
+  function runsOn(a, machineId) {
     const all = (a && a.runs) || [];
-    const runs = machineId ? all.filter(r => !r.machineId || r.machineId === machineId) : all;
+    return machineId ? all.filter(r => !r.machineId || r.machineId === machineId) : all;
+  }
+
+  /* How many cycles a pocket keeps, and whose drop when it is full. The same
+     rule the server keeps, so what is on the screen is what is stored: the cap
+     is per machine, so a busy machine never pushes a quiet one's history off
+     the end, and when the pocket as a whole is over its ceiling the machines
+     holding the most give up cycles first, down to an equal share. */
+  function fairShare(sizes, budget) {
+    const asc = [...sizes].sort((a, b) => a - b);
+    let left = budget;
+    for (let i = 0; i < asc.length; i++) {
+      const share = Math.floor(left / (asc.length - i));
+      if (asc[i] > share) return share;
+      left -= asc[i];
+    }
+    return Infinity;
+  }
+
+  function trimRuns(runs) {
+    const byMachine = new Map();
+    for (const r of runs) {
+      const key = r.machineId || '';
+      if (!byMachine.has(key)) byMachine.set(key, []);
+      byMachine.get(key).push(r);
+    }
+    const groups = [...byMachine.values()];
+    for (const g of groups) {
+      g.sort((x, y) => y.at - x.at);      // newest first, so it is the oldest that drop
+      if (g.length > limits.maxRuns) g.length = limits.maxRuns;
+    }
+    const ceiling = limits.maxPocketRuns || limits.maxRuns;
+    if (groups.reduce((n, g) => n + g.length, 0) > ceiling) {
+      const share = fairShare(groups.map(g => g.length), ceiling);
+      for (const g of groups) if (g.length > share) g.length = share;
+    }
+    const kept = [].concat(...groups);
+    kept.sort((x, y) => y.at - x.at);
+    return kept;
+  }
+
+  function statsFor(a, machineId) {
+    const runs = runsOn(a, machineId);
     if (!runs.length) return null;
     let sum = 0, best = Infinity, worst = 0;
     let cutSum = 0, cutCount = 0, cutCycleSum = 0;
@@ -875,7 +919,9 @@
     // cannot say where it came from cannot be told from one that can.
     const on = machineId || activeMachineId();
     a.runs.unshift({ id: newId('r'), sec, cut: inCut, machineId: on, at: at || Date.now(), note: '' });
-    if (a.runs.length > limits.maxRuns) a.runs.length = limits.maxRuns;
+    // A machine's history is only ever shortened by that machine's own newer
+    // cycles, so timing on one does not push the other one's oldest off the end.
+    a.runs = trimRuns(a.runs);
     touch(a);
     // what the others in this shopwatch see happen, in their chat
     saveNote = 'timed ' + jobName(a) + ' at ' + fmtSec(sec) +
@@ -886,7 +932,7 @@
     renderChart();    // this tool's share of the layout just moved
     renderCutChart(); // and so did how much of its cycle was cutting
     renderStream();   // and the step that layout is in the part's route
-    renderFloor();    // as did the layout's measured cycle, on the floor
+    renderLists();    // as did the layout's measured cycle, wherever it is read
   }
 
   function startTick() {
@@ -1356,7 +1402,9 @@
     box.appendChild(els.time);
 
     const line = el('div', 'mf-lapline');
-    const last = a.runs.length ? a.runs[0] : null;
+    // the last cycle on the machine the watch is on, not the last on the pocket
+    const mine = runsOn(a, activeMachineId());
+    const last = mine.length ? mine[0] : null;
     line.textContent = watch.laps
       ? watch.laps + (watch.laps === 1 ? ' cycle this run' : ' cycles this run') +
         (last ? ' · last ' + fmtSec(last.sec) : '')
@@ -2122,15 +2170,26 @@
     return wrap;
   }
 
+  /* Recorded cycles, on the machine the watch is on. A pocket on a layout that
+     two machines run holds both machines' cycles, and this list is one
+     machine's: what is added here is added on that machine, what is deleted
+     here was taken on it, and the other machine's history is not on the screen
+     to be deleted by mistake. Switching machines switches the list. */
   function renderRuns() {
     const box = els.runs;
     box.innerHTML = '';
     const a = activeJob();
     if (!a) return;
+    const on = activeMachineId();
+    const machines = layoutMachines(layoutOf(a));
+    const shared = machines.length > 1;   // worth saying whose cycles these are
+    const runs = runsOn(a, on);
 
     const head = el('div', 'mf-section-head');
-    head.appendChild(foldToggle('sec:runs', 'Recorded cycles', 'mf-section-title', renderRuns));
-    head.appendChild(el('span', 'mf-fold-count', String(a.runs.length)));
+    head.appendChild(foldToggle('sec:runs',
+      shared ? 'Recorded cycles on ' + machineName(on) : 'Recorded cycles',
+      'mf-section-title', renderRuns));
+    head.appendChild(el('span', 'mf-fold-count', String(runs.length)));
     const add = el('div', 'mf-addtime');
     const input = el('input', 'mf-input mf-input-time');
     input.placeholder = 'mm:ss.t';
@@ -2143,20 +2202,26 @@
     };
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
     add.appendChild(input);
-    add.appendChild(button('mf-btn mf-btn-sm', 'Add', commit, 'Record a time measured somewhere else'));
+    add.appendChild(button('mf-btn mf-btn-sm', 'Add', commit,
+      'Record a time measured somewhere else' + (shared ? ', on ' + machineName(on) : '')));
     if (canEdit()) head.appendChild(add);
     box.appendChild(head);
     if (isFolded('sec:runs')) return;
 
-    if (!a.runs.length) {
-      box.appendChild(el('div', 'mf-note', 'Nothing timed against this setup yet.'));
+    if (!runs.length) {
+      box.appendChild(el('div', 'mf-note', shared
+        ? 'Nothing timed against this setup on ' + machineName(on) + ' yet.' +
+          (a.runs.length ? ' The ' + a.runs.length +
+            (a.runs.length === 1 ? ' cycle' : ' cycles') + ' on this pocket were taken on ' +
+            'the other machines it runs on — pick one to see them.' : '')
+        : 'Nothing timed against this setup yet.'));
       return;
     }
 
     const list = el('div', 'mf-runs-list');
-    a.runs.forEach((r, i) => {
+    runs.forEach((r, i) => {
       const row = el('div', 'mf-run');
-      row.appendChild(el('div', 'mf-run-n', '#' + (a.runs.length - i)));
+      row.appendChild(el('div', 'mf-run-n', '#' + (runs.length - i)));
       row.appendChild(el('div', 'mf-run-t', fmtSec(r.sec)));
       if (r.cut > 0) {
         const cutCell = el('div', 'mf-run-cut', fmtSec(r.cut) + ' cut');
@@ -2172,8 +2237,9 @@
         renderRuns();
         renderChart();
         renderCutChart();
-        renderLists();  // the cycle just deleted was part of what they total
-      }, 'Delete this cycle'));
+        renderStream();   // the layout's step in the part's route just moved
+        renderLists();    // and the cycle deleted was part of what they total
+      }, shared ? 'Delete this cycle, taken on ' + machineName(on) : 'Delete this cycle'));
       list.appendChild(row);
     });
     box.appendChild(list);
@@ -3553,7 +3619,9 @@
       return wrap;
     }
     const list = el('div', 'mf-pockets');
-    jobs.forEach((a, pos) => list.appendChild(pocketRow(a, jobs, pos, l)));
+    // Read under one machine, every pocket under it is read there too.
+    const at = machines.length === 1 ? machines[0].id : '';
+    jobs.forEach((a, pos) => list.appendChild(pocketRow(a, jobs, pos, l, at)));
     wrap.appendChild(list);
     const foot = el('div', 'mf-tl-foot');
     put(foot, wBtn('mf-link', '+ Tool', () => openForm('assignment', '', { layoutId: l.id }),
@@ -3577,14 +3645,19 @@
 
   // One pocket: what is in it, what it measures, and the press that puts the
   // watch on it.
-  function pocketRow(a, jobs, pos, l) {
+  function pocketRow(a, jobs, pos, l, machineId) {
     const row = el('div', 'mf-pocket' + (a.id === shop.activeId ? ' mf-pocket-on' : ''));
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.appendChild(el('span', 'mf-seq', a.seq ? String(a.seq) : '–'));
     if (a.station) row.appendChild(el('span', 'mf-chip', a.station));
     row.appendChild(el('span', 'mf-pocket-name', jobName(a)));
-    const st = statsFor(a, activeOnLayout(l) ? activeMachineId() : '');
+    // What this pocket measures where it is being read: at the machine the block
+    // is under, or at the one the watch is on, and otherwise across every
+    // machine the layout runs on — one number that describes none of them
+    // individually is still the honest answer to a question asked of all.
+    const at = machineId || (activeOnLayout(l) ? activeMachineId() : '');
+    const st = statsFor(a, at);
     if (st) row.appendChild(el('span', 'mf-pocket-v', fmtSec(st.avg)));
     else row.appendChild(el('span', 'mf-pocket-v mf-pocket-off', 'not timed'));
     if (canEdit() && jobs.length > 1 && !filter) {
@@ -3600,7 +3673,8 @@
     }
     put(row, wBtn('mf-link', 'Edit', e => { e.stopPropagation(); openForm('assignment', a.id); },
       'The tool in this pocket, its edges and its tool life'));
-    const choose = () => selectJob(a.id);
+    // pressing it puts the watch on this tool, at the machine it is read under
+    const choose = () => selectJob(a.id, false, machineId || '');
     row.addEventListener('click', choose);
     row.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
@@ -3950,9 +4024,11 @@
 
   const lower = v => String(v || '').trim().toLowerCase();
   const toolKeyOf = (partNumber, desc) => ((partNumber || '') + ' ' + (desc || '')).trim().toLowerCase();
-  const opKeyOf = (partKey, name) => partKey + '\u0000' + lower(name);
+  // a separator no cell can contain, so two fields can never run together
+  const SEP = '\u0000';
+  const opKeyOf = (partKey, name) => partKey + SEP + lower(name);
   const jobKeyOf = (machineKey, toolKey, operationKey, station) =>
-    [machineKey, toolKey, operationKey, lower(station)].join('\u0000');
+    [machineKey, toolKey, operationKey, lower(station)].join(SEP);
 
   // A CSV reader that handles what a spreadsheet actually writes: quoted fields,
   // "" for a quote inside one, commas and newlines inside quotes, and CRLF.
@@ -4147,16 +4223,23 @@
       const p = partById(o.partId);
       return [opKeyOf(lower(p && (p.number || p.desc)), o.name), o];
     }));
-    const jobByKey = new Map(shop.assignments.map(a => {
+    // A pocket is found by the machine the row names — any of the machines its
+    // layout runs on, not only the first. A file that names the second machine
+    // is timing the same pocket on it, not describing a second pocket.
+    const jobByKey = new Map();
+    for (const a of shop.assignments) {
       const tool = jobTool(a);
       const op = jobOperation(a);
       const part = jobPart(a);
       const machines = layoutMachines(layoutOf(a));
-      return [jobKeyOf(lower(machines.length ? machines[0].name : ''),
-        toolKeyOf(tool && tool.partNumber, tool && tool.desc),
-        op ? opKeyOf(lower(part && (part.number || part.desc)), op.name) : '',
-        a.station), a];
-    }));
+      const names = machines.length ? machines.map(m => lower(m.name)) : [''];
+      for (const name of names) {
+        jobByKey.set(jobKeyOf(name,
+          toolKeyOf(tool && tool.partNumber, tool && tool.desc),
+          op ? opKeyOf(lower(part && (part.number || part.desc)), op.name) : '',
+          a.station), a);
+      }
+    }
     let partRoom = Math.max(0, limits.maxParts - shop.parts.length);
     let opRoom = Math.max(0, limits.maxOperations - shop.operations.length);
     let machineRoom = Math.max(0, limits.maxMachines - shop.machines.length);
@@ -4201,35 +4284,79 @@
       else plan.overflowTools++;
     }
 
+    /* Rows carrying the same tool layout number, tool and station are one
+       pocket however many machines they name. A layout two machines run is
+       written out as a row group per machine, and reading it back it is the
+       same pocket on the same layout, not one pocket each — the cycles under
+       it are simply each machine's own. A file with no layout numbers has
+       nothing to say they belong together, so there each machine keeps its
+       own pocket, exactly as before. */
+    const pockets = new Map();
     for (const link of read.links) {
-      // a link whose machine or tool could not be made has nothing to join
-      const machineIn = machineByKey.has(link.machineKey) || newMachines.has(link.machineKey);
-      const toolIn = toolByKey.has(link.toolKey) || newTools.has(link.toolKey);
-      if (!machineIn || !toolIn) { plan.overflowJobs++; continue; }
-      // an op that did not fit leaves the tool on the machine with none set
-      const opIn = !link.operationKey || opByKey.has(link.operationKey) || newOps.has(link.operationKey);
+      const key = link.layout
+        ? ['#' + link.layout, link.toolKey, lower(link.fields.station || '')].join(SEP)
+        : link.key;
+      if (!pockets.has(key)) pockets.set(key, []);
+      pockets.get(key).push(link);
+    }
 
-      const match = jobByKey.get(link.key);
-      // A cycle is the same cycle if it was recorded at the same moment and ran
-      // the same length, so the same file imported twice adds nothing the second
-      // time. Rows repeated inside one file collapse the same way.
-      const seen = new Set((match ? match.runs : []).map(r => r.at + ':' + r.sec));
+    for (const group of pockets.values()) {
+      const toolIn = toolByKey.has(group[0].toolKey) || newTools.has(group[0].toolKey);
+      // a row whose machine or tool could not be made has nothing to join
+      const rows = group.filter(link =>
+        machineByKey.has(link.machineKey) || newMachines.has(link.machineKey));
+      if (!toolIn || !rows.length) { plan.overflowJobs++; continue; }
+      const first = rows[0];
+      // an op that did not fit leaves the tool on the machine with none set
+      const opIn = !first.operationKey || opByKey.has(first.operationKey) || newOps.has(first.operationKey);
+      // the pocket this is already, found by any of the machines it runs on
+      const match = rows.map(link => jobByKey.get(link.key)).find(Boolean);
+
+      /* A cycle is the same cycle if it was taken on the same machine, at the
+         same moment, and ran the same length, so the same file imported twice
+         adds nothing the second time, and rows repeated inside one file
+         collapse the same way. Machines are held by name here rather than by
+         id, because a machine the file itself creates has no id yet — the
+         cycle carries the name through the plan and is stamped with the id on
+         the way in. */
+      const nameOf = id => {
+        const m = machineById(id);
+        return m ? lower(m.name) : '';
+      };
+      const runKey = (mKey, r) => mKey + ':' + r.at + ':' + r.sec;
+      const seen = new Set((match ? match.runs : []).map(r => runKey(nameOf(r.machineId), r)));
       const fresh = [];
-      for (const r of link.runs) {
-        const key = r.at + ':' + r.sec;
-        if (seen.has(key)) { plan.dupeRuns++; continue; }
-        seen.add(key);
-        fresh.push(r);
+      const fields = {};
+      const mine = new Map();   // machine → how many cycles it would end up with
+      for (const link of rows) {
+        Object.assign(fields, link.fields);
+        // Every cycle on this row was taken on the machine the row names, and
+        // says so from here on: a pocket two machines run keeps their cycles
+        // apart, and an imported one that could not say which it came from
+        // would be counted under both.
+        const mKey = link.machineKey;
+        if (!mine.has(mKey)) {
+          mine.set(mKey, match ? match.runs.filter(r => nameOf(r.machineId) === mKey).length : 0);
+        }
+        for (const r of link.runs) {
+          if (seen.has(runKey(mKey, r))) { plan.dupeRuns++; continue; }
+          seen.add(runKey(mKey, r));
+          fresh.push({ ...r, machineKey: mKey });
+          mine.set(mKey, mine.get(mKey) + 1);
+        }
       }
-      const kept = (match ? match.runs.length : 0) + fresh.length;
-      if (kept > limits.maxRuns) plan.overflowRuns += kept - limits.maxRuns;
+      // the cap is per machine, so what can roll off is that machine's own
+      for (const kept of mine.values()) {
+        if (kept > limits.maxRuns) plan.overflowRuns += kept - limits.maxRuns;
+      }
+      const machineKeys = rows.map(link => link.machineKey);
       if (match) {
         plan.newRuns += fresh.length;
-        plan.update.push({ job: match, fields: link.fields, runs: fresh, layout: link.layout });
+        plan.update.push({ job: match, fields, runs: fresh, layout: first.layout, machineKeys });
       } else if (jobRoom > 0) {
         jobRoom--;
         plan.newRuns += fresh.length;
-        plan.add.push({ link, runs: fresh, withOp: opIn });
+        plan.add.push({ link: first, fields, machineKeys, runs: fresh, withOp: opIn });
       } else {
         plan.overflowJobs++;
       }
@@ -4325,23 +4452,41 @@
       toolByKey.set(t.key, tool);
     }
 
-    /* A row names a machine and an operation; the layout is the pair of them.
-       One is found among the layouts already on that op and that machine, or
-       made — with the number the file gave it where that number is free, since
-       a file that came out of here carries what its layouts were called. */
+    /* The layout a set of rows belongs to. The number in the file names it
+       first: a file that came out of here carries what its layouts were
+       called, and a row group for the second machine of a layout two machines
+       run is that layout, joining it rather than starting another. Failing a
+       number, one is found among the layouts already on that op and one of
+       those machines, or made. */
     if (!Array.isArray(shop.layouts)) shop.layouts = [];
-    const layoutFor = (machine, operation, wanted) => {
+    const joinLayout = (l, machines) => {
+      const ids = l.machineIds || [];
+      const room = limits.maxLayoutMachines || 20;
+      const added = machines.filter(m => m && !ids.includes(m.id)).slice(0, Math.max(0, room - ids.length));
+      if (added.length) {
+        l.machineIds = [...ids, ...added.map(m => m.id)];
+        touch(l);
+      }
+      return l;
+    };
+    const layoutFor = (machines, operation, wanted) => {
+      const opId = operation ? operation.id : '';
+      const on = machines.filter(Boolean);
+      const numbered = wanted ? layoutList().find(l => l.number === wanted) : null;
+      // a number that already names a layout on another operation is somebody
+      // else's, so it is not taken over — the search below finds or makes one
+      if (numbered && (numbered.operationId || '') === opId) return joinLayout(numbered, on);
       const found = layoutList().find(l =>
-        (l.operationId || '') === (operation ? operation.id : '') &&
-        (machine ? (l.machineIds || []).includes(machine.id) : !(l.machineIds || []).length));
-      if (found) return found;
+        (l.operationId || '') === opId &&
+        (on.length ? on.some(m => (l.machineIds || []).includes(m.id)) : !(l.machineIds || []).length));
+      if (found) return joinLayout(found, on);
       if (shop.layouts.length >= (limits.maxLayouts || 200)) return null;
       const taken = new Set(layoutList().map(l => l.number));
       const made = {
         id: newId('l'),
         number: wanted && !taken.has(wanted) ? wanted : nextLayoutNumber(),
-        operationId: operation ? operation.id : '',
-        machineIds: machine ? [machine.id] : [],
+        operationId: opId,
+        machineIds: on.map(m => m.id).slice(0, limits.maxLayoutMachines || 20),
         notes: '',
         createdAt: now,
         updatedAt: now,
@@ -4350,27 +4495,37 @@
       return made;
     };
 
+    // A planned cycle carries the name of the machine it was taken on; here,
+    // where every machine the file made exists, that becomes the machine's id.
+    const stampRuns = list => list.map(r => {
+      const m = machineByKey.get(r.machineKey);
+      const run = { ...r, machineId: m ? m.id : '' };
+      delete run.machineKey;
+      return run;
+    });
+
     const touched = new Set();
     for (const u of plan.update) {
       Object.assign(u.job, u.fields);
-      u.job.runs = [...u.runs, ...u.job.runs].sort((a, b) => b.at - a.at).slice(0, limits.maxRuns);
+      u.job.runs = trimRuns([...stampRuns(u.runs), ...u.job.runs]);
+      // a file that names a machine this layout was not known to run puts it on
+      const layout = layoutById(u.job.layoutId);
+      if (layout) joinLayout(layout, (u.machineKeys || []).map(k => machineByKey.get(k)));
       touch(u.job);
       touched.add(u.job.layoutId);
     }
     for (const a of plan.add) {
-      const machine = machineByKey.get(a.link.machineKey);
+      const machines = (a.machineKeys || [a.link.machineKey]).map(k => machineByKey.get(k)).filter(Boolean);
       const tool = toolByKey.get(a.link.toolKey);
       if (!tool) continue;
       const operation = a.link.operationKey ? opByKey.get(a.link.operationKey) : null;
-      const layout = layoutFor(machine, operation, a.link.layout);
+      const layout = layoutFor(machines, operation, a.link.layout);
       if (!layout) continue;
       const job = {
         id: newId('a'), toolId: tool.id, layoutId: layout.id,
         station: '', seq: 0, indexEdges: 0, partsPerIndex: 0, notes: '',
-        ...a.link.fields,
-        runs: a.runs
-          .map(r => ({ ...r, machineId: machine ? machine.id : '' }))
-          .sort((x, y) => y.at - x.at).slice(0, limits.maxRuns),
+        ...(a.fields || a.link.fields),
+        runs: trimRuns(stampRuns(a.runs)),
         createdAt: now, updatedAt: now,
       };
       // a tool set up without saying how many edges are indexed there uses
@@ -4439,7 +4594,8 @@
     for (const [n, one, many, cap] of overflow) {
       if (n) notes.push(n + ' ' + (n === 1 ? one : many) + ' will not fit — this account holds ' + cap + '.');
     }
-    if (plan.overflowRuns) notes.push('The oldest cycles on some setups will roll off at ' + limits.maxRuns + ' each.');
+    if (plan.overflowRuns) notes.push('The oldest cycles on some setups will roll off at ' +
+      limits.maxRuns + ' per machine.');
     notes.push('Nothing is deleted by an import.');
     for (const n of notes) box.appendChild(el('div', 'mf-note', n));
 
@@ -4527,29 +4683,40 @@
       return bySeq(a, b);
     });
     for (const a of jobs) {
-      const s = statsFor(a);
-      const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
       const layout = layoutOf(a);
       const machines = layoutMachines(layout);
-      const base = {
-        tool_layout: layout ? layout.number : '',
-        ...machineCells(machines.length ? machines[0].id : ''),
-        ...opCells(jobOperation(a)),
-        ...toolCells(jobTool(a)),
-        seq: a.seq || '', station: a.station,
-        indexable_edges: a.indexEdges || '',
-        parts_per_index: a.partsPerIndex || '', notes: a.notes,
-        cycles_timed: s ? s.count : 0,
-        average_seconds: s ? round(s.avg, 2) : '',
-        parts_per_tool: life ? life.partsPerTool || '' : '',
-      };
-      if (!a.runs.length) { push(base); continue; }
-      for (const r of a.runs) {
-        push({ ...base,
-          cycle_seconds: round(r.sec, 2),
-          cycle_cut_seconds: r.cut ? round(r.cut, 2) : '',
-          recorded_at: new Date(r.at).toISOString() });
-      }
+      // A pocket on a layout two machines run is two sets of rows, one per
+      // machine, each carrying that machine's own cycles and its own average.
+      // Written under one machine they would all come back under it on the way
+      // in, which is not where they were measured.
+      const on = machines.length ? machines.map(m => m.id) : [''];
+      on.forEach((id, i) => {
+        const s = statsFor(a, id);
+        const life = lifeFor(a, s ? s.avg : 0, s ? s.avgCut : 0);
+        const base = {
+          tool_layout: layout ? layout.number : '',
+          ...machineCells(id),
+          ...opCells(jobOperation(a)),
+          ...toolCells(jobTool(a)),
+          seq: a.seq || '', station: a.station,
+          indexable_edges: a.indexEdges || '',
+          parts_per_index: a.partsPerIndex || '', notes: a.notes,
+          cycles_timed: s ? s.count : 0,
+          average_seconds: s ? round(s.avg, 2) : '',
+          parts_per_tool: life ? life.partsPerTool || '' : '',
+        };
+        // A cycle that names no machine counts towards every machine's numbers
+        // but is written once, under the first, so a round trip does not turn
+        // one measurement into several.
+        const mine = runsOn(a, id).filter(r => r.machineId || i === 0);
+        if (!mine.length) { push(base); return; }
+        for (const r of mine) {
+          push({ ...base,
+            cycle_seconds: round(r.sec, 2),
+            cycle_cut_seconds: r.cut ? round(r.cut, 2) : '',
+            recorded_at: new Date(r.at).toISOString() });
+        }
+      });
     }
     // the whole floor, not only the timed part of it: an operation nothing is
     // set up for, a part with no operations, a tool in the crib, an idle machine

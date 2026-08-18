@@ -11,12 +11,11 @@
 <body>
 
 <header id="topbar" hidden>
-  <!-- The screen that is open puts its own name here, if it has one to put. The
-       bar itself still carries no title of its own: what fills this is whatever
-       is on show, and it is cleared on the way out of that screen. Every screen
-       that is a place in its own right — the desk, the feed, an add-on like
-       Shopwatch — names itself here rather than spending a row of its own page
-       on it; see VIEW_TITLES in app.js, and ctx.brand() for an add-on. -->
+  <!-- The name of the page being viewed. The bar carries no title of its own:
+       what fills this is whatever is on show, set on the way in and cleared on
+       the way out. Every screen names itself here — the desk, the feed, a legal
+       page, an add-on like Shopwatch — rather than spending a row of its own
+       page on it; see VIEW_TITLES in app.js, and ctx.brand() for an add-on. -->
   <div id="navBrand" class="nav-brand"></div>
   <div id="notifWrap" hidden>
     <button id="notifBell" aria-label="Notifications" aria-expanded="false" aria-controls="notifPanel">
@@ -291,7 +290,6 @@
   <!-- ============ PRIVACY POLICY (the real one) ============ -->
   <section id="view-privacy" hidden>
     <div class="page narrow legal-doc">
-      <h1>Privacy Policy</h1>
       <p class="legal-meta">Last updated: 23 July 2026</p>
 
       <p class="legal-intro">This Privacy Policy explains what information MindMapShare ("we," "us," or "the Service") collects, how we use it, and the choices you have. We aim to collect as little as possible and to be plain about it. If anything here is unclear, contact us (Section 10).</p>
@@ -356,7 +354,6 @@
   <!-- ============ TERMS OF SERVICE ============ -->
   <section id="view-terms" hidden>
     <div class="page narrow legal-doc">
-      <h1>Terms of Service</h1>
       <p class="legal-meta">Last updated: 23 July 2026</p>
 
       <p class="legal-intro">These Terms govern your use of MindMapShare (the "Service"). By creating an account or using the Service, you agree to these Terms. If you don't agree, please don't use the Service.</p>
@@ -404,7 +401,6 @@
   <!-- ============ THE "OLD DRAFT" (satire — easter egg) ============ -->
   <section id="view-soul" hidden>
     <div class="page narrow legal-doc">
-      <h1>Privacy Policy <span class="legal-draft">(rejected first draft)</span></h1>
       <p class="legal-meta">Last updated: the moment you started reading this. Effective: retroactively, across all timelines. <strong>This is not our actual policy</strong> — see the <a href="#/privacy">real one</a>.</p>
 
       <p class="legal-intro">Welcome to <strong>MindMapShare</strong> ("we," "us," "the Custodians of Your Essence"). We take your privacy extremely seriously, which is why we have written it down in a document you will not read before clicking "I agree." This Privacy Policy explains what we collect, why we collect it, and the several ethereal planes to which we will eventually upload you.</p>
@@ -455,6 +451,20 @@
   </section>
 
 </main>
+
+<!-- The app's own mark, small, at the foot of every page: three bubbles and the
+     lines between them, which is what the app is. It is drawn rather than
+     fetched, takes the palette with it, and is not a link — it says whose app
+     this is and nothing more. -->
+<footer id="siteFoot" class="site-foot" hidden>
+  <svg class="site-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M7.4 8.6 16 6.2M7.9 11.4 15.6 16.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+    <circle cx="5.6" cy="10" r="3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <circle cx="17.6" cy="5.6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <circle class="site-mark__dot" cx="17.2" cy="17.6" r="2.8"/>
+  </svg>
+  <span class="site-name">MindMap<span>Share</span></span>
+</footer>
 
 <!-- ============ BOTTOM SHEETS ============ -->
 <div id="sheetShade" hidden></div>
