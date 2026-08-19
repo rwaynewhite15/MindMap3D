@@ -127,9 +127,10 @@ and turns on **AI generation** simply by setting environment variables.
   operations, one into the next. A part's operations in order, the machines
   each runs on and the cells those stand in are a route, and every step of it already
   has a measured rate underneath it, so the **Value stream** panel draws the part's
-  route as process boxes in operation order, one per machine, with the step's own rate
-  over them where several machines make it between them, and the cell each machine
-  stands in written on the step. It is paced by its slowest step and names it. It draws only what has been measured: inventory, changeover and
+  route as process boxes in operation order, one per machine, with **what that operation
+  makes an hour** at the head of every step — the machines under it being where that
+  number comes from — and the cell each machine stands in written on the step. It is
+  paced by its slowest step and names it. It draws only what has been measured: inventory, changeover and
   lead time are not in the record, so they are not on the map, and it says so.
 - **Tool layouts, numbered, shared and charted.** A layout is the tooling for one
   operation and **the machines that run it** — two identical lathes running the same op off

@@ -564,19 +564,25 @@
 .mf-step { display: flex; align-items: center; gap: 8px; }
 .mf-step-arrow { color: var(--dim); font-size: 15px; flex: none; }
 .mf-step-boxes { display: flex; flex-direction: column; gap: 6px; }
-/* what the machines under it make between them: the step's own rate, over the
-   boxes that add up to it */
-.mf-step-together {
+/* The operation's own rate, at the head of the step: what it makes an hour over
+   the machines that make it, which is the number the boxes under it add up to. */
+.mf-step-rate {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 7px;
   font-family: var(--mf-mono);
   font-size: 11px;
-  font-weight: 700;
   letter-spacing: 0.04em;
-  color: var(--accent);
   border: 1px dashed var(--line);
   border-radius: 8px;
   padding: 3px 9px;
-  text-align: center;
 }
+.mf-step-op { font-weight: 700; color: var(--ink); }
+.mf-step-uph { font-weight: 700; color: var(--accent); }
+.mf-step-how { color: var(--dim); font-size: 10.5px; }
+.mf-step-rate-off .mf-step-uph { color: var(--dim); font-weight: 400; }
 .mf-box {
   background: var(--bg);
   border: 1px solid var(--line);

@@ -460,12 +460,19 @@ stream — where the part goes, in what order, and how long each step takes — 
 the **Value stream** panel draws it from what the record already holds. Nothing
 is entered for it.
 
-**The map** is a box per machine running the step, in the order the operations
-run, with an arrow between steps — the arrow being the only thing that feeds
-anything, one operation into the next. Each box carries the step number, the
-operation, the tool layout it runs as, the machine and **the cell that machine
-stands in**, what that machine makes an hour, the cycle behind it, how many tools
-are on it and what share of that cycle is in cut.
+**Every step says what its operation makes an hour**, at the head of the step:
+the operation, its **UPH**, and — where more than one machine runs it — how many
+are running it at once. That is the operation's own number rather than any one
+machine's, and it is the one the route is paced by.
+
+**The map** under that head is a box per machine running the step, in the order
+the operations run, with an arrow between steps — the arrow being the only thing
+that feeds anything, one operation into the next. Each box carries the step
+number, the operation, the tool layout it runs as, the machine and **the cell
+that machine stands in**, what that machine makes an hour on its own, the cycle
+behind it, how many tools are on it and what share of that cycle is in cut. The
+boxes are where the step's rate comes from: one machine and they say the same
+thing, several and they add up to it.
 
 The cell is written on the step rather than drawn as a lane the part is handed
 between, because cells do not feed each other: where a machine stands is a fact

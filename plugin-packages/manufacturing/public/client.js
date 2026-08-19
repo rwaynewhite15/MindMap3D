@@ -2183,7 +2183,7 @@
        the route, and two steps in different areas are not a handover between
        them — they are just where those machines happen to stand. */
     const flow = el('div', 'mf-flow');
-    steps.forEach((st, i) => flow.appendChild(streamBox(st, i, total)));
+    steps.forEach((st, i) => flow.appendChild(streamBox(st, i, total, part)));
     box.appendChild(flow);
 
     // Where the process time goes, across the steps that have been measured —
@@ -2261,19 +2261,25 @@
       'not drawn.'));
   }
 
-  // One process box: the step, where it happens, and what it measures.
-  function streamBox(st, i, total) {
+  // One step of the route: what the operation makes an hour, and the machines
+  // that make it — a box each, with what each of them measures on its own.
+  function streamBox(st, i, total, part) {
     const wrap = el('div', 'mf-step');
     if (i) wrap.appendChild(el('div', 'mf-step-arrow', '→'));
     const boxes = el('div', 'mf-step-boxes');
-    // Machines on one operation run at once, so the step makes what they make
-    // between them — said over the boxes rather than left to be added up.
-    if (st.parallel > 1) {
-      const together = el('div', 'mf-step-together',
-        st.parallel + ' at once · ' + fmtUph(st.uph) + ' UPH');
-      together.title = 'One every ' + fmtSec(st.cycle) + ' between them';
-      boxes.appendChild(together);
+    /* What the operation makes an hour, over the machines that make it. It is
+       the step's own number rather than any one machine's — where two run it at
+       once their rates add — so it is said once, at the head of the step, and
+       the boxes underneath are where it comes from. */
+    const rate = el('div', 'mf-step-rate' + (st.uph ? '' : ' mf-step-rate-off'));
+    rate.appendChild(el('span', 'mf-step-op', st.op.name));
+    rate.appendChild(el('span', 'mf-step-uph', st.uph ? fmtUph(st.uph) + ' UPH' : 'not timed'));
+    if (st.parallel > 1) rate.appendChild(el('span', 'mf-step-how', st.parallel + ' at once'));
+    if (st.uph) {
+      rate.title = 'One ' + partName(part) + ' off ' + st.op.name + ' every ' + fmtSec(st.cycle) +
+        (st.parallel > 1 ? ' between the ' + st.parallel + ' machines running it' : '');
     }
+    boxes.appendChild(rate);
     const routes = st.routes.length ? st.routes : [null];
     for (const route of routes) {
       const b = el('div', 'mf-box');
@@ -5067,15 +5073,19 @@
     .varrow { color: var(--dim); font-size: 12px; }
     .vboxes { display: flex; flex-direction: column; gap: 4px; }
     .vbox { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; min-width: 116px; }
-    .vtogether {
-      font: 700 7.5pt/1.3 ui-monospace, monospace;
+    .vrate {
+      display: flex; align-items: baseline; justify-content: center;
+      flex-wrap: wrap; gap: 2mm;
+      font: 7.5pt/1.3 ui-monospace, monospace;
       letter-spacing: 0.04em;
       padding: 1mm 2mm;
       border: 0.3mm dashed var(--line);
       border-radius: 6px;
-      text-align: center;
-      color: var(--accent);
     }
+    .vrate-op { font-weight: 700; }
+    .vrate-uph { font-weight: 700; color: var(--accent); }
+    .vrate-how { color: var(--dim); font-size: 7pt; }
+    .vrate.off .vrate-uph { color: var(--dim); font-weight: 400; }
     .vtop { display: flex; align-items: center; gap: 5px; }
     .vn { font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--dim); }
     .vop { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; }
@@ -5321,12 +5331,15 @@
     // happens is written on the step.
     const boxHtml = (st, i) => {
       const routes = st.routes.length ? st.routes : [null];
-      // Machines on one operation run at once, so the step makes what they make
-      // between them — said once above the boxes rather than left to be added up.
-      const together = st.parallel > 1
-        ? '<div class="vtogether">' + st.parallel + ' machines at once · ' +
-          escHtml(fmtUph(st.uph)) + ' UPH · one every ' + escHtml(fmtSec(st.cycle)) + '</div>'
-        : '';
+      // What the operation makes an hour, over the machines that make it — the
+      // step's own number, said once at its head, with the boxes under it as
+      // where it came from.
+      const together = '<div class="vrate' + (st.uph ? '' : ' off') + '">' +
+        '<span class="vrate-op">' + escHtml(st.op.name) + '</span>' +
+        '<span class="vrate-uph">' + (st.uph ? escHtml(fmtUph(st.uph)) + ' UPH' : 'not timed') + '</span>' +
+        (st.uph ? '<span class="vrate-how">one every ' + escHtml(fmtSec(st.cycle)) +
+          (st.parallel > 1 ? ' · ' + st.parallel + ' at once' : '') + '</span>' : '') +
+        '</div>';
       return '<div class="vstep">' + (i ? '<div class="varrow">&rarr;</div>' : '') +
         '<div class="vboxes">' + together + routes.map(route =>
           '<div class="vbox">' +
