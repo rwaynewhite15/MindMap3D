@@ -100,12 +100,19 @@ spreadsheet out of one and importing it into another.
 
 **Add a cell**, if the floor is laid out in them. A cell is an area — *Cell 1 —
 turning*, *the mill cell*, *the deburr bench* — and it holds the machines that
-work together:
+work together. Its name is all there is to it:
 
 | Field | What it is |
 | --- | --- |
 | Cell | What that area of the floor is called |
-| Flow order | Where the cell falls in the flow across the floor — 1 is first |
+
+**Cells do not feed each other, and have no order among themselves.** They are
+areas, listed by name so you can find one. What feeds what is a part's
+**operations**, cut in the order the part is made — one op into the next — and
+where each of those happens is a fact about the machine that cuts it rather than
+a position the area it stands in holds. So there is nowhere to say a cell comes
+"first": two steps in one area are not a stage of a route, and two steps in
+different areas are not a handover between them.
 
 **Add a machine**, and say which cell it stands in and where the work reaches it
 in that cell. Both are optional: a floor that is not laid out in cells works
@@ -452,11 +459,15 @@ the **Value stream** panel draws it from what the record already holds. Nothing
 is entered for it.
 
 **The map** is a box per machine running the step, in the order the operations
-run, banded by the cell the step happens in, with an arrow between steps and the
-handover from one cell to the next where the band changes. Each box carries the
-step number, the operation, the tool layout it runs as, the machine, **what that
-machine makes an hour**, the cycle behind it, how many tools are on it and what
-share of that cycle is in cut. Under the boxes, the part's process time divided between its
+run, with an arrow between steps — the arrow being the only thing that feeds
+anything, one operation into the next. Each box carries the step number, the
+operation, the tool layout it runs as, the machine and **the cell that machine
+stands in**, what that machine makes an hour, the cycle behind it, how many tools
+are on it and what share of that cycle is in cut.
+
+The cell is written on the step rather than drawn as a lane the part is handed
+between, because cells do not feed each other: where a machine stands is a fact
+about the machine, not a stage of the journey. Under the boxes, the part's process time divided between its
 steps on the same light→dark ramp the tool layout bar uses, and a table giving
 every step as text — including the ones with nothing measured and the ones with
 no machine set up yet.
@@ -700,6 +711,12 @@ second time**.
 Records are converted the first time they are read, in steps that each undo one
 shape the record used to have. Nothing is discarded and no number is invented.
 
+**Version 7** gave a cell a flow order — where it fell in the flow across the
+floor. Cells do not feed each other, so there was nothing for that number to
+order: a part's route is its operations, and where each of those is cut is a
+fact about the machine rather than a position its area holds. The field is
+dropped on the way in. Nothing else read it, and cells are now listed by name.
+
 **Version 1** kept one flat record per tool, with the machine as a field on it —
 so the same tool on two machines was two unrelated records and nothing linked
 them. Each old record becomes a machine, a tool and the setup between the two;
@@ -802,7 +819,6 @@ CREATE TABLE cell (                 -- an area of the floor
   id           text PRIMARY KEY,
   shopwatch_id text NOT NULL REFERENCES shopwatch(id) ON DELETE CASCADE,
   name         text NOT NULL CHECK (length(name) <= 60),
-  seq          int  NOT NULL DEFAULT 0 CHECK (seq BETWEEN 0 AND 999),  -- flow order
   notes        text NOT NULL DEFAULT '' CHECK (length(notes) <= 400),
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL

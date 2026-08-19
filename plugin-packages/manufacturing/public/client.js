@@ -322,19 +322,19 @@
   const jobName = a => toolName(jobTool(a));
 
   /* ---------------- cells ----------------
-     An area of the floor: the machines that work together, in the order the work
-     flows through them. A machine belongs to one cell or to none — not every
-     floor is laid out in cells, and one that is has machines standing outside
-     them. The cell is where the value stream starts: a part crosses cells in the
-     order its operations run, and that crossing is the map.
+     An area of the floor and the machines standing in it. A machine belongs to
+     one cell or to none — not every floor is laid out in cells, and one that is
+     has machines standing outside them.
+
+     Cells do not feed each other and have no order among themselves. What feeds
+     what is a part's operations, cut in the order the part is made; where each
+     of those happens is a fact about the machine that cuts it, not a position
+     the area it stands in holds. So cells are listed by name, which is a way of
+     finding one rather than a claim about how work moves.
   ---------------------------------------------------------------- */
   const cellList = () => (shop && Array.isArray(shop.cells) ? shop.cells : []);
-  const byFlow = (a, b) => {
-    const as = a.seq || Infinity, bs = b.seq || Infinity;
-    if (as !== bs) return as - bs;
-    return (a.name || '').localeCompare(b.name || '');
-  };
-  const allCells = () => [...cellList()].sort(byFlow);
+  const byCellName = (a, b) => (a.name || '').localeCompare(b.name || '');
+  const allCells = () => [...cellList()].sort(byCellName);
   const cellOfMachine = id => {
     const m = machineById(id);
     return m && m.cellId ? cellById(m.cellId) : null;
@@ -359,7 +359,7 @@
     if ((ca ? ca.id : '') !== (cb ? cb.id : '')) {
       if (!ca) return 1;
       if (!cb) return -1;
-      return byFlow(ca, cb);
+      return byCellName(ca, cb);
     }
     const as = a.cellSeq || Infinity, bs = b.cellSeq || Infinity;
     if (as !== bs) return as - bs;
@@ -2159,28 +2159,17 @@
       return;
     }
 
-    /* The map itself: a box per step in the order the operations run, banded by
-       the cell each step happens in, with an arrow between boxes. A step whose
-       cell changes starts a new band, because that is the handover — the point
-       where the part is carried from one area of the floor to the next. */
+    /* The map itself: a box per step in the order the operations run, with an
+       arrow between them. The arrow is the only thing that feeds anything —
+       one operation into the next, which is what a part's route is.
+
+       The cell each step happens in is written on the step rather than drawn as
+       a lane the part is handed between. Cells do not feed each other and have
+       no order among themselves: two steps in the same area are not a stage of
+       the route, and two steps in different areas are not a handover between
+       them — they are just where those machines happen to stand. */
     const flow = el('div', 'mf-flow');
-    let bandCell = undefined, band = null;
-    steps.forEach((st, i) => {
-      const route = st.lead;
-      const cell = route ? route.cell : null;
-      const cellId = cell ? cell.id : '';
-      if (bandCell === undefined || cellId !== bandCell) {
-        bandCell = cellId;
-        band = el('div', 'mf-band');
-        const label = el('div', 'mf-band-k', cell ? cell.name : (route ? 'Not in a cell' : 'No machine yet'));
-        band.appendChild(label);
-        const lane = el('div', 'mf-band-lane');
-        band.appendChild(lane);
-        band.lane = lane;
-        flow.appendChild(band);
-      }
-      band.lane.appendChild(streamBox(st, i, total));
-    });
+    steps.forEach((st, i) => flow.appendChild(streamBox(st, i, total)));
     box.appendChild(flow);
 
     // Where the process time goes, across the steps that have been measured —
@@ -2279,8 +2268,13 @@
       top.appendChild(el('span', 'mf-box-op', st.op.name));
       if (route && route.layout) top.appendChild(el('span', 'mf-tl mf-tl-sm', tlName(route.layout)));
       b.appendChild(top);
-      b.appendChild(el('div', 'mf-box-machine',
+      const where = el('div', 'mf-box-machine');
+      where.appendChild(document.createTextNode(
         route ? (route.machineId ? machineName(route.machineId) : 'No machine set') : 'No layout yet'));
+      // where that machine stands, as a fact about the machine rather than as a
+      // stage of the route
+      if (route && route.cell) where.appendChild(el('span', 'mf-box-cell', route.cell.name));
+      b.appendChild(where);
       const time = el('div', 'mf-box-time', route && route.cycle ? fmtUph(route.uph) + ' UPH' : '—');
       if (route && route.cycle) time.title = 'One every ' + fmtSec(route.cycle) + ' at this machine';
       b.appendChild(time);
@@ -2382,11 +2376,11 @@
       hint: 'Where the work reaches this machine in its cell — 1 is first' },
   ];
 
+  // A cell is a name and the machines standing in it. It has no flow order:
+  // cells do not feed each other, so there is nothing for a number to order.
   const CELL_FIELDS = [
     { key: 'name', label: 'Cell', placeholder: 'Cell 1 — turning', wide: true,
       hint: 'What this area of the floor is called' },
-    { key: 'seq', label: 'Flow order', placeholder: '1', num: true,
-      hint: 'Where the cell falls in the flow across the floor — 1 is first' },
   ];
 
   const TOOL_FIELDS = [
@@ -2478,8 +2472,7 @@
       draft.number = String(nextLayoutNumber());
       if (!draft.operationId && shop.operations.length === 1) draft.operationId = shop.operations[0].id;
     } else if (kind === 'cell') {
-      draft = { id: '', name: '', seq: '', notes: '', ...(preset || {}) };
-      draft.seq = String(cellList().reduce((max, c) => Math.max(max, c.seq || 0), 0) + 1);
+      draft = { id: '', name: '', notes: '', ...(preset || {}) };
     } else if (kind === 'machine') {
       draft = { id: '', name: '', cellId: '', cellSeq: '', notes: '', ...(preset || {}) };
       // A floor with one cell has no question to ask; with more, the machine
@@ -2571,17 +2564,16 @@
   }
 
   /* ---------------- a cell ----------------
-     The machines that work together, and where the cell falls in the flow. A
-     cell holds nothing of its own beyond that: which machines are in it is a
-     field on the machine, and what runs through it is read off the operations
-     those machines cut.
+     A name for an area of the floor, and nothing else: which machines are in it
+     is a field on the machine, and what runs through it is read off the
+     operations those machines cut.
   ---------------------------------------------------------------- */
   function saveCell(draft) {
     const name = cleanText(draft.name);
     if (!name) return fail('A cell needs a name — whatever that area of the floor is called.');
     const clash = cellList().find(c => c.id !== draft.id && c.name.toLowerCase() === name.toLowerCase());
     if (clash) return fail('There is already a cell called ' + clash.name + '.');
-    const cell = { name, seq: Math.floor(cleanNum(draft.seq)), notes: cleanText(draft.notes).slice(0, 400) };
+    const cell = { name, notes: cleanText(draft.notes).slice(0, 400) };
     const existing = cellById(draft.id);
     let created = null;
     if (existing) {
@@ -4502,7 +4494,6 @@
       if (shop.cells.length >= (limits.maxCells || 40)) return '';
       const made = {
         id: newId('c'), name: String(name).trim().slice(0, 60),
-        seq: shop.cells.reduce((max, c) => Math.max(max, c.seq || 0), 0) + 1,
         notes: '', createdAt: now, updatedAt: now,
       };
       shop.cells.push(made);
@@ -4954,13 +4945,8 @@
 
     /* the value stream page: the route across its cells, then the boxes */
     .no.vsm { font-size: 20px; letter-spacing: 0.06em; }
-    .vband { border-left: 2px solid var(--accent); padding-left: 8px; margin-bottom: 8px; }
-    .vband:last-child { margin-bottom: 0; }
-    .vband-k {
-      font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase;
-      color: var(--accent); font-weight: 600; margin-bottom: 4px;
-    }
     .vlane { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; }
+    .vcell { color: var(--dim); }
     .vstep { display: flex; align-items: center; gap: 6px; }
     .varrow { color: var(--dim); font-size: 12px; }
     .vboxes { display: flex; flex-direction: column; gap: 4px; }
@@ -5214,16 +5200,9 @@
         '</div>' +
       '</div>';
 
-    // the boxes, banded by cell the way the screen bands them
-    const bands = [];
-    steps.forEach((st, i) => {
-      const route = st.lead;
-      const cell = route ? route.cell : null;
-      const key = cell ? cell.id : (route ? 'none' : 'nomachine');
-      const label = cell ? cell.name : (route ? 'Not in a cell' : 'No machine set up');
-      if (!bands.length || bands[bands.length - 1].key !== key) bands.push({ key, label, steps: [] });
-      bands[bands.length - 1].steps.push({ st, i });
-    });
+    // One step after another in the order the operations are cut, the same as
+    // the screen: no lanes, because cells do not feed each other. Where a step
+    // happens is written on the step.
     const boxHtml = (st, i) => {
       const routes = st.routes.length ? st.routes : [null];
       // Machines on one operation run at once, so the step makes what they make
@@ -5241,7 +5220,9 @@
             '</div>' +
             '<div class="vmachine">' + escHtml(route
               ? (route.machineId ? machineName(route.machineId) : 'No machine set')
-              : 'No layout yet') + '</div>' +
+              : 'No layout yet') +
+              (route && route.cell ? '<span class="vcell"> &middot; ' + escHtml(route.cell.name) + '</span>' : '') +
+            '</div>' +
             '<div class="vtime">' + (route && route.cycle ? fmtUph(route.uph) + ' UPH' : '—') + '</div>' +
             '<div class="vmeta">' + escHtml([
               route && route.cycle ? fmtSec(route.cycle) : '',
@@ -5251,15 +5232,14 @@
           '</div>').join('') +
         '</div></div>';
     };
-    // the cells it actually crosses — a band for steps with no cell, or no
-    // machine at all, is not one of them
-    const crossed = new Set(bands.map(b => b.key).filter(k => k !== 'none' && k !== 'nomachine')).size;
+    // The areas the work is done in — named, not ordered: a cell is where a
+    // machine stands, and the route is the operations rather than the areas.
+    const areas = [...new Set(steps.map(st => (st.lead && st.lead.cell ? st.lead.cell.name : ''))
+      .filter(Boolean))];
     const flow = '<div class="panel"><div class="panel-head"><span class="k">Route</span>' +
-      '<span class="v">' + (crossed
-        ? 'through ' + crossed + (crossed === 1 ? ' cell' : ' cells')
-        : 'no cells set') + '</span></div>' +
-      bands.map(b => '<div class="vband"><div class="vband-k">' + escHtml(b.label) + '</div>' +
-        '<div class="vlane">' + b.steps.map(x => boxHtml(x.st, x.i)).join('') + '</div></div>').join('') +
+      '<span class="v">' + escHtml(steps.length + (steps.length === 1 ? ' operation' : ' operations') +
+        (areas.length ? ' · ' + areas.join(', ') : '')) + '</span></div>' +
+      '<div class="vlane">' + steps.map((st, i) => boxHtml(st, i)).join('') + '</div>' +
       '</div>';
 
     const bar = measured.length > 1

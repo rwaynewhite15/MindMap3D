@@ -557,17 +557,10 @@
   border-radius: 12px;
   padding: 14px;
 }
-.mf-flow { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 12px; }
-.mf-band { border-left: 2px solid var(--accent); padding-left: 10px; }
-.mf-band-k {
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-.mf-band-lane { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; }
+/* The route: one step after another, in the order the operations are cut. There
+   are no lanes in it — cells do not feed each other, so the area a step happens
+   in is written on the step rather than drawn as a stage of the journey. */
+.mf-flow { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
 .mf-step { display: flex; align-items: center; gap: 8px; }
 .mf-step-arrow { color: var(--dim); font-size: 15px; flex: none; }
 .mf-step-boxes { display: flex; flex-direction: column; gap: 6px; }
@@ -610,6 +603,9 @@
 }
 .mf-box-op { font-family: var(--mf-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
 .mf-box-machine { font-size: 12px; margin-top: 3px; }
+/* where that machine stands — a fact about the machine, not a stage of the route */
+.mf-box-cell { color: var(--dim); font-size: 11px; }
+.mf-box-cell::before { content: ' · '; }
 .mf-box-time {
   font-family: var(--mf-mono);
   font-size: 17px;

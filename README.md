@@ -120,12 +120,14 @@ and turns on **AI generation** simply by setting environment variables.
   file twice adds nothing the second time.
 - **Work cells, and the value stream that falls out of them.** Machines group into
   **cells** — an area of the floor, its machines in the order the work reaches them —
-  and each cell says what it makes an hour. A part's operations in order, the machines
+  and each cell says what it makes an hour, which is its slowest operation. Cells have
+  no order among themselves and do not feed each other: what feeds what is a part's
+  operations, one into the next. A part's operations in order, the machines
   each runs on and the cells those stand in are a route, and every step of it already
   has a measured rate underneath it, so the **Value stream** panel draws the part's
-  route as process boxes banded by cell, one box per machine, with the step's own rate
-  over them where several machines make it between them. It is paced by its slowest
-  step and names it. It draws only what has been measured: inventory, changeover and
+  route as process boxes in operation order, one per machine, with the step's own rate
+  over them where several machines make it between them, and the cell each machine
+  stands in written on the step. It is paced by its slowest step and names it. It draws only what has been measured: inventory, changeover and
   lead time are not in the record, so they are not on the map, and it says so.
 - **Tool layouts, numbered, shared and charted.** A layout is the tooling for one
   operation and **the machines that run it** — two identical lathes running the same op off

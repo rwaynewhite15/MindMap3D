@@ -160,8 +160,13 @@ module.exports = function (ctx) {
     };
   }
 
-  // One cell: an area of the floor. Its seq is where it falls in the flow, so a
-  // part moving cell to cell reads in the order it actually moves.
+  /* One cell: an area of the floor and the machines standing in it. Nothing
+     else — a cell has no position in a flow, because cells do not feed each
+     other. What feeds what is the operations of a part, in the order they are
+     cut, and where those happen to be cut is a fact about the machines rather
+     than an ordering of the areas they stand in. A record written when a cell
+     carried a flow order loses it here; nothing read it but the ordering of a
+     list, which is now by name. */
   function sanitizeCell(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const name = text(raw.name, 60);
@@ -169,7 +174,6 @@ module.exports = function (ctx) {
     return stamp(raw, {
       id: text(raw.id, 24) || newId(),
       name,
-      seq: num(raw.seq, MAX_SEQ, true),
       notes: text(raw.notes, 400),
     });
   }
@@ -329,7 +333,7 @@ module.exports = function (ctx) {
 
   function emptyShop() {
     return {
-      version: 7,
+      version: 8,
       cells: [], machines: [], tools: [], parts: [], operations: [], assignments: [],
       layouts: [], activeId: '', updatedAt: 0,
     };
