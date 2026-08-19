@@ -17,6 +17,13 @@ and turns on **AI generation** simply by setting environment variables.
 
 ## What's new
 
+- **Three numbers per step of the value stream.** A floor asks three questions of a step
+  and with two machines on it they have three different answers: **UPH** is what it makes
+  in an hour, the machines' rates added since they run at once; **cycle** is what one part
+  takes there, their cycles averaged, since whichever machine it goes to it is on that one
+  for about that long; **part to part** is how often one comes off with both running, in
+  minutes. Two lathes at 00:36.0 each: 200 UPH, a 00:36.0 cycle, 0.3 min part to part. Open
+  a machine in the map and its cycle comes apart into the tools that make it.
 - **Shopwatch answers in UPH, and parallel machines add up.** A floor is asked how many
   parts an hour it makes, not how many seconds one takes, so every rate on the screen is
   now **units per hour** — a tool, a layout, a machine, an operation, a cell, a whole part —
@@ -128,10 +135,9 @@ and turns on **AI generation** simply by setting environment variables.
   each runs on and the cells those stand in are a route, and every step of it already
   has a measured rate underneath it, so the **Value stream** panel draws the part's
   route as process boxes in operation order, one per machine, with **what that operation
-  makes an hour and the effective cycle that comes to** at the head of every step — the
-  machines under it being where those come from — and the cell each machine stands in
-  written on the step. Both numbers again in the table under the map. It is paced by its
-  slowest step and names it. It draws only what has been measured: inventory, changeover and
+  makes an hour, its cycle and its part-to-part time** at the head of every step — and any
+  machine there opens onto the tools its cycle is made of. The same three numbers again in
+  the table under the map. It is paced by its slowest step and names it. It draws only what has been measured: inventory, changeover and
   lead time are not in the record, so they are not on the map, and it says so.
 - **Tool layouts, numbered, shared and charted.** A layout is the tooling for one
   operation and **the machines that run it** — two identical lathes running the same op off

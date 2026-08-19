@@ -461,16 +461,20 @@ the **Value stream** panel draws it from what the record already holds. Nothing
 is entered for it.
 
 **Every step says what its operation makes an hour**, at the head of the step:
-the operation, its **UPH**, its **effective cycle** — how long one part takes
-coming off that step at that rate — and, where more than one machine runs it, how
-many are running it at once. Those are the operation's own numbers rather than
-any one machine's, and they are what the route is paced by. With two machines on
-a step the effective cycle is neither machine's: two lathes at 00:36.0 each put a
-part out every 00:18.0 between them.
+the operation, its **UPH**, its **cycle**, its **part to part** in minutes, and —
+where more than one machine runs it — how many are running it at once.
 
-Both numbers, because they answer different questions and a floor asks both — how
-many an hour comes off this step, and how often one does. They appear together at
-the head of the step, in the table under the map, and on the printed sheet.
+Three numbers because a floor asks three questions, and with two machines on a
+step they are three different answers:
+
+| | What it is | Two lathes at 00:36.0 |
+| --- | --- | --- |
+| **UPH** | what the step makes in an hour, the machines' rates added, since they run at once | 200 |
+| **Cycle** | what one part takes at the step — the machines' cycles **averaged**, since whichever one it goes to it is on that machine for about that long | 00:36.0 |
+| **Part to part** | how often one comes off the step with all of them running, in minutes | 0.3 min |
+
+The cycle is the part's time and adds up into the process time; part to part is
+the step's beat and is what a second machine on the job halves.
 
 **The map** under that head is a box per machine running the step, in the order
 the operations run, with an arrow between steps — the arrow being the only thing
@@ -483,16 +487,23 @@ thing, several and they add up to it.
 
 The cell is written on the step rather than drawn as a lane the part is handed
 between, because cells do not feed each other: where a machine stands is a fact
-about the machine, not a stage of the journey. Under the boxes, the part's process time divided between its
-steps on the same light→dark ramp the tool layout bar uses, and a table giving
-every step as text — its **UPH**, its **effective cycle** and its share of the
-process time — including the steps with nothing measured and the ones with no
-machine set up yet.
+about the machine, not a stage of the journey. **Open a machine and its cycle comes apart into the tools that make it** — the
+pockets of the layout it runs, in the order they cut, each with what it takes at
+*that* machine. That is where the box's figure comes from, and it is the answer to
+why one machine is slower than the one beside it.
+
+Under the boxes, the part's process time divided between its steps on the same
+light→dark ramp the tool layout bar uses, and a table giving every step as text —
+its **UPH**, its **cycle**, its **part to part** and its share of the process
+time — including the steps with nothing measured and the ones with no machine set
+up yet.
 
 **Where an operation runs on more than one machine, their rates add.** Two
 lathes set on the same op are not two ways of doing it, they are both doing it —
 so a step run by two machines at 90 UPH each makes **180 an hour**, and a part
-comes off that step every 20 seconds rather than every 40. That is the whole
+comes off that step every 20 seconds rather than every 40. Its cycle is still 40
+seconds, because that is how long the part is on the machine cutting it; what
+halved is the beat, not the work. That is the whole
 reason a second machine is bought, and it is the number the map is paced by. The
 boxes sit side by side in the one step, each with what it makes on its own, and
 the step's own rate is written over them.

@@ -181,10 +181,17 @@
     if (watch.running) startTick();   // a watch read back running has to tick
   }
 
+  /* Pressing a heading. While a search is running the press is about this answer
+     rather than about what the screen looks like once the search is over, so it
+     goes in `shut` and is forgotten with the question.
+
+     The watch is the exception at both ends. A filter never opens it, so a
+     filter must not be what decides whether it closes either: its press always
+     lands in the store the rest of the screen is folded from. Routed through
+     `shut` it would have written to a set nothing reads for the watch, and the
+     ▾ would have done nothing at all with anything typed in the filter box. */
   function toggleFold(key, redraw) {
-    if (filter) {
-      // while a search is on, a press is about this answer rather than about
-      // what the screen looks like when the search is over
+    if (filter && key !== WATCH_OPEN) {
       if (shut.has(key)) shut.delete(key);
       else shut.add(key);
       redraw();
@@ -272,6 +279,13 @@
      kept beside them as the thing the watch actually measured. */
   const uphOf = sec => (sec > 0 ? 3600 / sec : 0);
   const secOf = uph => (uph > 0 ? 3600 / uph : 0);
+  // Part to part is asked for in minutes: at a step a part comes off every so
+  // many minutes, which is the unit a floor plans a shift in.
+  const fmtMin = sec => {
+    if (!(sec > 0)) return '—';
+    const m = sec / 60;
+    return (m >= 10 ? round(m, 1) : round(m, 2)) + ' min';
+  };
   const fmtUph = u => {
     if (!(u > 0)) return '—';
     if (u >= 100) return String(Math.round(u));
@@ -2029,7 +2043,7 @@
      else, the quickest of them stands in, so a floor that has not yet said
      where anything runs still reads. */
   function operationRate(op) {
-    if (!op) return { uph: 0, cycle: 0, machines: [], parallel: 0 };
+    if (!op) return { uph: 0, cycle: 0, effective: 0, machines: [], parallel: 0 };
     const byMachine = new Map();   // machine id → the quickest cycle measured on it
     const loose = [];              // layouts nobody has put on a machine
     for (const l of layoutsOfOperation(op.id)) {
@@ -2048,14 +2062,21 @@
     }
     const on = [...byMachine.values()];
     if (on.length) {
+      // The rate is theirs added up, because they run at once. The cycle is
+      // theirs averaged, because that is what one part takes at this step —
+      // whichever machine it goes to, it is on one of them for about that long.
       const uph = on.reduce((sum, r) => sum + uphOf(r.cycle), 0);
-      return { uph, cycle: secOf(uph), machines: on, parallel: on.length };
+      const cycle = on.reduce((sum, r) => sum + r.cycle, 0) / on.length;
+      // And part to part is neither: how often a part comes off the step with
+      // all of them running, which is the rate asked the other way round.
+      return { uph, cycle, effective: secOf(uph), machines: on, parallel: on.length };
     }
     if (loose.length) {
       const quickest = loose.reduce((a, b) => (b.cycle < a.cycle ? b : a));
-      return { uph: uphOf(quickest.cycle), cycle: quickest.cycle, machines: [], parallel: 0 };
+      return { uph: uphOf(quickest.cycle), cycle: quickest.cycle, effective: quickest.cycle,
+        machines: [], parallel: 0 };
     }
-    return { uph: 0, cycle: 0, machines: [], parallel: 0 };
+    return { uph: 0, cycle: 0, effective: 0, machines: [], parallel: 0 };
   }
 
   /* What a cell makes in an hour: its slowest operation, counting only the
@@ -2116,7 +2137,8 @@
       const rate = operationRate(op);
       // the cell the step happens in, for the band it is drawn under
       const lead = routes.find(r => r.cell) || routes[0] || null;
-      return { op, routes, lead, rate, uph: rate.uph, cycle: rate.cycle, parallel: rate.parallel };
+      return { op, routes, lead, rate, uph: rate.uph, cycle: rate.cycle,
+        effective: rate.effective, parallel: rate.parallel };
     });
   }
 
@@ -2220,7 +2242,8 @@
     heads.appendChild(el('span', 'mf-legend-n', '#'));
     heads.appendChild(el('span', 'mf-legend-name', 'Operation'));
     heads.appendChild(el('span', 'mf-legend-v', 'UPH'));
-    heads.appendChild(el('span', 'mf-legend-c', 'Effective cycle'));
+    heads.appendChild(el('span', 'mf-legend-c', 'Cycle'));
+    heads.appendChild(el('span', 'mf-legend-c', 'Part to part'));
     heads.appendChild(el('span', 'mf-legend-p', 'Share'));
     table.appendChild(heads);
     steps.forEach((st, i) => {
@@ -2239,13 +2262,19 @@
       if (st.cycle) v.title = 'What ' + st.op.name + ' makes an hour' +
         (st.parallel > 1 ? ', over the ' + st.parallel + ' machines running it' : '');
       row.appendChild(v);
-      // How long one part takes coming off the step at that rate. With two
-      // machines on it, that is neither machine's cycle — it is what the two of
-      // them together put out a part in.
+      // What one part takes at this step: the machines' cycles averaged, since
+      // whichever one it goes to it is on that machine for about that long.
       const c = el('span', 'mf-legend-c', st.cycle ? fmtSec(st.cycle) : '—');
-      if (st.cycle) c.title = 'One part off ' + st.op.name + ' every ' + fmtSec(st.cycle) +
-        (st.parallel > 1 ? ' between them' : '');
+      if (st.cycle) c.title = st.parallel > 1
+        ? 'The average cycle across the ' + st.parallel + ' machines running ' + st.op.name
+        : 'The cycle measured on ' + machineName(route ? route.machineId : '');
       row.appendChild(c);
+      // And how often one comes off the step with all of them running, which
+      // with two machines on it is neither machine's cycle.
+      const e = el('span', 'mf-legend-c', st.effective ? fmtMin(st.effective) : '—');
+      if (st.effective) e.title = 'One part off ' + st.op.name + ' every ' + fmtSec(st.effective) +
+        (st.parallel > 1 ? ' between them' : '');
+      row.appendChild(e);
       row.appendChild(el('span', 'mf-legend-p', st.cycle
         ? Math.round((st.cycle / total) * 100) + '%'
         : (route ? 'not timed' : 'no machine')));
@@ -2268,9 +2297,10 @@
     if (steps.some(st => st.parallel > 1)) {
       box.appendChild(el('div', 'mf-note',
         'Where an operation runs on more than one machine those machines run at once, so their ' +
-        'rates add: the step makes what they make between them, and a part comes off it in the ' +
-        'time that rate allows rather than in any one machine’s cycle. They are drawn side by ' +
-        'side, each with what it makes on its own.'));
+        'rates add. The cycle is what one part takes at the step — the machines’ cycles averaged, ' +
+        'since whichever one it goes to it is on that machine for about that long. Part to part ' +
+        'is how often one comes off the step with all of them running, which is neither machine’s ' +
+        'cycle. Open a machine to see the tools its cycle is made of.'));
     }
     box.appendChild(el('div', 'mf-note',
       'This is process time — what the part spends being cut and handled at each step. ' +
@@ -2291,15 +2321,20 @@
     const rate = el('div', 'mf-step-rate' + (st.uph ? '' : ' mf-step-rate-off'));
     rate.appendChild(el('span', 'mf-step-op', st.op.name));
     rate.appendChild(el('span', 'mf-step-uph', st.uph ? fmtUph(st.uph) + ' UPH' : 'not timed'));
-    // and the same measurement asked the other way: how long one part takes
-    // coming off the step at that rate, which with two machines on it is
-    // neither machine's cycle
-    if (st.cycle) rate.appendChild(el('span', 'mf-step-cycle', fmtSec(st.cycle)));
-    if (st.parallel > 1) rate.appendChild(el('span', 'mf-step-how', st.parallel + ' at once'));
-    if (st.uph) {
-      rate.title = 'One ' + partName(part) + ' off ' + st.op.name + ' every ' + fmtSec(st.cycle) +
+    if (st.cycle) {
+      // the cycle: what one part takes at this step, averaged over the machines
+      const c = el('span', 'mf-step-cycle', fmtSec(st.cycle));
+      c.title = st.parallel > 1
+        ? 'Cycle — the average across the ' + st.parallel + ' machines running it'
+        : 'Cycle';
+      rate.appendChild(c);
+      // part to part: how often one comes off the step with all of them running
+      const e = el('span', 'mf-step-ptp', fmtMin(st.effective) + ' part to part');
+      e.title = 'One ' + partName(part) + ' off ' + st.op.name + ' every ' + fmtSec(st.effective) +
         (st.parallel > 1 ? ' between the ' + st.parallel + ' machines running it' : '');
+      rate.appendChild(e);
     }
+    if (st.parallel > 1) rate.appendChild(el('span', 'mf-step-how', st.parallel + ' at once'));
     boxes.appendChild(rate);
     const routes = st.routes.length ? st.routes : [null];
     for (const route of routes) {
@@ -2321,9 +2356,40 @@
       b.appendChild(time);
       const meta = [];
       if (route && route.cycle) meta.push(fmtSec(route.cycle));
-      if (route) meta.push(route.tools + (route.tools === 1 ? ' tool' : ' tools'));
       if (route && route.cutShare) meta.push(Math.round(route.cutShare * 100) + '% in cut');
       b.appendChild(el('div', 'mf-box-meta', meta.join(' · ') || 'nothing measured'));
+
+      /* Open the machine and the cycle comes apart into the tools that make it:
+         the pockets of the layout it runs, in the order they cut, each with what
+         it takes at *this* machine. That is where the box's figure comes from,
+         and it is the answer to "why is this one slower than the other". */
+      const jobs = route && route.layout ? layoutJobs(route.layout) : [];
+      if (jobs.length) {
+        const key = 'vs:' + route.layout.id + ':' + (route.machineId || '-');
+        const open = !isFolded(key);
+        const fold = button('mf-box-tools', '', () => toggleFold(key, renderStream),
+          (open ? 'Hide ' : 'Show ') + 'the tools on ' + tlName(route.layout) +
+          ' and what each takes' + (route.machineId ? ' at ' + machineName(route.machineId) : ''));
+        fold.setAttribute('aria-expanded', String(open));
+        fold.appendChild(el('span', 'mf-fold-mark', open ? '▾' : '▸'));
+        fold.appendChild(el('span', null,
+          jobs.length + (jobs.length === 1 ? ' tool' : ' tools')));
+        b.appendChild(fold);
+        if (open) {
+          const list = el('div', 'mf-box-pockets');
+          for (const a of jobs) {
+            const st2 = statsFor(a, route.machineId);
+            const row = el('div', 'mf-box-pocket');
+            row.appendChild(el('span', 'mf-seq', a.seq ? String(a.seq) : '–'));
+            if (a.station) row.appendChild(el('span', 'mf-chip', a.station));
+            row.appendChild(el('span', 'mf-box-pocket-name', jobName(a)));
+            row.appendChild(el('span', 'mf-box-pocket-v' + (st2 ? '' : ' mf-pocket-off'),
+              st2 ? fmtSec(st2.avg) : 'not timed'));
+            list.appendChild(row);
+          }
+          b.appendChild(list);
+        }
+      }
       boxes.appendChild(b);
     }
     wrap.appendChild(boxes);
@@ -5105,6 +5171,7 @@
     }
     .vrate-op { font-weight: 700; }
     .vrate-uph { font-weight: 700; color: var(--accent); }
+    .vrate-cyc { }
     .vrate-how { color: var(--dim); font-size: 7pt; }
     .vrate.off .vrate-uph { color: var(--dim); font-weight: 400; }
     .vtop { display: flex; align-items: center; gap: 5px; }
@@ -5358,7 +5425,8 @@
       const together = '<div class="vrate' + (st.uph ? '' : ' off') + '">' +
         '<span class="vrate-op">' + escHtml(st.op.name) + '</span>' +
         '<span class="vrate-uph">' + (st.uph ? escHtml(fmtUph(st.uph)) + ' UPH' : 'not timed') + '</span>' +
-        (st.uph ? '<span class="vrate-how">one every ' + escHtml(fmtSec(st.cycle)) +
+        (st.uph ? '<span class="vrate-cyc">' + escHtml(fmtSec(st.cycle)) + ' cycle</span>' +
+          '<span class="vrate-how">' + escHtml(fmtMin(st.effective)) + ' part to part' +
           (st.parallel > 1 ? ' · ' + st.parallel + ' at once' : '') + '</span>' : '') +
         '</div>';
       return '<div class="vstep">' + (i ? '<div class="varrow">&rarr;</div>' : '') +
@@ -5415,6 +5483,7 @@
         '<td class="num">' + escHtml(route ? route.tools : '—') + '</td>' +
         '<td class="num">' + (st.cycle ? fmtUph(st.uph) : '—') + '</td>' +
         '<td class="num">' + (st.cycle ? fmtSec(st.cycle) : '—') + '</td>' +
+        '<td class="num">' + (st.effective ? escHtml(fmtMin(st.effective)) : '—') + '</td>' +
         '<td class="num">' + (st.cycle && total ? Math.round((st.cycle / total) * 100) + '%' : '—') + '</td>' +
         '</tr>';
     }).join('');
@@ -5422,7 +5491,7 @@
       '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'no cycles recorded') + '</span></div>' +
       bar +
       '<table><thead><tr>' +
-      ['#', 'Layout', 'Operation', 'Cell', 'Runs on', 'Tools', 'UPH', 'Effective cycle', 'Share']
+      ['#', 'Layout', 'Operation', 'Cell', 'Runs on', 'Tools', 'UPH', 'Cycle', 'Part to part', 'Share']
         .map(h => '<th>' + escHtml(h) + '</th>').join('') +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
@@ -5438,9 +5507,9 @@
         'the whole part.</div>' : '') +
       (steps.some(st => st.parallel > 1)
         ? '<div class="note">Where an operation runs on more than one machine those machines run at ' +
-          'once, so their rates add: the step makes what they make between them, written over the ' +
-          'boxes, and a part comes off it in the time that rate allows rather than in any one ' +
-          'machine&rsquo;s cycle.</div>'
+          'once, so their rates add. The <b>cycle</b> is what one part takes at the step, averaged ' +
+          'across those machines; <b>part to part</b> is how often one comes off it with all of ' +
+          'them running, which is neither machine&rsquo;s cycle.</div>'
         : '') +
       '<div class="note">The figure above is the rate of the slowest step, because a line runs at ' +
       'its bottleneck however quick the rest of it is. The process time beside it is a different ' +
