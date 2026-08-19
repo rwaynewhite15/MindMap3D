@@ -2210,9 +2210,19 @@
       box.appendChild(bar);
     }
 
-    // The table under it: every step as text, including the ones with nothing
-    // measured and the ones with nowhere to run yet.
+    /* The table under it: every step as text, including the ones with nothing
+       measured and the ones with nowhere to run yet. Each carries both numbers,
+       because they answer different questions — what the step makes an hour,
+       and how long one part takes coming off it — and a step run by two
+       machines has an effective cycle that is neither machine's. */
     const table = el('div', 'mf-legend');
+    const heads = el('div', 'mf-legend-row mf-legend-head');
+    heads.appendChild(el('span', 'mf-legend-n', '#'));
+    heads.appendChild(el('span', 'mf-legend-name', 'Operation'));
+    heads.appendChild(el('span', 'mf-legend-v', 'UPH'));
+    heads.appendChild(el('span', 'mf-legend-c', 'Effective cycle'));
+    heads.appendChild(el('span', 'mf-legend-p', 'Share'));
+    table.appendChild(heads);
     steps.forEach((st, i) => {
       const route = st.lead;
       const row = el('div', 'mf-legend-row' + (st.cycle ? '' : ' mf-legend-off'));
@@ -2226,9 +2236,16 @@
         : (route ? ' · ' + machineName(route.machineId) : ''))));
       row.appendChild(name);
       const v = el('span', 'mf-legend-v', st.cycle ? fmtUph(st.uph) + ' UPH' : '—');
-      if (st.cycle) v.title = 'One every ' + fmtSec(st.cycle) +
-        (st.parallel > 1 ? ' between them' : '');
+      if (st.cycle) v.title = 'What ' + st.op.name + ' makes an hour' +
+        (st.parallel > 1 ? ', over the ' + st.parallel + ' machines running it' : '');
       row.appendChild(v);
+      // How long one part takes coming off the step at that rate. With two
+      // machines on it, that is neither machine's cycle — it is what the two of
+      // them together put out a part in.
+      const c = el('span', 'mf-legend-c', st.cycle ? fmtSec(st.cycle) : '—');
+      if (st.cycle) c.title = 'One part off ' + st.op.name + ' every ' + fmtSec(st.cycle) +
+        (st.parallel > 1 ? ' between them' : '');
+      row.appendChild(c);
       row.appendChild(el('span', 'mf-legend-p', st.cycle
         ? Math.round((st.cycle / total) * 100) + '%'
         : (route ? 'not timed' : 'no machine')));
@@ -2274,6 +2291,10 @@
     const rate = el('div', 'mf-step-rate' + (st.uph ? '' : ' mf-step-rate-off'));
     rate.appendChild(el('span', 'mf-step-op', st.op.name));
     rate.appendChild(el('span', 'mf-step-uph', st.uph ? fmtUph(st.uph) + ' UPH' : 'not timed'));
+    // and the same measurement asked the other way: how long one part takes
+    // coming off the step at that rate, which with two machines on it is
+    // neither machine's cycle
+    if (st.cycle) rate.appendChild(el('span', 'mf-step-cycle', fmtSec(st.cycle)));
     if (st.parallel > 1) rate.appendChild(el('span', 'mf-step-how', st.parallel + ' at once'));
     if (st.uph) {
       rate.title = 'One ' + partName(part) + ' off ' + st.op.name + ' every ' + fmtSec(st.cycle) +

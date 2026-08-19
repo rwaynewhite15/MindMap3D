@@ -461,9 +461,16 @@ the **Value stream** panel draws it from what the record already holds. Nothing
 is entered for it.
 
 **Every step says what its operation makes an hour**, at the head of the step:
-the operation, its **UPH**, and — where more than one machine runs it — how many
-are running it at once. That is the operation's own number rather than any one
-machine's, and it is the one the route is paced by.
+the operation, its **UPH**, its **effective cycle** — how long one part takes
+coming off that step at that rate — and, where more than one machine runs it, how
+many are running it at once. Those are the operation's own numbers rather than
+any one machine's, and they are what the route is paced by. With two machines on
+a step the effective cycle is neither machine's: two lathes at 00:36.0 each put a
+part out every 00:18.0 between them.
+
+Both numbers, because they answer different questions and a floor asks both — how
+many an hour comes off this step, and how often one does. They appear together at
+the head of the step, in the table under the map, and on the printed sheet.
 
 **The map** under that head is a box per machine running the step, in the order
 the operations run, with an arrow between steps — the arrow being the only thing
@@ -478,8 +485,9 @@ The cell is written on the step rather than drawn as a lane the part is handed
 between, because cells do not feed each other: where a machine stands is a fact
 about the machine, not a stage of the journey. Under the boxes, the part's process time divided between its
 steps on the same light→dark ramp the tool layout bar uses, and a table giving
-every step as text — including the ones with nothing measured and the ones with
-no machine set up yet.
+every step as text — its **UPH**, its **effective cycle** and its share of the
+process time — including the steps with nothing measured and the ones with no
+machine set up yet.
 
 **Where an operation runs on more than one machine, their rates add.** Two
 lathes set on the same op are not two ways of doing it, they are both doing it —
