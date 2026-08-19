@@ -139,10 +139,16 @@
     } catch { /* nothing saved, or unreadable: everything closed */ }
   }
 
-  // A filter outranks a fold. Searching for something and being shown a closed
-  // heading that contains it would be the screen hiding the answer it was just
-  // asked for, so while a filter is on, everything is open.
-  const isFolded = key => !filter && !opened.has(key);
+  /* A filter outranks a fold. Searching for something and being shown a closed
+     heading that contains it would be the screen hiding the answer it was just
+     asked for, so while a filter is on, everything is open.
+
+     Except what you have pressed shut since. An answer of a dozen machines is
+     one you want to close your way through, and a heading that cannot be shut
+     while a search is running is not a fold. Those presses are not kept: they
+     belong to this question, and the next question starts open again. */
+  const shut = new Set();
+  const isFolded = key => (filter ? shut.has(key) : !opened.has(key));
 
   // The stopwatch folds through the same store and the same rule: closed until
   // somebody opens it, and it stays open from then on. The one difference is
@@ -176,6 +182,14 @@
   }
 
   function toggleFold(key, redraw) {
+    if (filter) {
+      // while a search is on, a press is about this answer rather than about
+      // what the screen looks like when the search is over
+      if (shut.has(key)) shut.delete(key);
+      else shut.add(key);
+      redraw();
+      return;
+    }
     if (opened.has(key)) opened.delete(key);
     else opened.add(key);
     saveOpened();
@@ -3507,6 +3521,7 @@
     search.value = filter;
     search.addEventListener('input', () => {
       filter = search.value.trim().toLowerCase();
+      shut.clear();     // a new question is asked with everything open
       renderLists();
     });
     box.appendChild(search);
@@ -3517,6 +3532,7 @@
   // on the floor — so none of them is redrawn alone.
   function renderLists() {
     renderFloor();
+    renderMachines();
     renderParts();
     renderTools();
   }
@@ -3531,10 +3547,13 @@
   function searchFor(term) {
     const text = String(term || '').trim();
     filter = text.toLowerCase();
+    shut.clear();       // a new question is asked with everything open
     renderSearch();
     if (els.search.firstChild) els.search.firstChild.value = text;
     renderLists();
-    if (els.floor.scrollIntoView) els.floor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // to the machines if the question was about one, else to the floor
+    const to = els.machines && !els.machines.hidden ? els.machines : els.floor;
+    if (to.scrollIntoView) to.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // Every list heading is a section head with a count and a fold on it, so all
@@ -3634,36 +3653,109 @@
     block.appendChild(head);
 
     if (!isFolded(key)) {
-      if (only) {
-        // layouts with no machine at all: no iron to stand them under
-        for (const l of drawn) block.appendChild(layoutBlock(l, { cell }));
-      } else if (!machinesShown.length) {
-        block.appendChild(el('div', 'mf-note', machines.length
-          ? 'Nothing in this cell matches that.'
-          : 'No machine stands in this cell yet.'));
-      } else {
-        // the machines in it, each with what it runs
-        for (const m of machinesShown) block.appendChild(machineBlock(m, cellMatches));
+      // the iron standing in it, as a row of names: pressing one asks what that
+      // machine runs, which the Machines list below answers
+      if (machinesShown.length && !only) {
+        const row = el('div', 'mf-cell-machines');
+        for (const m of machinesShown) row.appendChild(machineChip(m));
+        block.appendChild(row);
+      }
+      // A search that matched only the machines standing here has already been
+      // answered — by the names above, and by the Machines list under the floor.
+      // Saying "nothing matches" over the top of that would be wrong.
+      if (!drawn.length && !machinesShown.length) {
+        block.appendChild(el('div', 'mf-note', 'Nothing in this cell matches that.'));
+      } else if (!drawn.length && !filter) {
+        block.appendChild(el('div', 'mf-note', 'No tool layout is set on these machines yet.'));
+      }
+      // the operations that run here, in the order the parts are made
+      for (const group of layoutsByOperation(drawn)) {
+        block.appendChild(operationBlock(group, { cell }));
       }
     }
     box.appendChild(block);
     return 1;
   }
 
-  /* One machine standing in its cell: what it runs, and what that comes to. The
-     layouts under it are in the order the parts are made — the sequence this
-     machine works through — and each names the operation it cuts, so the block
-     reads as the work the machine does rather than as a list of numbers that
-     happen to be set on it.
+  /* The layouts of a set, gathered under the operation each is for, with the
+     operations in the order the parts are made and the parts in name order. A
+     cell reads as its order of operations that way, which is what a cell is:
+     the ops feed each other inside it. Two layouts on the same op sit together
+     under it, in number order. */
+  function layoutsByOperation(layouts) {
+    const groups = new Map();
+    for (const l of layouts) {
+      const key = l.operationId || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(l);
+    }
+    return [...groups.entries()]
+      .map(([id, ls]) => ({ op: operationById(id), layouts: ls.sort(byNumber) }))
+      .sort((a, b) => {
+        if (!a.op || !b.op) return a.op ? -1 : 1;
+        const byPart = partName(partById(a.op.partId)).localeCompare(partName(partById(b.op.partId)));
+        return byPart || byStep(a.op, b.op);
+      });
+  }
 
-     `wide` is true when the cell above matched the filter itself: the whole cell
-     was asked for, so every machine in it shows everything it runs. */
-  function machineBlock(m, wide) {
+  /* An operation and the tool layouts that cut it, under the cell it runs in.
+     The heading carries what the operation makes an hour with everything that
+     runs it running — the machines on it are working at the same time, so their
+     rates add, and that number is the operation's rather than any one layout's.
+
+     `where` is where they are being read from, which narrows each layout to the
+     machines belonging to that reading. */
+  function operationBlock(group, where) {
+    const wrap = el('div', 'mf-op-block');
+    const head = el('div', 'mf-op-head');
+    const op = group.op;
+    head.appendChild(el('span', 'mf-seq', op && op.seq ? String(op.seq) : '–'));
+    head.appendChild(el('span', 'mf-op-name', op ? op.name : 'No operation set'));
+    if (op) head.appendChild(el('span', 'mf-op-part', partName(partById(op.partId))));
+    if (op) {
+      const rate = operationRate(op);
+      if (rate.uph) {
+        const v = el('span', 'mf-op-rate', fmtUph(rate.uph) + ' UPH');
+        v.title = rate.parallel > 1
+          ? rate.parallel + ' machines at once — one every ' + fmtSec(rate.cycle) + ' between them'
+          : 'One every ' + fmtSec(rate.cycle);
+        head.appendChild(v);
+      }
+    }
+    put(head, op ? wBtn('mf-link', 'Edit', () => openForm('operation', op.id)) : null);
+    wrap.appendChild(head);
+    for (const l of group.layouts) wrap.appendChild(layoutBlock(l, where));
+    return wrap;
+  }
+
+  /* A machine on the floor: its name, and what it runs. The name is a press —
+     it puts the machine in the filter box, which is how this screen is asked
+     "what does this one run?", and the Machines list answers with its layouts. */
+  function machineChip(m) {
+    const layouts = layoutsOnMachine(m.id);
+    const chip = el('span', 'mf-machine-tag');
+    chip.appendChild(button('mf-machine-tag-go', m.name, () => searchFor(m.name),
+      'Ask what ' + m.name + ' runs'));
+    chip.appendChild(el('span', 'mf-machine-tag-v',
+      layouts.length ? layouts.map(l => tlName(l)).join(' ') : 'no layout'));
+    if (canEdit()) {
+      chip.appendChild(button('mf-link', 'Edit', () => openForm('machine', m.id),
+        'This machine and its cell'));
+    }
+    return chip;
+  }
+
+  /* One machine, as the answer to being asked about it: where it stands, and the
+     tool layouts set on it, in the order the parts are made — the sequence this
+     machine works through. Each layout names the operation it cuts and is read
+     *at this machine*, so its rate is the one measured here rather than one
+     averaged across every machine the layout runs on. */
+  function machineBlock(m) {
     const key = 'machine:' + m.id;
     const layouts = layoutsOnMachine(m.id);
     // A machine matched on its own name shows everything it runs; one reached
     // through a layout shows the layouts that were being asked about.
-    const drawn = wide || matchesMachine(m) ? layouts : layouts.filter(matchesLayout);
+    const drawn = matchesMachine(m) ? layouts : layouts.filter(matchesLayout);
     // The heading is the machine's own totals, filter or no — it is the answer a
     // closed heading carries, and a count that moved with the search would be
     // describing the search instead of the machine.
@@ -3671,17 +3763,14 @@
 
     const block = el('div', 'mf-machine');
     const head = el('div', 'mf-machine-head');
-    head.appendChild(foldToggle(key, m.name, 'mf-machine-k', renderFloor));
+    head.appendChild(foldToggle(key, m.name, 'mf-machine-k', renderMachines));
+    const cell = cellOfMachine(m.id);
     head.appendChild(el('div', 'mf-machine-v', [
+      cell ? cell.name : 'not in a cell',
       layouts.length ? layouts.length + (layouts.length === 1 ? ' layout' : ' layouts') : 'no layout set',
       jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : '',
     ].filter(Boolean).join(' · ')));
     const btns = el('div', 'mf-machine-btns');
-    // A machine's name is the one word painted on the side of the iron, so it is
-    // what a floor gets asked for: this puts it in the filter box and narrows
-    // the whole screen — the floor, the parts and the crib — to this one.
-    btns.appendChild(button('mf-link', 'Only this', () => searchFor(m.name),
-      'Narrow the screen to ' + m.name + ' and what it runs'));
     put(btns, wBtn('mf-link', 'Clone', () => cloneMachine(m.id),
       'A second machine of the same kind, on the layouts this one runs'));
     put(btns, wBtn('mf-link', 'Edit', () => openForm('machine', m.id), 'This machine and its cell'));
@@ -3699,6 +3788,33 @@
     }
     for (const l of byWorkOrder(drawn)) block.appendChild(layoutBlock(l, { machine: m }));
     return block;
+  }
+
+  /* ---------------- the machines, when asked for ----------------
+     The floor above is the shop as it stands: cells, the operations that run in
+     each, and the layouts that cut them. This is the same records read from one
+     machine — the question asked standing at it, or asked of it by name from
+     anywhere, which is what searching for a machine is.
+
+     It is not a standing list. A floor has one arrangement and it is the one
+     above; this appears because it was asked for and goes when the question
+     does. A machine's name is the one word painted on the side of the iron, so
+     it is what gets typed; a part number or a tool number turns the question
+     around and answers with the machines that cut it. */
+  function renderMachines() {
+    const box = els.machines;
+    box.innerHTML = '';
+    if (!shop) return;
+    // asked for by name, or reached through a layout that was asked for
+    const asked = filter
+      ? allMachines().filter(m => matchesMachine(m) || layoutsOnMachine(m.id).some(matchesLayout))
+      : [];
+    box.hidden = !asked.length;
+    if (!asked.length) return;
+
+    box.appendChild(sectionHead('sec:machines', 'Machines', asked.length, renderMachines));
+    if (isFolded('sec:machines')) return;
+    for (const m of asked) box.appendChild(machineBlock(m));
   }
 
   /* Layouts in the order the work runs: by part, then by the step of that part,
@@ -5513,6 +5629,8 @@
     els.search = el('div', 'mf-searchbox');
     els.search.hidden = true;
     els.floor = el('div', 'mf-floor');
+    els.machines = el('div', 'mf-machines');
+    els.machines.hidden = true;
     els.parts = el('div', 'mf-parts');
     els.tools = el('div', 'mf-tools');
     page.appendChild(els.watch);
@@ -5523,6 +5641,7 @@
     page.appendChild(els.cutchart);
     page.appendChild(els.search);
     page.appendChild(els.floor);
+    page.appendChild(els.machines);
     page.appendChild(els.parts);
     page.appendChild(els.tools);
     page.appendChild(els.stream);

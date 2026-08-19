@@ -25,12 +25,14 @@ and turns on **AI generation** simply by setting environment variables.
   90 UPH is 180 UPH** and a part comes off that step in half the time. The value stream is
   paced by its slowest step and names it, which is the number a second machine is bought to
   move.
-- **The floor is cells, then machines, then tool layouts.** Three levels, each a question
-  somebody actually asks on a floor: which area, which machine, what is in it. A cell holds
-  the machines standing in it and says what it makes an hour; a machine holds the layouts it
-  is set up for, in the order the parts are made; a layout names the operation it cuts and
-  opens onto its pockets. The separate Machines list is gone — it was the same subtree
-  without its cell — and **Only this** on a machine narrows the whole screen to it.
+- **The floor is cells, then operations, then tool layouts.** Every level is a question
+  somebody asks on a floor: which area, which step, what it is set up as, which tool. A
+  **cell** says what it makes an hour and names the machines standing in it; inside it the
+  **operations** that run there, each carrying what it makes an hour with everything that
+  runs it running; under each the **tool layouts** that cut it, opening onto their pockets.
+  Ask for a machine by name — or press one where it stands — and a **Machines** list answers
+  under the floor: that machine, folding open onto the layouts set on it, every figure
+  measured at it. It appears because it was asked for and goes when the question does.
 - **A machine's cycles are its own.** Under a pocket on a tool layout that several
   machines run, **Recorded cycles** is now one machine's list — the machine the watch is
   on, named in the heading. What is timed there is timed on it, what is typed in by hand
@@ -168,22 +170,23 @@ and turns on **AI generation** simply by setting environment variables.
   its first tool; pressing a **pocket** puts the watch on that tool; **✕** puts it away
   again. Until then there is no stopwatch on screen at all — an empty clock pointed at
   nothing is the biggest thing on a screen saying the least.
-- **The screen opens closed.** Every heading in Shopwatch folds — the three lists and
+- **The screen opens closed.** Every heading in Shopwatch folds — the lists and
   everything inside them, the tool layout panel, the cut-and-waste panel, the value
   stream, the recorded cycles and the stopwatch itself — and all of them start closed,
   so a floor opens as a page of headings rather than as a wall. A closed heading still
   carries the answer without the working: the layout's number and its cycle, the share
   in cut, the part's process time, a cell's machines. What is kept on the device is what
   you have **opened**, so records added later arrive closed too. Searching opens
-  everything, so a filter can never be answered by a closed heading.
-- **Ask the floor about one machine.** A machine's name is the one word painted on the
-  side of the iron, so it is what a floor gets asked for. Type it in the filter box — or
-  press **Only this** on the machine, which puts it there for you — and the floor comes
-  back as that machine alone, in its cell, with everything it runs in the order the parts
-  are made. Every figure under it is measured **at that machine** rather than averaged
-  across every machine its layouts run on, and pressing a pocket there puts the watch on
-  that tool, at that machine. Ask with a part number or a tool instead and the question
-  turns around: the machines that cut it.
+  everything, so a filter can never be answered by a closed heading — bar what you press
+  shut while it runs, which belongs to that question rather than to the screen.
+- **Ask for a machine, and a Machines list answers.** A machine's name is the one word
+  painted on the side of the iron, so it is what a floor gets asked for. Type it in the
+  filter box — or press the name where the machine stands in its cell, which puts it there
+  for you — and a **Machines** list appears under the floor: that machine, folding open
+  onto the tool layouts set on it in the order the parts are made. Every figure under it is
+  measured **at that machine** rather than averaged across every machine its layouts run
+  on, and pressing a pocket there puts the watch on that tool, at that machine. Ask with a
+  part number or a tool instead and the question turns around: the machines that cut it.
 - **The top bar always says which page you are on.** The bar has no title of its own — it
   is the account's toolbar and its notification bell, aligned right — and the slot at its
   left holds the name of whatever is on show: **Home**, **My Maps**, **Standing Desk**,
@@ -729,22 +732,25 @@ cost per part      = tool cost ÷ parts per tool
 Cutting time is measured, never typed: there is nowhere to enter what a tool *should*
 spend in cut, because a typed number and a measured one are two answers to one question
 and only one of them is evidence. The floor reads from four ends, narrowed by one filter
-box: the **Floor** is the shop as it is walked — a cell, the machines standing in it, and
-on each machine the tool layouts it runs; **Parts and operations** lists each part with its
-ops, and each op with what it makes an hour and the machines that make it; **Tools** lists
-the crib, each tool with the machines it runs on as chips. Deleting a
+box: the **Floor** is the shop as it is laid out — a cell, the operations that run in it,
+and under each the tool layouts that cut it; **Parts and operations** lists each part with
+its ops, and each op with what it makes an hour and the machines that make it; **Tools**
+lists the crib, each tool with the machines it runs on as chips. A **Machines** list joins
+them when one is asked for. Deleting a
 machine leaves its tools in the crib, deleting a tool takes it out of every setup, and
 deleting an operation takes the setups that were for it — the cycles timed belong to the
 op.
 
-**Searching for a machine** narrows the floor to it. A machine's name is the one word
-painted on the side of the iron, so it is what a floor gets asked for: typing it in the
-filter box — or pressing **Only this** on the machine, which puts it there for you — brings
-back that machine alone, in its cell, with its layouts in the order the parts are made
-rather than in layout-number order. The number is only how a layout is called for once you
-already know which one you want. Every figure under it is measured **at that machine**, and
-pressing a pocket there puts the watch on that tool, at that machine. A part number or a
-tool number turns the question around and answers with the machines that cut it.
+**Searching for a machine** brings up a **Machines** list under the floor. A machine's name
+is the one word painted on the side of the iron, so it is what a floor gets asked for:
+typing it in the filter box — or pressing the name where the machine stands in its cell,
+which puts it there for you — answers with that machine, folding open onto its layouts in
+the order the parts are made rather than in layout-number order. The number is only how a
+layout is called for once you already know which one you want. It is not a standing list:
+the floor has one arrangement and it is the one above, so this appears because it was asked
+for and goes when the question does. Every figure under it is measured **at that machine**,
+and pressing a pocket there puts the watch on that tool, at that machine. A part number or
+a tool number turns the question around and answers with the machines that cut it.
 
 **Clone** on a machine stands a second one of the same kind up beside it: the next number
 after its name is suggested, and saving copies the tools across in the stations they sit
@@ -762,12 +768,13 @@ next number. None of it is optional the way a machine's operations are: which op
 runs is a decision about the machine, but the ops that make a part are what the part is.
 The cycles stay with the original, which was the one actually cut.
 
-Every heading folds. The three lists close, and so does each cell, each machine and each
+Every heading folds. The lists close, and so does each cell, each operation and each
 part inside them, with the counts and the **+** buttons staying on the closed heading —
 which is what makes a floor of a dozen machines readable on a phone. A layout is one
 layout wherever it is read, so opening **TL 12** under its machine opens it on the floor
 too. Folds live on the device, not in the shop record, and a filter opens everything so a
-search is never answered by a closed heading.
+search is never answered by a closed heading — except what you press shut while it runs,
+which is forgotten when the question changes.
 
 Setups run in **sequence order** within their tool layout — a newly set-up tool takes the
 next number, ↑ / ↓ move it, and the layout renumbers itself so the sequence is always

@@ -336,43 +336,42 @@ Hovering or tabbing to either a column or a row lights up the other.
 a measurement nobody took. It is drawn as an outline with nothing in it, listed
 as **not marked**, and counted in a line under the chart.
 
-**The floor is the list: cells, then machines, then tool layouts.** It is the
-shop read the way it is walked. A **cell** is the area you are in, and it says
-what it makes an hour. The **machines** standing in it come in the order the work
-reaches them, each with what it runs. On a machine are the **tool layouts** it is
-set up for, in the order the parts are made — the sequence that machine works
-through — each naming the operation it cuts, what it makes an hour there and the
-cycle behind it. Open one and you get its **pockets**: the tools, and the watch.
+**The floor is the list: cells, then operations, then tool layouts.** It is the
+shop read the way it is laid out. A **cell** is an area, and it says what it
+makes an hour and names the machines standing in it. Inside it are the
+**operations** that run there, in the order the parts are made — the ops feed
+each other, which is the whole of the flow there is — and each carries **what it
+makes an hour** with everything that runs it running. Under an operation are the
+**tool layouts** that cut it, and opening one gives its machines and its
+**pockets**: the tools, and the watch.
 
-Three levels, and each is a question somebody actually asks on a floor: *which
-area*, *which machine*, *what is in it*. Layouts under a machine are in work order
-rather than number order, because a number is how a layout is called for once you
-know which one you want, not where it comes.
+Cell, operation, layout, pocket. Every level is a question somebody asks on a
+floor: *which area*, *which step*, *what is it set up as*, *which tool*. Nothing
+is a heading invented for the screen's sake, and everything folds.
 
 Under the floor, **Parts and operations** is the short list of what is being made
-— each operation carrying what it makes an hour with everything that runs it
-running — and **Tools** is the crib. One filter box narrows all three, and it
-knows the names things are asked for by: typing **TL 12** (or just **12**) asks
-for everything on that layout, and typing a **cell's name** asks for everything
-in that cell.
+and **Tools** is the crib. One filter box narrows everything, and it knows the
+names things are asked for by: typing **TL 12** (or just **12**) asks for
+everything on that layout, and typing a **cell's name** asks for everything in
+that cell.
 
-**Asking the floor about one machine.** A machine's name is the one word painted
-on the side of the iron, so it is what a floor gets asked for. Type it in the
-filter box — or press **Only this** on the machine, which puts it there for you —
-and the floor comes back as that machine alone, in its cell, with everything it
-runs. Every figure under it is measured **at that machine** rather than averaged
-across every machine its layouts run on: the layout's rate, each pocket's, and
-the recorded cycles when you open one. Pressing a pocket there puts the watch on
-that tool, at that machine.
+**Ask for a machine, and a Machines list answers.** A machine's name is the one
+word painted on the side of the iron, so it is what a floor gets asked for. Type
+it in the filter box — or press the name on any machine standing in a cell, which
+puts it there for you — and a **Machines** list appears under the floor: one block
+per machine, folding open onto the **tool layouts set on it**, in the order the
+parts are made.
 
-A machine's name matches the machine rather than the layouts on it, so asking for
-one brings back one; a **part number, a tool number or TL 12** turns the question
-around and brings back every machine that cuts it. A layout two machines share
-still shows both of them under either — that a layout is shared is a fact about
-the layout, and hiding the other machine would make it read as a copy of itself.
+It is not a standing list. The floor has one arrangement and it is the one above;
+this appears because it was asked for and goes when the question does. Every
+figure under a machine is measured **at that machine** rather than averaged across
+every machine its layouts run on — the layout's rate, each pocket's, and the
+recorded cycles when you open one — and pressing a pocket there puts the watch on
+that tool, at that machine. A **part number, a tool number or TL 12** turns the
+question around and answers with the machines that cut it.
 
-**The screen opens closed.** Every heading on it folds — the three lists, each
-cell, each machine, each layout and each part inside them, the tool layout panel, the
+**The screen opens closed.** Every heading on it folds — the lists, each cell,
+each operation, each layout and each part inside them, the tool layout panel, the
 cut-and-waste panel, the value stream, the recorded cycles and the stopwatch
 itself — and all of them start closed, so a floor of a dozen machines and four
 hundred cycles opens as a page of headings rather than as a wall. What a closed
@@ -391,8 +390,11 @@ everything else, instead of the screen quietly getting longer every week. It is 
 view preference, not part of the shop record, so it is not saved to the account
 and never reaches anyone else. **A filter outranks a fold**: searching opens
 everything, because a screen that hid the answer it was just asked for would be
-worse than useless. The watch is the one exception, since a running stopwatch is
-never the answer to a search.
+worse than useless — except what you press shut while the search is running, since
+an answer of a dozen machines is one you want to close your way through. Those
+presses belong to that question and are not kept: the next search opens
+everything again. The watch is the one exception to the whole rule, since a
+running stopwatch is never the answer to a search.
 
 Deleting a machine takes its setups and leaves the tools in the crib; deleting a
 tool takes it out of every setup it was in; deleting an operation takes the

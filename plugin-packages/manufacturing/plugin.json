@@ -1,8 +1,8 @@
 {
   "id": "manufacturing",
   "name": "Shopwatch",
-  "version": "12.0.0",
-  "description": "Cycle-time measurement for the shop floor, read in units per hour. The screen is the floor as it is walked: cells — areas, in no order, since cells do not feed each other — the machines standing in each, and on every machine the tool layouts it is set up to run — the tooling for one operation, with a number of its own and the pockets the watch times. One layout can be run on several machines, and every cycle stays with the machine it was taken on, so their rates stay apart. Machines set on the same operation run at once, so their rates add and the operation's effective cycle falls: that is what the value stream is paced by, along with the slowest step it names. Cutting time is measured at the machine rather than typed, the layout's cycle is charted across its tools, a part's route is drawn as a value stream map of its operations, one feeding the next, and both print — one tool layout to a page. CSV in and out, a row group per machine.",
+  "version": "13.0.0",
+  "description": "Cycle-time measurement for the shop floor, read in units per hour. The screen is the floor as it is laid out: cells — areas, in no order, since cells do not feed each other — the operations that run in each, and under every operation the tool layouts that cut it, each with its number, its machines and the pockets the watch times. Ask for a machine by name and a Machines list answers with it, folding open onto the layouts set on it. One layout can be run on several machines, and every cycle stays with the machine it was taken on, so their rates stay apart. Machines set on the same operation run at once, so their rates add and the operation's effective cycle falls: that is what the value stream is paced by, along with the slowest step it names. Cutting time is measured at the machine rather than typed, the layout's cycle is charted across its tools, a part's route is drawn as a value stream map of its operations, one feeding the next, and both print — one tool layout to a page. CSV in and out, a row group per machine.",
   "hostVersion": 2,
   "nav": {
     "label": "Shopwatch"
