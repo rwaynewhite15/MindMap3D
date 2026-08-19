@@ -248,6 +248,29 @@
   }
   const fmtSec = sec => fmtClock(sec * 1000);
 
+  /* Units per hour, which is what a floor is actually asked for. A cycle time
+     says how long one part takes; UPH says how many come off in an hour, and
+     that is the number that adds up — two machines running the same operation
+     make twice as many parts an hour, while their cycle times cannot simply be
+     added or averaged into anything meaningful.
+
+     So rates are what this screen totals and compares, and the cycle time is
+     kept beside them as the thing the watch actually measured. */
+  const uphOf = sec => (sec > 0 ? 3600 / sec : 0);
+  const secOf = uph => (uph > 0 ? 3600 / uph : 0);
+  const fmtUph = u => {
+    if (!(u > 0)) return '—';
+    if (u >= 100) return String(Math.round(u));
+    // a whole number of parts an hour reads as one: 30, not 30.0
+    const dp = u >= 10 ? 1 : 2;
+    const n = round(u, dp);
+    return Number.isInteger(n) ? String(n) : n.toFixed(dp);
+  };
+  // A rate and the cycle it came from, which is how a measured figure reads
+  // everywhere: what it makes an hour, and how long one takes.
+  const fmtRate = sec => (sec > 0 ? fmtUph(uphOf(sec)) + ' UPH' : '—');
+  const fmtRateFull = sec => (sec > 0 ? fmtUph(uphOf(sec)) + ' UPH · ' + fmtSec(sec) : '—');
+
   function fmtAgo(ts) {
     const mins = Math.floor((Date.now() - ts) / 60000);
     if (mins < 1) return 'just now';
@@ -1502,8 +1525,15 @@
     if (s) {
       const timing = el('div', 'mf-tiles');
       timing.appendChild(tile('cycles timed', String(s.count)));
-      timing.appendChild(tile('average', fmtSec(s.avg)));
-      timing.appendChild(tile('best', fmtSec(s.best)));
+      // What it makes an hour leads, because that is the unit a floor is asked
+      // for; the cycle it came from is the thing the watch actually measured, so
+      // it stands beside it rather than behind it.
+      timing.appendChild(tile('UPH', fmtUph(uphOf(s.avg)),
+        'At ' + fmtSec(s.avg) + ' a cycle, averaged over the ' + s.count +
+        (s.count === 1 ? ' cycle' : ' cycles') + ' timed here'));
+      timing.appendChild(tile('cycle', fmtSec(s.avg), 'The average cycle this UPH comes from'));
+      timing.appendChild(tile('best UPH', fmtUph(uphOf(s.best)),
+        'The quickest cycle timed here, ' + fmtSec(s.best) + ' — what the tool does when it goes right'));
       timing.appendChild(tile('spread', fmtSec(s.spread), 'Slowest cycle minus fastest — how repeatable this tool is here'));
       if (s.avgCut) {
         timing.appendChild(tile('time in cut', fmtSec(s.avgCut),
@@ -1635,9 +1665,10 @@
     }
     head.appendChild(heading);
     const figure = el('div', 'mf-chart-figure');
-    figure.appendChild(el('div', 'mf-chart-total', total ? fmtSec(total) : '—'));
+    figure.appendChild(el('div', 'mf-chart-total', total ? fmtUph(uphOf(total)) + ' UPH' : '—'));
     figure.appendChild(el('div', 'mf-chart-sub', timed.length
-      ? 'measured across ' + timed.length + (timed.length === 1 ? ' tool' : ' tools')
+      ? fmtSec(total) + ' a part, measured across ' + timed.length +
+        (timed.length === 1 ? ' tool' : ' tools')
       : 'nothing timed yet'));
     head.appendChild(figure);
     box.appendChild(head);
@@ -1949,9 +1980,10 @@
      not. What this shows is the process time: step by step, cell by cell, and
      what share of the part's total each one is.
 
-     Where an operation runs on more than one machine those are alternative
-     routings rather than two steps, so they are drawn side by side in one step
-     and the total takes the fastest measured of them — and says so.
+     Where an operation runs on more than one machine those machines run at
+     once, so their rates add: the step is drawn as a box per machine with the
+     rate they make between them written over them, and the part's own figure is
+     the rate of its slowest step, which is what a line actually runs at.
   ---------------------------------------------------------------- */
   let streamPartId = '';   // the part the map is of, on this screen only
 
@@ -1967,15 +1999,89 @@
       .find(p => opsOfPart(p.id).length) || null;
   }
 
-  /* One part's route, as steps. A step is an operation; under it are the tool
-     layouts that can run it, each with its cell, its machine and its measured
-     cycle — the sum of its tools' averages, which is what the tool layout panel
-     shows for that layout. */
+  /* What an operation makes in an hour, and how long that makes one part take.
+
+     Machines set on the same operation run at the same time, so their rates
+     add: two lathes each turning 90 parts an hour turn 180 between them, and
+     the operation's effective cycle is half of either machine's. That is why a
+     second machine is bought, and it is the number a route through the floor is
+     paced by — so it is the number this screen uses, rather than the cycle of
+     whichever machine happens to be quickest.
+
+     Capacity is a machine, not a layout. One machine set up two ways for the
+     same op is two ways of doing it rather than two machines' worth of it, so
+     each machine counts once, at the quickest cycle measured on it. A layout
+     with no machine has no capacity of its own; where an operation has nothing
+     else, the quickest of them stands in, so a floor that has not yet said
+     where anything runs still reads. */
+  function operationRate(op) {
+    if (!op) return { uph: 0, cycle: 0, machines: [], parallel: 0 };
+    const byMachine = new Map();   // machine id → the quickest cycle measured on it
+    const loose = [];              // layouts nobody has put on a machine
+    for (const l of layoutsOfOperation(op.id)) {
+      const machines = layoutMachines(l);
+      if (!machines.length) {
+        const st = layoutCycle(l, '');
+        if (st.cycle > 0) loose.push({ layout: l, cycle: st.cycle });
+        continue;
+      }
+      for (const m of machines) {
+        const st = layoutCycle(l, m.id);
+        if (!(st.cycle > 0)) continue;
+        const had = byMachine.get(m.id);
+        if (!had || st.cycle < had.cycle) byMachine.set(m.id, { machine: m, layout: l, cycle: st.cycle });
+      }
+    }
+    const on = [...byMachine.values()];
+    if (on.length) {
+      const uph = on.reduce((sum, r) => sum + uphOf(r.cycle), 0);
+      return { uph, cycle: secOf(uph), machines: on, parallel: on.length };
+    }
+    if (loose.length) {
+      const quickest = loose.reduce((a, b) => (b.cycle < a.cycle ? b : a));
+      return { uph: uphOf(quickest.cycle), cycle: quickest.cycle, machines: [], parallel: 0 };
+    }
+    return { uph: 0, cycle: 0, machines: [], parallel: 0 };
+  }
+
+  /* What a cell makes in an hour: its slowest operation, counting only the
+     machines standing in it. A cell is a small line — a part goes through its
+     operations in order — so it can only put through what its slowest step can,
+     however quick the rest are. Machines inside the cell running the same
+     operation still add up against each other, which is the whole point of
+     putting a second one in. A cell nothing has been timed in has no rate. */
+  function cellRate(cell, layouts) {
+    if (!cell) return 0;
+    const byOp = new Map();   // operation → machine in this cell → its quickest cycle
+    for (const l of layouts) {
+      if (!l.operationId) continue;
+      for (const m of layoutMachines(l)) {
+        if (m.cellId !== cell.id) continue;
+        const st = layoutCycle(l, m.id);
+        if (!(st.cycle > 0)) continue;
+        if (!byOp.has(l.operationId)) byOp.set(l.operationId, new Map());
+        const on = byOp.get(l.operationId);
+        const had = on.get(m.id);
+        if (!had || st.cycle < had) on.set(m.id, st.cycle);
+      }
+    }
+    let slowest = Infinity;
+    for (const on of byOp.values()) {
+      let uph = 0;
+      for (const cycle of on.values()) uph += uphOf(cycle);
+      if (uph > 0 && uph < slowest) slowest = uph;
+    }
+    return slowest === Infinity ? 0 : slowest;
+  }
+
+  /* One part's route, as steps. A step is an operation, and under it are the
+     machines that run it — every one of them at once, so the step's rate is
+     theirs added up and its effective cycle is what that rate makes of one
+     part. Each machine is drawn with the layout it runs and the cycle measured
+     there, which is what the layout panel shows for it. */
   function streamSteps(part) {
     if (!part) return [];
     return opsOfPart(part.id).map(op => {
-      // One route per machine a layout of this op is run on: the same tooling
-      // on two machines is two ways through the step, with two sets of times.
       const routes = [];
       for (const l of layoutsOfOperation(op.id)) {
         const machines = layoutMachines(l);
@@ -1988,17 +2094,15 @@
             tools: layoutJobs(l).length,
             timed: st.timed,
             cycle: st.cycle,
+            uph: uphOf(st.cycle),
             cutShare: st.cutShare,
           });
         }
       }
-      const measured = routes.filter(r => r.cycle > 0);
-      // alternatives, not steps: the quickest measured one is what the part
-      // takes when it goes that way
-      const best = measured.length
-        ? measured.reduce((a, b) => (b.cycle < a.cycle ? b : a))
-        : null;
-      return { op, routes, best, cycle: best ? best.cycle : 0 };
+      const rate = operationRate(op);
+      // the cell the step happens in, for the band it is drawn under
+      const lead = routes.find(r => r.cell) || routes[0] || null;
+      return { op, routes, lead, rate, uph: rate.uph, cycle: rate.cycle, parallel: rate.parallel };
     });
   }
 
@@ -2012,6 +2116,8 @@
     const steps = streamSteps(part);
     const measured = steps.filter(st => st.cycle > 0);
     const total = measured.reduce((sum, st) => sum + st.cycle, 0);
+    // a line runs at its slowest step, so that step's rate is the part's
+    const paced = measured.length ? measured.reduce((a, b) => (b.uph < a.uph ? b : a)) : null;
 
     const head = el('div', 'mf-chart-head');
     const heading = el('div', 'mf-chart-heading');
@@ -2027,9 +2133,10 @@
     }
     head.appendChild(heading);
     const figure = el('div', 'mf-chart-figure');
-    figure.appendChild(el('div', 'mf-chart-total', total ? fmtSec(total) : '—'));
-    figure.appendChild(el('div', 'mf-chart-sub', measured.length
-      ? 'process time over ' + measured.length + (measured.length === 1 ? ' step' : ' steps')
+    figure.appendChild(el('div', 'mf-chart-total', paced ? fmtUph(paced.uph) + ' UPH' : '—'));
+    figure.appendChild(el('div', 'mf-chart-sub', paced
+      ? 'paced by ' + paced.op.name + ' · ' + fmtSec(total) + ' of process time over ' +
+        measured.length + (measured.length === 1 ? ' step' : ' steps')
       : 'nothing measured yet'));
     head.appendChild(figure);
     box.appendChild(head);
@@ -2059,7 +2166,7 @@
     const flow = el('div', 'mf-flow');
     let bandCell = undefined, band = null;
     steps.forEach((st, i) => {
-      const route = st.best || st.routes[0] || null;
+      const route = st.lead;
       const cell = route ? route.cell : null;
       const cellId = cell ? cell.id : '';
       if (bandCell === undefined || cellId !== bandCell) {
@@ -2092,7 +2199,8 @@
         seg.style.background = step.fill;
         seg.style.color = step.ink;
         if (n === measured.length - 1) seg.classList.add('mf-seg-end');
-        seg.title = st.op.name + ' — ' + fmtSec(st.cycle) + ', ' + Math.round(share * 100) + '% of the process time';
+        seg.title = st.op.name + ' — ' + fmtRateFull(st.cycle) + ', ' +
+          Math.round(share * 100) + '% of the process time';
         if (share >= 0.08) seg.appendChild(el('span', 'mf-seg-n', st.op.name));
         bar.appendChild(seg);
       });
@@ -2103,15 +2211,21 @@
     // measured and the ones with nowhere to run yet.
     const table = el('div', 'mf-legend');
     steps.forEach((st, i) => {
-      const route = st.best || st.routes[0] || null;
+      const route = st.lead;
       const row = el('div', 'mf-legend-row' + (st.cycle ? '' : ' mf-legend-off'));
       row.appendChild(el('span', 'mf-legend-n', String(i + 1)));
       const name = el('span', 'mf-legend-name');
       if (route && route.layout) name.appendChild(tlChip(route.layout, 'mf-tl-sm'));
-      name.appendChild(document.createTextNode(st.op.name +
-        (route ? ' · ' + machineName(route.machineId) : '')));
+      // where machines make the rate between them, the step is named for that
+      // rather than for whichever one the row happens to link to
+      name.appendChild(document.createTextNode(st.op.name + (st.parallel > 1
+        ? ' · ' + st.parallel + ' machines'
+        : (route ? ' · ' + machineName(route.machineId) : ''))));
       row.appendChild(name);
-      row.appendChild(el('span', 'mf-legend-v', st.cycle ? fmtSec(st.cycle) : '—'));
+      const v = el('span', 'mf-legend-v', st.cycle ? fmtUph(st.uph) + ' UPH' : '—');
+      if (st.cycle) v.title = 'One every ' + fmtSec(st.cycle) +
+        (st.parallel > 1 ? ' between them' : '');
+      row.appendChild(v);
       row.appendChild(el('span', 'mf-legend-p', st.cycle
         ? Math.round((st.cycle / total) * 100) + '%'
         : (route ? 'not timed' : 'no machine')));
@@ -2131,10 +2245,12 @@
           ' no machine set up yet' : '') +
         ', so the total is the process time measured so far rather than the whole part.'));
     }
-    if (steps.some(st => st.routes.length > 1)) {
+    if (steps.some(st => st.parallel > 1)) {
       box.appendChild(el('div', 'mf-note',
-        'Where an operation runs on more than one machine, those are alternative routings rather ' +
-        'than two steps: they are drawn side by side and the total takes the fastest measured.'));
+        'Where an operation runs on more than one machine those machines run at once, so their ' +
+        'rates add: the step makes what they make between them, and a part comes off it in the ' +
+        'time that rate allows rather than in any one machine’s cycle. They are drawn side by ' +
+        'side, each with what it makes on its own.'));
     }
     box.appendChild(el('div', 'mf-note',
       'This is process time — what the part spends being cut and handled at each step. ' +
@@ -2147,9 +2263,17 @@
     const wrap = el('div', 'mf-step');
     if (i) wrap.appendChild(el('div', 'mf-step-arrow', '→'));
     const boxes = el('div', 'mf-step-boxes');
+    // Machines on one operation run at once, so the step makes what they make
+    // between them — said over the boxes rather than left to be added up.
+    if (st.parallel > 1) {
+      const together = el('div', 'mf-step-together',
+        st.parallel + ' at once · ' + fmtUph(st.uph) + ' UPH');
+      together.title = 'One every ' + fmtSec(st.cycle) + ' between them';
+      boxes.appendChild(together);
+    }
     const routes = st.routes.length ? st.routes : [null];
     for (const route of routes) {
-      const b = el('div', 'mf-box' + (route && st.best === route && st.routes.length > 1 ? ' mf-box-best' : ''));
+      const b = el('div', 'mf-box');
       const top = el('div', 'mf-box-top');
       top.appendChild(el('span', 'mf-box-n', String(i + 1)));
       top.appendChild(el('span', 'mf-box-op', st.op.name));
@@ -2157,12 +2281,13 @@
       b.appendChild(top);
       b.appendChild(el('div', 'mf-box-machine',
         route ? (route.machineId ? machineName(route.machineId) : 'No machine set') : 'No layout yet'));
-      const time = el('div', 'mf-box-time', route && route.cycle ? fmtSec(route.cycle) : '—');
+      const time = el('div', 'mf-box-time', route && route.cycle ? fmtUph(route.uph) + ' UPH' : '—');
+      if (route && route.cycle) time.title = 'One every ' + fmtSec(route.cycle) + ' at this machine';
       b.appendChild(time);
       const meta = [];
+      if (route && route.cycle) meta.push(fmtSec(route.cycle));
       if (route) meta.push(route.tools + (route.tools === 1 ? ' tool' : ' tools'));
       if (route && route.cutShare) meta.push(Math.round(route.cutShare * 100) + '% in cut');
-      if (route && route.cycle && total) meta.push(Math.round((route.cycle / total) * 100) + '% of total');
       b.appendChild(el('div', 'mf-box-meta', meta.join(' · ') || 'nothing measured'));
       boxes.appendChild(b);
     }
@@ -3400,14 +3525,12 @@
   // on the floor — so none of them is redrawn alone.
   function renderLists() {
     renderFloor();
-    renderMachines();
     renderParts();
     renderTools();
   }
 
-  /* Putting something into the filter box from elsewhere on the screen: pressing
-     a machine's name on the floor is how you ask what that one runs, and the
-     answer is the Machines list below, narrowed to it.
+  /* Putting something into the filter box from elsewhere on the screen — a
+     machine's name, a part number — and taking you to the floor narrowed to it.
 
      The box is built once and then left alone — rebuilding the field you are
      typing in loses the caret — so the value is set on the input already there,
@@ -3419,7 +3542,7 @@
     renderSearch();
     if (els.search.firstChild) els.search.firstChild.value = text;
     renderLists();
-    if (els.machines.scrollIntoView) els.machines.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (els.floor.scrollIntoView) els.floor.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // Every list heading is a section head with a count and a fold on it, so all
@@ -3433,14 +3556,20 @@
   }
 
   /* ---------------- the floor ----------------
-     What the screen opens on, and the only list of the shop it needs: the cells,
-     the operations that run in each, and under every operation the tool layout
-     it is run as — its number, the machines that run it, and the pockets on it.
+     What the screen opens on, and the only list of the shop it needs. It is the
+     floor read the way it is walked: **a cell**, the **machines** standing in
+     it, and on each machine the **tool layouts** it is set up to run — each with
+     its operation, its rate, and the pockets you can put a watch on.
 
-     That is the floor read the way it is walked. A cell is where you are, an
-     operation is what is being made there, a layout is the tooling that makes
-     it and the machines it is set on, and a pocket is a tool you can put a watch
-     on. Nothing is pulled up until you press one of them.
+     Cell, machine, layout. A cell is the area you are in, a machine is the iron
+     you are standing at, a layout is what is in its turret today, and a pocket
+     is a tool. Every level answers a question somebody actually asks on a floor,
+     and no level is a heading invented for the screen's sake. Layouts under a
+     machine come in the order the parts are made rather than in number order,
+     because that is the sequence the machine works through; the number is how a
+     layout is called for once you know which one you want.
+
+     Nothing is pulled up until you press one of them.
   ---------------------------------------------------------------- */
   function renderFloor() {
     const box = els.floor;
@@ -3478,17 +3607,20 @@
     if (!shown) box.appendChild(el('div', 'mf-note', 'Nothing on the floor matches that.'));
   }
 
-  /* One cell: its machines, and the operations that run in it. The operations
-     come from the layouts set on those machines, in the order the part is made,
-     so a cell reads as its order of operations rather than as a list of iron. */
+  /* One cell: the machines standing in it, in the order they stand, and under
+     each the layouts it runs. A cell that is holding layouts nobody has put on a
+     machine yet shows those under it too — planned tooling is still tooling, and
+     it would otherwise be invisible. */
   function cellBlock(box, cell, machines, only) {
     const layouts = only || (cell ? layoutsInCell(cell.id)
       : layoutList().filter(l => layoutMachines(l).some(m => !m.cellId)));
     const cellMatches = cell && filter && hay(cell.name, cell.notes).includes(filter);
     const drawn = cellMatches ? layouts : layouts.filter(matchesLayout);
+    // A machine shows if it matches, or if any layout on it does — which is what
+    // makes a part number or a tool number a way of asking which machines cut it.
     const machinesShown = cellMatches || !filter
       ? machines
-      : machines.filter(m => hay(m.name, m.notes).includes(filter));
+      : machines.filter(m => matchesMachine(m) || layoutsOnMachine(m.id).some(matchesLayout));
     if (filter && !drawn.length && !machinesShown.length) return 0;
 
     const key = 'cell:' + (cell ? cell.id : (only ? 'nowhere' : 'loose'));
@@ -3499,6 +3631,10 @@
     const bits = [];
     if (!only) bits.push(machines.length + (machines.length === 1 ? ' machine' : ' machines'));
     bits.push(layouts.length + (layouts.length === 1 ? ' layout' : ' layouts'));
+    // What the cell makes an hour, over the operations it is the whole of: an
+    // op run partly elsewhere is somebody else's rate as much as this cell's.
+    const own = cellRate(cell, layouts);
+    if (own) bits.push(fmtUph(own) + ' UPH');
     head.appendChild(el('div', 'mf-cell-v', bits.join(' · ')));
     const acts = el('div', 'mf-cell-btns');
     if (cell) put(acts, wBtn('mf-link', 'Edit', () => openForm('cell', cell.id)));
@@ -3506,58 +3642,84 @@
     block.appendChild(head);
 
     if (!isFolded(key)) {
-      if (machinesShown.length && !only) {
-        const row = el('div', 'mf-cell-machines');
-        for (const m of machinesShown) row.appendChild(machineChip(m));
-        block.appendChild(row);
-      }
-      if (!drawn.length) {
-        block.appendChild(el('div', 'mf-note', layouts.length
+      if (only) {
+        // layouts with no machine at all: no iron to stand them under
+        for (const l of drawn) block.appendChild(layoutBlock(l, { cell }));
+      } else if (!machinesShown.length) {
+        block.appendChild(el('div', 'mf-note', machines.length
           ? 'Nothing in this cell matches that.'
-          : 'No tool layout is set on these machines yet.'));
-      }
-      // the operations that run here, in the order the part is made
-      for (const group of layoutsByOperation(drawn)) {
-        block.appendChild(operationBlock(group, { cell }));
+          : 'No machine stands in this cell yet.'));
+      } else {
+        // the machines in it, each with what it runs
+        for (const m of machinesShown) block.appendChild(machineBlock(m, cellMatches));
       }
     }
     box.appendChild(block);
     return 1;
   }
 
-  // The layouts of a set, gathered under the operation each is for, with the
-  // ops in the order they are run and the parts in name order.
-  function layoutsByOperation(layouts) {
-    const groups = new Map();
-    for (const l of layouts) {
-      const key = l.operationId || '';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(l);
+  /* One machine standing in its cell: what it runs, and what that comes to. The
+     layouts under it are in the order the parts are made — the sequence this
+     machine works through — and each names the operation it cuts, so the block
+     reads as the work the machine does rather than as a list of numbers that
+     happen to be set on it.
+
+     `wide` is true when the cell above matched the filter itself: the whole cell
+     was asked for, so every machine in it shows everything it runs. */
+  function machineBlock(m, wide) {
+    const key = 'machine:' + m.id;
+    const layouts = layoutsOnMachine(m.id);
+    // A machine matched on its own name shows everything it runs; one reached
+    // through a layout shows the layouts that were being asked about.
+    const drawn = wide || matchesMachine(m) ? layouts : layouts.filter(matchesLayout);
+    // The heading is the machine's own totals, filter or no — it is the answer a
+    // closed heading carries, and a count that moved with the search would be
+    // describing the search instead of the machine.
+    const jobs = layouts.flatMap(layoutJobs);
+
+    const block = el('div', 'mf-machine');
+    const head = el('div', 'mf-machine-head');
+    head.appendChild(foldToggle(key, m.name, 'mf-machine-k', renderFloor));
+    head.appendChild(el('div', 'mf-machine-v', [
+      layouts.length ? layouts.length + (layouts.length === 1 ? ' layout' : ' layouts') : 'no layout set',
+      jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : '',
+    ].filter(Boolean).join(' · ')));
+    const btns = el('div', 'mf-machine-btns');
+    // A machine's name is the one word painted on the side of the iron, so it is
+    // what a floor gets asked for: this puts it in the filter box and narrows
+    // the whole screen — the floor, the parts and the crib — to this one.
+    btns.appendChild(button('mf-link', 'Only this', () => searchFor(m.name),
+      'Narrow the screen to ' + m.name + ' and what it runs'));
+    put(btns, wBtn('mf-link', 'Clone', () => cloneMachine(m.id),
+      'A second machine of the same kind, on the layouts this one runs'));
+    put(btns, wBtn('mf-link', 'Edit', () => openForm('machine', m.id), 'This machine and its cell'));
+    head.appendChild(btns);
+    block.appendChild(head);
+
+    if (isFolded(key)) return block;
+
+    if (m.notes) block.appendChild(el('div', 'mf-note', m.notes));
+    if (!drawn.length) {
+      block.appendChild(el('div', 'mf-note', layouts.length
+        ? 'Nothing on this machine matches that.'
+        : 'No tool layout is set on this machine yet.'));
+      return block;
     }
-    return [...groups.entries()]
-      .map(([id, ls]) => ({ op: operationById(id), layouts: ls.sort(byNumber) }))
-      .sort((a, b) => {
-        if (!a.op || !b.op) return a.op ? -1 : 1;
-        const byPart = partName(partById(a.op.partId)).localeCompare(partName(partById(b.op.partId)));
-        return byPart || byStep(a.op, b.op);
-      });
+    for (const l of byWorkOrder(drawn)) block.appendChild(layoutBlock(l, { machine: m }));
+    return block;
   }
 
-  /* An operation and the layouts that cut it, under whatever is holding them.
-     `where` is where they are being read from — a cell on the floor, or one
-     machine in the Machines list — and it narrows each layout to the machines
-     that belong to that reading. */
-  function operationBlock(group, where) {
-    const wrap = el('div', 'mf-op-block');
-    const head = el('div', 'mf-op-head');
-    const op = group.op;
-    head.appendChild(el('span', 'mf-seq', op && op.seq ? String(op.seq) : '–'));
-    head.appendChild(el('span', 'mf-op-name', op ? op.name : 'No operation set'));
-    if (op) head.appendChild(el('span', 'mf-op-part', partName(partById(op.partId))));
-    put(head, op ? wBtn('mf-link', 'Edit', () => openForm('operation', op.id)) : null);
-    wrap.appendChild(head);
-    for (const l of group.layouts) wrap.appendChild(layoutBlock(l, where));
-    return wrap;
+  /* Layouts in the order the work runs: by part, then by the step of that part,
+     then by number. That is the sequence a machine works through, and it is why
+     the layouts under one are not in number order — the number is how a layout
+     is called for once you know which one you want, not where it comes. */
+  function byWorkOrder(layouts) {
+    return [...layouts].sort((a, b) => {
+      const oa = operationById(a.operationId), ob = operationById(b.operationId);
+      if (!oa || !ob) return oa ? -1 : ob ? 1 : byNumber(a, b);
+      const part = partName(partById(oa.partId)).localeCompare(partName(partById(ob.partId)));
+      return part || byStep(oa, ob) || byNumber(a, b);
+    });
   }
 
   /* One tool layout under its operation: its number, the machines it is run on,
@@ -3574,16 +3736,28 @@
     const key = 'tl:' + l.id;
     const wrap = el('div', 'mf-tl-block');
     const head = el('div', 'mf-tl-head');
-    // The same layout folded from the floor is folded in the Machines list too —
-    // it is one layout — so opening it in either redraws both.
-    head.appendChild(foldToggle(key, tlName(l), 'mf-tl-name', renderLists));
+    // One layout is one record wherever it is opened — under two machines of
+    // the same cell it is the same fold — so opening it anywhere redraws all.
+    const name = el('div', 'mf-tl-name-wrap');
+    name.appendChild(foldToggle(key, tlName(l), 'mf-tl-name', renderLists));
+    // The operation it cuts, said here rather than in a heading over it: on a
+    // floor read machine by machine, what a layout is for belongs to the layout.
+    const op = layoutOperation(l);
+    const part = layoutPart(l);
+    name.appendChild(el('span', 'mf-tl-op',
+      (op ? op.name : 'no operation') + (part ? ' · ' + partName(part) : '')));
+    head.appendChild(name);
     const jobs = layoutJobs(l);
-    const machines = layoutMachines(l).filter(m => (machine
-      ? m.id === machine.id
-      : !cell || m.cellId === cell.id));
+    // Every machine the layout is set on, whichever one you are reading under —
+    // a layout two machines share is a fact about the layout, and hiding the
+    // other one would make it look like a copy of itself.
+    const machines = layoutMachines(l);
+    // What it measures where you are: at the machine this block is under, or —
+    // read from nowhere in particular — across every machine it runs on.
+    const at = machine ? machine.id : (machines.length === 1 ? machines[0].id : '');
     const summary = [jobs.length + (jobs.length === 1 ? ' tool' : ' tools')];
-    const timed = layoutCycle(l, machines.length === 1 ? machines[0].id : '');
-    if (timed.cycle) summary.push(fmtSec(timed.cycle));
+    const timed = layoutCycle(l, at);
+    if (timed.cycle) summary.push(fmtRateFull(timed.cycle));
     head.appendChild(el('div', 'mf-tl-v', summary.join(' · ')));
     const acts = el('div', 'mf-tl-btns');
     acts.appendChild(button('mf-link', '🖨', () => exportPdf(l.id), 'This tool layout on a page'));
@@ -3599,12 +3773,16 @@
       for (const m of machines) {
         const on = activeMachineId() === m.id && layoutOf(activeJob()) === l;
         const st = layoutCycle(l, m.id);
-        row.appendChild(button('mf-machine-chip' + (on ? ' mf-on' : ''),
-          m.name + (st.cycle ? ' · ' + fmtSec(st.cycle) : ''),
+        // the machine this block is being read under, marked so the other
+        // machines on the layout read as "also here" rather than as the subject
+        row.appendChild(button('mf-machine-chip' + (on ? ' mf-on' : '') +
+            (machine && m.id === machine.id ? ' mf-here' : ''),
+          m.name + (st.cycle ? ' · ' + fmtUph(uphOf(st.cycle)) + ' UPH' : ''),
           () => selectLayout(l, m.id),
-          canEdit()
+          (canEdit()
             ? 'Time this layout at ' + m.name
-            : 'Show this layout as it runs at ' + m.name));
+            : 'Show this layout as it runs at ' + m.name) +
+            (st.cycle ? ' — one every ' + fmtSec(st.cycle) + ' there' : '')));
       }
       wrap.appendChild(row);
     } else {
@@ -3620,7 +3798,6 @@
     }
     const list = el('div', 'mf-pockets');
     // Read under one machine, every pocket under it is read there too.
-    const at = machines.length === 1 ? machines[0].id : '';
     jobs.forEach((a, pos) => list.appendChild(pocketRow(a, jobs, pos, l, at)));
     wrap.appendChild(list);
     const foot = el('div', 'mf-tl-foot');
@@ -3658,8 +3835,11 @@
     // individually is still the honest answer to a question asked of all.
     const at = machineId || (activeOnLayout(l) ? activeMachineId() : '');
     const st = statsFor(a, at);
-    if (st) row.appendChild(el('span', 'mf-pocket-v', fmtSec(st.avg)));
-    else row.appendChild(el('span', 'mf-pocket-v mf-pocket-off', 'not timed'));
+    if (st) {
+      const v = el('span', 'mf-pocket-v', fmtSec(st.avg));
+      v.title = 'This tool takes ' + fmtSec(st.avg) + ' of the layout’s cycle';
+      row.appendChild(v);
+    } else row.appendChild(el('span', 'mf-pocket-v mf-pocket-off', 'not timed'));
     if (canEdit() && jobs.length > 1 && !filter) {
       const moves = el('span', 'mf-moves');
       const move = (label, to, enabled, title) => {
@@ -3684,118 +3864,19 @@
 
   const activeOnLayout = l => !!l && layoutOf(activeJob()) === l;
 
-  // A machine on the floor: what it is called, and what it is running. The name
-  // is a press — it puts the machine in the filter box, which is how this screen
-  // is asked "what does this one run?", and the Machines list answers with its
-  // tool layouts in the order the operations run.
-  function machineChip(m) {
-    const layouts = layoutsOnMachine(m.id);
-    const chip = el('span', 'mf-machine-tag');
-    chip.appendChild(button('mf-machine-tag-go', m.name, () => searchFor(m.name),
-      'Search for ' + m.name + ' — its tool layouts, by operation'));
-    chip.appendChild(el('span', 'mf-machine-tag-v',
-      layouts.length ? layouts.map(l => tlName(l)).join(' ') : 'no layout'));
-    if (canEdit()) {
-      const edit = button('mf-link', 'Edit', () => openForm('machine', m.id), 'This machine and its cell');
-      chip.appendChild(edit);
-    }
-    return chip;
-  }
-
+  /* A layout matches on what it is — its number, the operation and part it cuts,
+     and the tools in its pockets. Not on the names of the machines it runs on:
+     the floor is read machine by machine, so a machine's name is matched by the
+     machine, and every layout on one shows when that machine is asked for. Were
+     a layout to match on its machines too, asking for one would bring back every
+     other machine sharing a layout with it — which is not what was asked. */
   function matchesLayout(l) {
     if (!filter) return true;
     const op = layoutOperation(l);
     const part = layoutPart(l);
     return hay(tlName(l), l.notes, op && op.name, part && part.number, part && part.desc,
-      layoutMachines(l).map(m => m.name).join(' '),
       layoutJobs(l).map(a => hay(a.station, a.notes, jobName(a),
         (jobTool(a) || {}).partNumber)).join(' ')).includes(filter);
-  }
-
-  /* ---------------- the machines ----------------
-     The floor above is the shop read as it is laid out — a cell, the operations
-     that run in it, the layouts that cut them. This is the same records read
-     from one machine: the question asked standing at it, or asked of it by name
-     from anywhere, which is what searching for a machine is.
-
-     A machine's name is the one word painted on the side of the iron, so it is
-     what a floor gets asked for. The answer is its tool layouts **sorted by
-     operation** — the part and the step of it, in the order the part is made —
-     rather than by layout number, because the number is only how a layout is
-     called for once you already know which one you want. Two layouts on the same
-     op sit together under it, in number order.
-  ---------------------------------------------------------------- */
-  function renderMachines() {
-    const box = els.machines;
-    box.innerHTML = '';
-    if (!shop) return;
-
-    box.appendChild(sectionHead('sec:machines', 'Machines', shop.machines.length, renderMachines,
-      wBtn('mf-btn mf-btn-sm', '+ Machine', () => openForm('machine'))));
-    if (isFolded('sec:machines')) return;
-
-    if (!shop.machines.length) {
-      box.appendChild(el('div', 'mf-note',
-        'No machines yet. A machine stands in a cell and runs tool layouts; once there are ' +
-        'some, searching for one by name brings back everything it runs.'));
-      return;
-    }
-
-    // A machine shows if it matches, or if any layout on it does — which makes
-    // a part number or a tool number a way of asking which machines cut it.
-    const shown = allMachines().filter(m => matchesMachine(m) || layoutsOnMachine(m.id).some(matchesLayout));
-    if (!shown.length) {
-      box.appendChild(el('div', 'mf-note', 'No machine matches that.'));
-      return;
-    }
-    for (const m of shown) box.appendChild(machineBlock(m));
-  }
-
-  /* One machine: where it stands, what it runs, and how much of its work has
-     been timed. The layouts under it are gathered by operation and the
-     operations come in the order the parts are made, so the block reads as the
-     work this machine does rather than as a list of numbers that happen to be
-     set on it. */
-  function machineBlock(m) {
-    const key = 'machine:' + m.id;
-    const cell = cellOfMachine(m.id);
-    const layouts = layoutsOnMachine(m.id);
-    // A machine matched on its own name shows everything it runs; one reached
-    // through a layout shows the layouts that were being asked about.
-    const drawn = matchesMachine(m) ? layouts : layouts.filter(matchesLayout);
-    // The heading is the machine's own totals, filter or no — it is the answer a
-    // closed heading carries, and a count that moved with the search would be
-    // describing the search instead of the machine.
-    const jobs = layouts.flatMap(layoutJobs);
-
-    const block = el('div', 'mf-machine');
-    const head = el('div', 'mf-machine-head');
-    head.appendChild(foldToggle(key, m.name, 'mf-machine-k', renderMachines));
-    head.appendChild(el('div', 'mf-machine-v', [
-      cell ? cell.name : 'not in a cell',
-      layouts.length ? layouts.length + (layouts.length === 1 ? ' layout' : ' layouts') : 'no layout set',
-      jobs.length ? jobs.length + (jobs.length === 1 ? ' tool' : ' tools') : '',
-    ].filter(Boolean).join(' · ')));
-    const btns = el('div', 'mf-machine-btns');
-    put(btns, wBtn('mf-link', 'Clone', () => cloneMachine(m.id),
-      'A second machine of the same kind, on the layouts this one runs'));
-    put(btns, wBtn('mf-link', 'Edit', () => openForm('machine', m.id), 'This machine and its cell'));
-    head.appendChild(btns);
-    block.appendChild(head);
-
-    if (isFolded(key)) return block;
-
-    if (m.notes) block.appendChild(el('div', 'mf-note', m.notes));
-    if (!drawn.length) {
-      block.appendChild(el('div', 'mf-note', layouts.length
-        ? 'Nothing on this machine matches that.'
-        : 'No tool layout is set on this machine yet.'));
-      return block;
-    }
-    for (const group of layoutsByOperation(drawn)) {
-      block.appendChild(operationBlock(group, { machine: m }));
-    }
-    return block;
   }
 
   /* ---------------- parts and their operations ----------------
@@ -3857,6 +3938,19 @@
           name.appendChild(el('span', 'mf-seq', o.seq ? String(o.seq) : '–'));
           name.appendChild(el('span', 'mf-op-name', o.name));
           row.appendChild(name);
+          // What the step makes an hour with everything that runs it running:
+          // this is the operation's number, not any one machine's, and it is
+          // the one that goes up when a second machine is put on the job.
+          const rate = operationRate(o);
+          if (rate.uph) {
+            const v = el('span', 'mf-op-rate', fmtUph(rate.uph) + ' UPH');
+            v.title = rate.parallel > 1
+              ? rate.parallel + ' machines at once — one every ' + fmtSec(rate.cycle) +
+                ' between them (' + rate.machines.map(r =>
+                  r.machine.name + ' ' + fmtSec(r.cycle)).join(', ') + ')'
+              : 'One every ' + fmtSec(rate.cycle);
+            name.appendChild(v);
+          }
           row.appendChild(el('div', 'mf-op-v', layouts.length
             ? layouts.map(l => tlName(l) + ' ' +
               (layoutMachines(l).map(m => m.name).join(' / ') || 'no machine')).join(', ')
@@ -3978,7 +4072,7 @@
     'indexable_edges', 'parts_per_index',
     'notes', 'cycle_seconds', 'cycle_cut_seconds', 'recorded_at',
   ];
-  const DERIVED_COLUMNS = ['cycles_timed', 'average_seconds', 'parts_per_tool'];
+  const DERIVED_COLUMNS = ['cycles_timed', 'average_seconds', 'units_per_hour', 'parts_per_tool'];
   // header name (normalized) → the field it fills. The export's own names, the
   // shorter ones a person is likely to type, and the ones earlier versions of
   // this add-on wrote, so a file exported before any of this still reads.
@@ -4703,6 +4797,7 @@
           parts_per_index: a.partsPerIndex || '', notes: a.notes,
           cycles_timed: s ? s.count : 0,
           average_seconds: s ? round(s.avg, 2) : '',
+          units_per_hour: s ? round(uphOf(s.avg), 2) : '',
           parts_per_tool: life ? life.partsPerTool || '' : '',
         };
         // A cycle that names no machine counts towards every machine's numbers
@@ -4870,7 +4965,15 @@
     .varrow { color: var(--dim); font-size: 12px; }
     .vboxes { display: flex; flex-direction: column; gap: 4px; }
     .vbox { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; min-width: 116px; }
-    .vbox.best { border-color: var(--accent); }
+    .vtogether {
+      font: 700 7.5pt/1.3 ui-monospace, monospace;
+      letter-spacing: 0.04em;
+      padding: 1mm 2mm;
+      border: 0.3mm dashed var(--line);
+      border-radius: 6px;
+      text-align: center;
+      color: var(--accent);
+    }
     .vtop { display: flex; align-items: center; gap: 5px; }
     .vn { font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--dim); }
     .vop { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; }
@@ -4950,9 +5053,10 @@
             (part && part.desc && part.number ? ' — ' + escHtml(part.desc) : '') + '</div>' +
         '</div>' +
         '<div class="figure">' +
-          '<div class="total">' + (total ? fmtSec(total) : '—') + '</div>' +
+          '<div class="total">' + (total ? fmtUph(uphOf(total)) + ' UPH' : '—') + '</div>' +
           '<div class="sub">' + (timed.length
-            ? 'measured across ' + timed.length + (timed.length === 1 ? ' tool' : ' tools')
+            ? escHtml(fmtSec(total)) + ' a part, measured across ' + timed.length +
+              (timed.length === 1 ? ' tool' : ' tools')
             : 'no cycles recorded') + '</div>' +
         '</div>' +
       '</div>';
@@ -5088,6 +5192,8 @@
     const steps = streamSteps(part);
     const measured = steps.filter(st => st.cycle > 0);
     const total = measured.reduce((sum, st) => sum + st.cycle, 0);
+    // a line runs at its slowest step, so that step's rate is the part's
+    const paced = measured.length ? measured.reduce((a, b) => (b.uph < a.uph ? b : a)) : null;
 
     const head =
       '<div class="head">' +
@@ -5100,9 +5206,10 @@
             (steps.length === 1 ? ' operation' : ' operations') + '</div>' +
         '</div>' +
         '<div class="figure">' +
-          '<div class="total">' + (total ? fmtSec(total) : '—') + '</div>' +
-          '<div class="sub">' + (measured.length
-            ? 'process time over ' + measured.length + (measured.length === 1 ? ' step' : ' steps')
+          '<div class="total">' + (paced ? fmtUph(paced.uph) + ' UPH' : '—') + '</div>' +
+          '<div class="sub">' + (paced
+            ? 'paced by ' + escHtml(paced.op.name) + ' · ' + fmtSec(total) + ' of process time over ' +
+              measured.length + (measured.length === 1 ? ' step' : ' steps')
             : 'no cycles recorded') + '</div>' +
         '</div>' +
       '</div>';
@@ -5110,7 +5217,7 @@
     // the boxes, banded by cell the way the screen bands them
     const bands = [];
     steps.forEach((st, i) => {
-      const route = st.best || st.routes[0] || null;
+      const route = st.lead;
       const cell = route ? route.cell : null;
       const key = cell ? cell.id : (route ? 'none' : 'nomachine');
       const label = cell ? cell.name : (route ? 'Not in a cell' : 'No machine set up');
@@ -5119,9 +5226,15 @@
     });
     const boxHtml = (st, i) => {
       const routes = st.routes.length ? st.routes : [null];
+      // Machines on one operation run at once, so the step makes what they make
+      // between them — said once above the boxes rather than left to be added up.
+      const together = st.parallel > 1
+        ? '<div class="vtogether">' + st.parallel + ' machines at once · ' +
+          escHtml(fmtUph(st.uph)) + ' UPH · one every ' + escHtml(fmtSec(st.cycle)) + '</div>'
+        : '';
       return '<div class="vstep">' + (i ? '<div class="varrow">&rarr;</div>' : '') +
-        '<div class="vboxes">' + routes.map(route =>
-          '<div class="vbox' + (route && st.best === route && routes.length > 1 ? ' best' : '') + '">' +
+        '<div class="vboxes">' + together + routes.map(route =>
+          '<div class="vbox">' +
             '<div class="vtop"><span class="vn">' + (i + 1) + '</span>' +
               '<span class="vop">' + escHtml(st.op.name) + '</span>' +
               (route && route.layout ? '<span class="vtl">' + escHtml(tlName(route.layout)) + '</span>' : '') +
@@ -5129,11 +5242,11 @@
             '<div class="vmachine">' + escHtml(route
               ? (route.machineId ? machineName(route.machineId) : 'No machine set')
               : 'No layout yet') + '</div>' +
-            '<div class="vtime">' + (route && route.cycle ? fmtSec(route.cycle) : '—') + '</div>' +
+            '<div class="vtime">' + (route && route.cycle ? fmtUph(route.uph) + ' UPH' : '—') + '</div>' +
             '<div class="vmeta">' + escHtml([
+              route && route.cycle ? fmtSec(route.cycle) : '',
               route ? route.tools + (route.tools === 1 ? ' tool' : ' tools') : '',
               route && route.cutShare ? Math.round(route.cutShare * 100) + '% in cut' : '',
-              route && route.cycle && total ? Math.round((route.cycle / total) * 100) + '% of total' : '',
             ].filter(Boolean).join(' · ') || 'nothing measured') + '</div>' +
           '</div>').join('') +
         '</div></div>';
@@ -5160,16 +5273,18 @@
       : '';
 
     const rows = steps.map((st, i) => {
-      const route = st.best || st.routes[0] || null;
+      const route = st.lead;
       return '<tr>' +
         '<td class="num">' + (i + 1) + '</td>' +
         '<td class="pocket">' + escHtml(route && route.layout ? tlName(route.layout) : '—') + '</td>' +
         '<td class="tool">' + escHtml(st.op.name) + '</td>' +
         '<td>' + escHtml(route && route.cell ? route.cell.name : '—') + '</td>' +
-        '<td>' + escHtml(route && route.machineId ? machineName(route.machineId) : '—') + '</td>' +
+        '<td>' + escHtml(st.parallel > 1
+          ? st.parallel + ' machines'
+          : (route && route.machineId ? machineName(route.machineId) : '—')) + '</td>' +
         '<td class="num">' + escHtml(route ? route.tools : '—') + '</td>' +
+        '<td class="num">' + (st.cycle ? fmtUph(st.uph) : '—') + '</td>' +
         '<td class="num">' + (st.cycle ? fmtSec(st.cycle) : '—') + '</td>' +
-        '<td class="num">' + (route && route.cutShare ? Math.round(route.cutShare * 100) + '%' : '—') + '</td>' +
         '<td class="num">' + (st.cycle && total ? Math.round((st.cycle / total) * 100) + '%' : '—') + '</td>' +
         '</tr>';
     }).join('');
@@ -5177,7 +5292,7 @@
       '<span class="v">' + (total ? fmtSec(total) + ' measured' : 'no cycles recorded') + '</span></div>' +
       bar +
       '<table><thead><tr>' +
-      ['#', 'Layout', 'Operation', 'Cell', 'Machine', 'Tools', 'Cycle', 'In cut', 'Share']
+      ['#', 'Layout', 'Operation', 'Cell', 'Runs on', 'Tools', 'UPH', 'Effective cycle', 'Share']
         .map(h => '<th>' + escHtml(h) + '</th>').join('') +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
@@ -5191,10 +5306,15 @@
         (steps.length === 1 ? ' step ' : ' steps ') + (untimed === 1 ? 'has' : 'have') +
         ' nothing measured yet, so the total is the process time measured so far rather than ' +
         'the whole part.</div>' : '') +
-      (steps.some(st => st.routes.length > 1)
-        ? '<div class="note">Where an operation runs on more than one machine, those are alternative ' +
-          'routings: they are shown side by side and the total takes the fastest measured.</div>'
+      (steps.some(st => st.parallel > 1)
+        ? '<div class="note">Where an operation runs on more than one machine those machines run at ' +
+          'once, so their rates add: the step makes what they make between them, written over the ' +
+          'boxes, and a part comes off it in the time that rate allows rather than in any one ' +
+          'machine&rsquo;s cycle.</div>'
         : '') +
+      '<div class="note">The figure above is the rate of the slowest step, because a line runs at ' +
+      'its bottleneck however quick the rest of it is. The process time beside it is a different ' +
+      'question: how long one part is worked on, not how many come off in an hour.</div>' +
       '</div>';
 
     const foot = '<div class="foot">' +
@@ -5413,7 +5533,6 @@
     els.search = el('div', 'mf-searchbox');
     els.search.hidden = true;
     els.floor = el('div', 'mf-floor');
-    els.machines = el('div', 'mf-machines');
     els.parts = el('div', 'mf-parts');
     els.tools = el('div', 'mf-tools');
     page.appendChild(els.watch);
@@ -5424,7 +5543,6 @@
     page.appendChild(els.cutchart);
     page.appendChild(els.search);
     page.appendChild(els.floor);
-    page.appendChild(els.machines);
     page.appendChild(els.parts);
     page.appendChild(els.tools);
     page.appendChild(els.stream);

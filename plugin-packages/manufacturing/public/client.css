@@ -571,6 +571,19 @@
 .mf-step { display: flex; align-items: center; gap: 8px; }
 .mf-step-arrow { color: var(--dim); font-size: 15px; flex: none; }
 .mf-step-boxes { display: flex; flex-direction: column; gap: 6px; }
+/* what the machines under it make between them: the step's own rate, over the
+   boxes that add up to it */
+.mf-step-together {
+  font-family: var(--mf-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 3px 9px;
+  text-align: center;
+}
 .mf-box {
   background: var(--bg);
   border: 1px solid var(--line);
@@ -580,7 +593,6 @@
 }
 /* Where an op runs on two machines, the one the total takes is the one drawn
    as the route: alternatives, not steps. */
-.mf-box-best { border-color: var(--accent); }
 .mf-box-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mf-box-n {
   font-family: var(--mf-mono);
@@ -658,6 +670,12 @@
 .mf-op-k { display: flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; }
 .mf-op-name { font-family: var(--mf-mono); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
 .mf-op-v { font-size: 12px; color: var(--dim); flex: 1; min-width: 120px; }
+/* What the operation makes an hour with everything that runs it running — the
+   number a second machine on the job is bought to move. */
+.mf-op-rate {
+  font-family: var(--mf-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.03em; color: var(--accent);
+}
 .mf-op-btns { display: flex; align-items: center; gap: 8px; flex: none; }
 
 .mf-seq {
@@ -700,38 +718,6 @@
    on it. Everything is a heading that folds, so the floor opens as a page of
    cells and you walk down into the one you are standing in. */
 .mf-floor { margin-bottom: 6px; }
-.mf-cell-machines { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
-.mf-machine-tag {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 11.5px;
-}
-.mf-machine-tag-v { color: var(--dim); font-family: var(--mf-mono); font-size: 10.5px; }
-.mf-machine-tag .mf-link { font-size: 11px; }
-/* The name on the tag is a press: it puts the machine in the filter box, which
-   is how the floor asks the Machines list what this one runs. It is drawn as
-   the name it always was rather than as a button — the tag around it is already
-   the affordance, and a second border inside the first reads as a mistake. */
-.mf-machine-tag-go {
-  background: none;
-  border: none;
-  padding: 0;
-  color: inherit;
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-}
-.mf-machine-tag-go:hover { color: var(--accent); }
-.mf-machine-tag-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-
-.mf-op-block { margin: 10px 0 0 2px; padding-left: 10px; border-left: 1px solid var(--line); }
-.mf-op-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mf-op-part { font-family: var(--mf-mono); font-size: 11px; color: var(--dim); }
-.mf-op-head .mf-link { margin-left: auto; }
 
 .mf-tl-block {
   border: 1px solid var(--line);
@@ -741,6 +727,8 @@
   background: var(--panel);
 }
 .mf-tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* the number and, under it on a narrow screen, what the layout is for */
+.mf-tl-name-wrap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .mf-tl-name {
   font-family: var(--mf-mono);
   font-size: 12.5px;
@@ -748,9 +736,15 @@
   letter-spacing: 0.04em;
   color: var(--accent);
 }
+/* The operation the layout cuts. On a floor read machine by machine there is no
+   heading above it saying what the work is, so the layout says it itself. */
+.mf-tl-op { font-family: var(--mf-mono); font-size: 11px; color: var(--dim); }
 .mf-tl-v { font-size: 11.5px; color: var(--dim); font-family: var(--mf-mono); }
 .mf-tl-btns { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .mf-tl-machines { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 4px; }
+/* the machine this layout is being read under: the others on it are still shown,
+   because a shared layout is a fact about the layout, but this is where you are */
+.mf-machine-chip.mf-here { border-color: var(--dim); }
 /* A machine is a press: "I am at this one, on this layout" is what the watch
    needs to know before it can time anything. */
 .mf-machine-chip {

@@ -180,6 +180,19 @@ part. Each press records the split since the last one, so a run of parts gives a
 run of cycle times without stopping the watch. **Reset** zeroes the display and
 keeps every recorded cycle.
 
+**It answers in UPH.** The watch measures seconds, because that is what a
+stopwatch can do; the screen reads back in **units per hour**, because that is
+what a floor is asked for. A 36-second cycle is *100 UPH*. Every rate on the
+screen is in UPH — a tool, a tool layout, a machine, an operation, a cell, a
+whole part — with the cycle behind it kept beside it, since the cycle is the
+thing that was actually measured and the rate is what it means.
+
+Rates rather than cycle times, because **rates are what add up**. Two machines
+running the same operation make what they make between them: 90 UPH and 90 UPH is
+180 UPH, and there is no sensible way to add or average two cycle times into
+that. The pocket rows are the exception and stay in seconds — a tool's split is a
+share *of* a cycle, not a rate of its own.
+
 **Mark it in and out of the cut.** A cycle time is everything — rapids, the
 tool change, the bar feed, and the part of it actually cutting metal. Only the
 last is the **cutting time** the tool life is worked out from, and it cannot be
@@ -316,44 +329,43 @@ Hovering or tabbing to either a column or a row lights up the other.
 a measurement nobody took. It is drawn as an outline with nothing in it, listed
 as **not marked**, and counted in a line under the chart.
 
-**The floor is the list.** It is the shop read the way it is walked: the
-**cells** in flow order, the **machines** in each, the **operations** that run
-there in the order the part is made, and under every operation the **tool
-layout** it is run as — its number, its machines as buttons, and its pockets.
-Under it, **Machines** is the same records read from one machine, **Parts and
-operations** is the short list of what is being made, and **Tools** is the crib.
-One filter box narrows all four, and it knows the names things are asked for by:
-typing **TL 12** (or just **12**) asks for everything on that layout, and typing
-a **cell's name** asks for everything in that cell.
+**The floor is the list: cells, then machines, then tool layouts.** It is the
+shop read the way it is walked. A **cell** is the area you are in, and it says
+what it makes an hour. The **machines** standing in it come in the order the work
+reaches them, each with what it runs. On a machine are the **tool layouts** it is
+set up for, in the order the parts are made — the sequence that machine works
+through — each naming the operation it cuts, what it makes an hour there and the
+cycle behind it. Open one and you get its **pockets**: the tools, and the watch.
 
-**Searching for a machine gives its tool layouts, sorted by operation.** A
-machine's name is the one word painted on the side of the iron, so it is what a
-floor gets asked for. Type it in the filter box — or press the name on any
-machine tag on the floor, which puts it there for you and takes you to the answer
-— and the **Machines** list comes back narrowed to it: every layout set on that
-machine, gathered under the **operation** it cuts, with the operations in the
-order the part is made and the parts in name order. Two layouts on the same op
-sit together under it in number order.
+Three levels, and each is a question somebody actually asks on a floor: *which
+area*, *which machine*, *what is in it*. Layouts under a machine are in work order
+rather than number order, because a number is how a layout is called for once you
+know which one you want, not where it comes.
 
-Sorted by operation rather than by layout number, because the number is only how
-a layout is *called for* once you already know which one you want; what a machine
-does is a sequence of operations. Every cycle shown under a machine is the one
-measured **at that machine** rather than one averaged across every machine the
-layout runs on — the layout's, each pocket's, and the recorded cycles when you
-open one — and pressing a pocket there puts the watch on that tool, at that
-machine, the same sentence the floor's machine buttons say, arrived at from the
-other end. Read from the floor, where a layout is under its cell rather than
-under one of its machines, a pocket shows what it measures across all of them,
-which is the honest answer to a question asked of all of them. Ask with a part number, a tool number or **TL 12** instead and the
-list turns around and answers with the machines that cut it.
+Under the floor, **Parts and operations** is the short list of what is being made
+— each operation carrying what it makes an hour with everything that runs it
+running — and **Tools** is the crib. One filter box narrows all three, and it
+knows the names things are asked for by: typing **TL 12** (or just **12**) asks
+for everything on that layout, and typing a **cell's name** asks for everything
+in that cell.
 
-**Each cell is its order of operations.** Opening a cell lists the operations
-that run in it in the order the part is made, and under each the layout that cuts
-it. That is the order of operations for that cell, and it is one lane of the
-value stream below.
+**Asking the floor about one machine.** A machine's name is the one word painted
+on the side of the iron, so it is what a floor gets asked for. Type it in the
+filter box — or press **Only this** on the machine, which puts it there for you —
+and the floor comes back as that machine alone, in its cell, with everything it
+runs. Every figure under it is measured **at that machine** rather than averaged
+across every machine its layouts run on: the layout's rate, each pocket's, and
+the recorded cycles when you open one. Pressing a pocket there puts the watch on
+that tool, at that machine.
 
-**The screen opens closed.** Every heading on it folds — the four lists, each
-cell, each machine and each part inside them, the tool layout panel, the
+A machine's name matches the machine rather than the layouts on it, so asking for
+one brings back one; a **part number, a tool number or TL 12** turns the question
+around and brings back every machine that cuts it. A layout two machines share
+still shows both of them under either — that a layout is shared is a fact about
+the layout, and hiding the other machine would make it read as a copy of itself.
+
+**The screen opens closed.** Every heading on it folds — the three lists, each
+cell, each machine, each layout and each part inside them, the tool layout panel, the
 cut-and-waste panel, the value stream, the recorded cycles and the stopwatch
 itself — and all of them start closed, so a floor of a dozen machines and four
 hundred cycles opens as a page of headings rather than as a wall. What a closed
@@ -439,20 +451,30 @@ stream — where the part goes, in what order, and how long each step takes — 
 the **Value stream** panel draws it from what the record already holds. Nothing
 is entered for it.
 
-**The map** is a box per operation in the order they run, banded by the cell the
-step happens in, with an arrow between boxes and the handover from one cell to
-the next where the band changes. Each box carries the step number, the operation,
-the tool layout it runs as, the machine, the **measured cycle** for that layout,
-how many tools are on it, what share of that cycle is in cut and what share of
-the part it is. Under the boxes, the part's process time divided between its
+**The map** is a box per machine running the step, in the order the operations
+run, banded by the cell the step happens in, with an arrow between steps and the
+handover from one cell to the next where the band changes. Each box carries the
+step number, the operation, the tool layout it runs as, the machine, **what that
+machine makes an hour**, the cycle behind it, how many tools are on it and what
+share of that cycle is in cut. Under the boxes, the part's process time divided between its
 steps on the same light→dark ramp the tool layout bar uses, and a table giving
 every step as text — including the ones with nothing measured and the ones with
 no machine set up yet.
 
-**Where an operation runs on more than one machine**, those are alternative
-routings rather than two steps: the boxes sit side by side in the one step, the
-one the total takes is outlined, and the total takes the **fastest measured** of
-them. The panel says so rather than leaving you to work out which it used.
+**Where an operation runs on more than one machine, their rates add.** Two
+lathes set on the same op are not two ways of doing it, they are both doing it —
+so a step run by two machines at 90 UPH each makes **180 an hour**, and a part
+comes off that step every 20 seconds rather than every 40. That is the whole
+reason a second machine is bought, and it is the number the map is paced by. The
+boxes sit side by side in the one step, each with what it makes on its own, and
+the step's own rate is written over them.
+
+**A part's rate is its slowest step.** A line can only put through what its
+bottleneck can, however quick the rest are, so the figure at the top of the panel
+is the slowest step's UPH and it names the step that sets it. The process time —
+the sum of the steps' effective cycles — sits beside it, because it is a
+different question: how long one part is being worked on, rather than how many
+come off in an hour.
 
 **It draws only what has been measured.** A value stream map normally carries
 inventory between the boxes, changeover, uptime and a lead-time ladder — none of
